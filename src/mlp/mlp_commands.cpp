@@ -59,9 +59,10 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 					"two-layer-gate-body-order",
 					"two-layer-gate-mode",
 					"two-layer-gate-tanh-amplitude",
-				"two-layer-gate-site-mode",
-				"two-layer-gate-shared-radial",
-				"two-layer-residual"
+					"two-layer-gate-site-mode",
+					"two-layer-gate-shared-radial",
+					"two-layer-gate-edge-l1",
+					"two-layer-residual"
 		};
 	for (const char* name : names) {
 		map<string, string>::const_iterator it = opts.find(name);
@@ -614,7 +615,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
 				"    --two-layer-gate-site-mode=neighbor|double: gate on neighbor j only, or on center i and neighbor j. Default=neighbor\n"
 				"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
-					"    --two-layer-residual: rejected by mu-body-order gate models.\n"
+				"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
+						"    --two-layer-residual: rejected by mu-body-order gate models.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"
 			"    --stage-a-steps=<int>: BFGS steps for residual stage A. Default=0\n"
 			"    --stage-b-steps=<int>: BFGS steps for residual stage B. Default=0\n"

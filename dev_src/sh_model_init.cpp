@@ -684,6 +684,19 @@ public:
 			CompressProducts();
 		}
 
+	std::vector<int> L1SourceMomentBases() const
+	{
+		std::vector<int> bases;
+		for (const Tensor& tensor : tensors_) {
+			if (tensor.zero || tensor.l != 1 || tensor.node.size() != 3)
+				continue;
+			bases.push_back(tensor.node[0]);
+		}
+		std::sort(bases.begin(), bases.end());
+		bases.erase(std::unique(bases.begin(), bases.end()), bases.end());
+		return bases;
+	}
+
 	int AddNode()
 	{
 		return node_count_++;
@@ -740,6 +753,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
+	const bool two_layer_gate_edge_l1 = HasOpt(opts, "two-layer-gate-edge-l1");
 	const bool requested_two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
 	const bool two_layer_gate_shared_radial = two_layer_gate;
@@ -770,6 +784,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
 	if (two_layer_gate && body_order < two_layer_gate_body_order)
 		ERROR("--two-layer-gate requires --body-order >= --k-max + 1 for mu-body-order scalar buckets.");
+	if (two_layer_gate_edge_l1 && !two_layer_gate)
+		ERROR("--two-layer-gate-edge-l1 requires --two-layer-gate.");
+	if (two_layer_gate_edge_l1 && lmax < 1)
+		ERROR("--two-layer-gate-edge-l1 requires --l-max >= 1.");
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
@@ -784,6 +802,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'.");
 	if (HasOpt(opts, "two-layer-gate-site-mode") && !two_layer_gate)
 		ERROR("--two-layer-gate-site-mode requires --two-layer-gate.");
+	if (two_layer_gate_edge_l1 && two_layer_gate_site_mode != "neighbor")
+		ERROR("--two-layer-gate-edge-l1 first version supports neighbor site mode only.");
 	if (requested_two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (two_layer_residual && !two_layer_gate)
@@ -935,9 +955,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << 1.0e-1;
 		}
 		ofs << "}\n";
-		if (two_layer_gate_mode == "mu-body-linear-combo") {
-			const int gate_body_mix_weight_count =
-				radial_func_count * (two_layer_gate_body_order - 1);
+			if (two_layer_gate_mode == "mu-body-linear-combo") {
+				const int gate_body_mix_weight_count =
+					radial_func_count * (two_layer_gate_body_order - 1);
 			ofs << "two_layer_gate_body_mix_weight_count = "
 			    << gate_body_mix_weight_count << "\n";
 			ofs << "two_layer_gate_body_mix_weights = {";
@@ -945,10 +965,39 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				if (i != 0)
 					ofs << ", ";
 				ofs << 1.0;
+				}
+				ofs << "}\n";
 			}
-			ofs << "}\n";
-		}
-		if (two_layer_residual) {
+			if (two_layer_gate_edge_l1) {
+				const std::vector<int> edge_l1_source_moment_indices =
+					graph.L1SourceMomentBases();
+				const int edge_l1_source_count =
+					static_cast<int>(edge_l1_source_moment_indices.size());
+				if (edge_l1_source_count <= 0)
+					ERROR("--two-layer-gate-edge-l1 selected no L=1 source moments.");
+				const int edge_l1_weight_count =
+					radial_func_count * edge_l1_source_count;
+				ofs << "two_layer_gate_edge_l1_enabled = true\n";
+				ofs << "two_layer_gate_edge_l1_source_moment_count = "
+				    << edge_l1_source_count << "\n";
+				ofs << "two_layer_gate_edge_l1_source_moment_indices = {";
+				for (int i = 0; i < edge_l1_source_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << edge_l1_source_moment_indices[i];
+				}
+				ofs << "}\n";
+				ofs << "two_layer_gate_edge_l1_weight_count = "
+				    << edge_l1_weight_count << "\n";
+				ofs << "two_layer_gate_edge_l1_weights = {";
+				for (int i = 0; i < edge_l1_weight_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 0.0;
+				}
+				ofs << "}\n";
+			}
+			if (two_layer_residual) {
 			ofs << "two_layer_residual_e0_coeff_count = "
 			    << graph.scalars_.size() << "\n";
 			ofs << "two_layer_residual_e0_coeffs = {";

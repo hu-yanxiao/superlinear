@@ -89,6 +89,15 @@ public:
 		double base_loss = 0.0;
 	};
 
+	struct DirectionalResult {
+		int checked_count = 0;
+		double analytic = 0.0;
+		double finite_difference = 0.0;
+		double abs_err = 0.0;
+		double rel_err = 0.0;
+		double base_loss = 0.0;
+	};
+
 	int residual_stage = kResidualStageFull;
 	bool stage_active_only = false;
 
@@ -137,11 +146,15 @@ public:
 				const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
 				const int gate_weight_end =
 					gate_weight_begin + mtpr->TwoLayerGateWeightCount();
+				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
+				const int gate_edge_l1_end =
+					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
 				const int linear_begin = mtpr->LinearCoeffOffset();
 				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
 				return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
 				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
 				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 				    || (coeff_index >= linear_begin + mtpr->species_count
 				        && coeff_index < linear_end);
 		}
@@ -202,6 +215,60 @@ public:
 			ERROR("No coefficients selected for loss-gradient check.");
 		if (result.worst_abs_err <= abs_tolerance)
 			result.worst_rel_err = 0.0;
+		return result;
+	}
+
+	DirectionalResult CheckDirectional(std::vector<Configuration>& configs,
+	                                   double displacement,
+	                                   int coeff_begin,
+	                                   int coeff_end)
+	{
+		DirectionalResult result;
+		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		const int saved_stage =
+			(mtpr == nullptr) ? 0 : mtpr->two_layer_residual_eval_stage_;
+		if (mtpr != nullptr)
+			mtpr->two_layer_residual_eval_stage_ =
+				mtpr->TwoLayerResidualEnabled() ? residual_stage : 0;
+		CalcObjectiveFunctionGrad(configs);
+		std::vector<double> analytic = loss_grad_;
+		result.base_loss = ObjectiveFunction(configs);
+		if (mtpr != nullptr)
+			mtpr->two_layer_residual_eval_stage_ = saved_stage;
+
+		const int coeff_count = p_mlip->CoeffCount();
+		coeff_begin = std::max(0, coeff_begin);
+		coeff_end = coeff_end <= 0 ? coeff_count : std::min(coeff_end, coeff_count);
+		if (coeff_begin >= coeff_end)
+			ERROR("Invalid coefficient range for directional loss-gradient check.");
+
+		std::vector<double> direction(coeff_count, 0.0);
+		for (int i = coeff_begin; i < coeff_end; ++i) {
+			if (stage_active_only && !CoeffActiveForProbeStage(i))
+				continue;
+			const int phase = (i - coeff_begin) % 5;
+			const double value = static_cast<double>(phase - 2);
+			direction[i] = (value == 0.0) ? 1.0 : value;
+			result.analytic += analytic[i] * direction[i];
+			++result.checked_count;
+		}
+		if (result.checked_count == 0)
+			ERROR("Directional loss-gradient check found no active coefficients.");
+
+		for (int i = coeff_begin; i < coeff_end; ++i)
+			p_mlip->Coeff()[i] += displacement * direction[i];
+		const double loss_plus = ObjectiveFunction(configs);
+		for (int i = coeff_begin; i < coeff_end; ++i)
+			p_mlip->Coeff()[i] -= 2.0 * displacement * direction[i];
+		const double loss_minus = ObjectiveFunction(configs);
+		for (int i = coeff_begin; i < coeff_end; ++i)
+			p_mlip->Coeff()[i] += displacement * direction[i];
+
+		result.finite_difference = (loss_plus - loss_minus) / (2.0 * displacement);
+		result.abs_err = std::abs(result.analytic - result.finite_difference);
+		const double scale = std::max(1.0e-14,
+			std::max(std::abs(result.analytic), std::abs(result.finite_difference)));
+		result.rel_err = result.abs_err / scale;
 		return result;
 	}
 };
@@ -866,6 +933,10 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	if (index >= mtpr.TwoLayerGateWeightOffset()
 	    && index < mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount())
 		return "two_layer_gate_weight";
+	if (index >= mtpr.TwoLayerGateEdgeL1WeightOffset()
+	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
+	        + mtpr.TwoLayerGateEdgeL1WeightCount())
+		return "two_layer_gate_edge_l1_weight";
 	if (index >= mtpr.LinearCoeffOffset())
 		return "linear";
 	return "unknown";
@@ -995,6 +1066,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_additive_end=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_begin=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
+				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
+				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " linear_begin=" << mtpr.LinearCoeffOffset()
 			          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
@@ -1009,6 +1082,79 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		if (result.worst_abs_err > abs_tolerance
 		    && result.worst_rel_err > rel_tolerance)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-loss-gradient-direction-dev",
+		"checks a directional MTPR loss gradient against finite differences",
+		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-loss-gradient-direction-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for directional loss-gradient check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs)) {
+			configs.push_back(cfg);
+		}
+		if (configs.empty())
+			ERROR("No configurations loaded for directional loss-gradient check.");
+
+		const double energy_weight = ParseDevDoubleOption(opts, "energy-weight", 1.0);
+		const double force_weight = ParseDevDoubleOption(opts, "force-weight", 1.0);
+		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
+		const double radial_smooth = ParseDevDoubleOption(opts, "radial-smooth", 0.0);
+		const int radial_smooth_grid = ParseDevIntOption(opts, "radial-smooth-grid", 128);
+		const double scalar_head_l2 = ParseDevDoubleOption(opts, "scalar-head-l2", 0.0);
+		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
+		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
+		const double gate_full_l2 = ParseDevDoubleOption(opts, "gate-full-l2", 0.0);
+		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-4);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
+		const int coeff_start = ParseDevIntOption(opts, "coeff-start", 0);
+		const int coeff_end = ParseDevIntOption(opts, "coeff-end", 0);
+		const int residual_stage = ParseDevResidualStageOption(opts);
+		const bool stage_active_only = opts["stage-active-only"] != "";
+		if (displacement <= 0.0)
+			ERROR("--displacement should be positive.");
+
+		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		probe.radial_smooth_regularization = radial_smooth;
+		probe.radial_smooth_grid = radial_smooth_grid;
+		probe.scalar_head_l2_regularization = scalar_head_l2;
+		probe.gate_scalar_l2_regularization = gate_scalar_l2;
+		probe.gate_mix_l2_regularization = gate_mix_l2;
+		probe.gate_full_l2_regularization = gate_full_l2;
+		probe.residual_stage = residual_stage;
+		probe.stage_active_only = stage_active_only;
+		DevLossGradientProbe::DirectionalResult result =
+			probe.CheckDirectional(configs, displacement, coeff_start, coeff_end);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_coeffs=" << result.checked_count
+			          << " coeff_count=" << mtpr.CoeffCount()
+			          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
+			          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
+			          << " residual_stage=" << DevResidualStageName(residual_stage)
+			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
+			          << " base_loss=" << result.base_loss
+			          << " analytic_directional=" << result.analytic
+			          << " finite_difference=" << result.finite_difference
+			          << " abs_err=" << result.abs_err
+			          << " rel_err=" << result.rel_err
+			          << std::endl;
+		}
+		if (result.abs_err > abs_tolerance
+		    && result.rel_err > rel_tolerance)
 			exit(1);
 	} END_COMMAND;
 
@@ -1317,6 +1463,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
 			"         --two-layer-gate-site-mode=neighbor|double (default=neighbor),\n"
 			"         --two-layer-gate-shared-radial (default for gate models),\n"
+			"         --two-layer-gate-edge-l1 (neighbor-only first-version edge-projected raw l=1 gate),\n"
 			"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
 			"         --zbl-typewise-cutoff-factor=<factor>\n"

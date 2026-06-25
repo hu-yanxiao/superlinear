@@ -474,6 +474,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 						"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
 					"two-layer-gate-shared-radial",
+					"two-layer-gate-edge-l1",
 					"two-layer-residual"
 		};
 	for (const char* name : names) {
