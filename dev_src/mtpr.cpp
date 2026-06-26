@@ -7,9 +7,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdlib>
 #include <cctype>
 #include <iostream>
+#include <sstream>
 #include "mtpr.h"
 
 #ifdef MLIP_INTEL_MKL
@@ -36,6 +38,362 @@ constexpr double kRadialFirstCoeffPositiveFloor = 1.0e-12;
 double Clamp01(double value)
 {
 	return std::max(0.0, std::min(1.0, value));
+}
+
+struct GateUpgradeQIndex {
+	int l;
+	int k;
+	int mu;
+	std::string key;
+};
+
+struct GateUpgradeTensor {
+	std::string key;
+	int l = 0;
+	std::vector<int> node;
+	bool zero = false;
+};
+
+double GateUpgradeFact(int n)
+{
+	if (n < 0)
+		return 0.0;
+	double value = 1.0;
+	for (int i = 2; i <= n; ++i)
+		value *= static_cast<double>(i);
+	return value;
+}
+
+bool GateUpgradeTriangle(int l1, int l2, int l3)
+{
+	return std::abs(l1 - l2) <= l3 && l3 <= l1 + l2;
+}
+
+double GateUpgradeClebschGordan(int j1, int m1, int j2, int m2, int j, int m)
+{
+	if (m != m1 + m2)
+		return 0.0;
+	if (!GateUpgradeTriangle(j1, j2, j))
+		return 0.0;
+	if (std::abs(m1) > j1 || std::abs(m2) > j2 || std::abs(m) > j)
+		return 0.0;
+
+	const double pref1 = std::sqrt((2.0 * j + 1.0)
+		* GateUpgradeFact(j1 + j2 - j)
+		* GateUpgradeFact(j1 - j2 + j)
+		* GateUpgradeFact(-j1 + j2 + j)
+		/ GateUpgradeFact(j1 + j2 + j + 1));
+	const double pref2 = std::sqrt(GateUpgradeFact(j1 + m1)
+		* GateUpgradeFact(j1 - m1)
+		* GateUpgradeFact(j2 + m2)
+		* GateUpgradeFact(j2 - m2)
+		* GateUpgradeFact(j + m)
+		* GateUpgradeFact(j - m));
+
+	double sum = 0.0;
+	for (int k = 0; k <= 64; ++k) {
+		const int a = j1 + j2 - j - k;
+		const int b = j1 - m1 - k;
+		const int c = j2 + m2 - k;
+		const int d = j - j2 + m1 + k;
+		const int e = j - j1 - m2 + k;
+		if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0)
+			continue;
+		const double term = ((k % 2) ? -1.0 : 1.0)
+			/ (GateUpgradeFact(k) * GateUpgradeFact(a)
+			   * GateUpgradeFact(b) * GateUpgradeFact(c)
+			   * GateUpgradeFact(d) * GateUpgradeFact(e));
+		sum += term;
+	}
+	return pref1 * pref2 * sum;
+}
+
+double GateUpgradeParitySign(int m)
+{
+	return (std::abs(m) % 2) == 0 ? 1.0 : -1.0;
+}
+
+std::complex<double> GateUpgradeRealFromComplexCoeff(int real_m, int complex_m)
+{
+	const double inv_sqrt2 = 1.0 / std::sqrt(2.0);
+	if (real_m == 0)
+		return complex_m == 0 ? std::complex<double>(1.0, 0.0)
+		                      : std::complex<double>(0.0, 0.0);
+	const int a = std::abs(real_m);
+	if (std::abs(complex_m) != a)
+		return std::complex<double>(0.0, 0.0);
+	if (real_m > 0) {
+		if (complex_m == a)
+			return inv_sqrt2 * GateUpgradeParitySign(a);
+		return inv_sqrt2;
+	}
+	if (complex_m == a)
+		return std::complex<double>(0.0, -inv_sqrt2 * GateUpgradeParitySign(a));
+	return std::complex<double>(0.0, inv_sqrt2);
+}
+
+std::complex<double> GateUpgradeRealCouplingPhase(int l1, int l2, int L)
+{
+	switch ((l1 + l2 - L) & 3) {
+	case 0:
+		return std::complex<double>(1.0, 0.0);
+	case 1:
+		return std::complex<double>(0.0, 1.0);
+	case 2:
+		return std::complex<double>(-1.0, 0.0);
+	default:
+		return std::complex<double>(0.0, -1.0);
+	}
+}
+
+double GateUpgradeRealCGCoeff(int l1, int rm1, int l2, int rm2, int L, int rM)
+{
+	std::complex<double> sum(0.0, 0.0);
+	for (int M = -L; M <= L; ++M) {
+		const std::complex<double> out_u =
+			std::conj(GateUpgradeRealFromComplexCoeff(rM, M));
+		if (std::abs(out_u) == 0.0)
+			continue;
+		for (int m1 = -l1; m1 <= l1; ++m1) {
+			const std::complex<double> in1 =
+				GateUpgradeRealFromComplexCoeff(rm1, m1);
+			if (std::abs(in1) == 0.0)
+				continue;
+			for (int m2 = -l2; m2 <= l2; ++m2) {
+				const std::complex<double> in2 =
+					GateUpgradeRealFromComplexCoeff(rm2, m2);
+				if (std::abs(in2) == 0.0)
+					continue;
+				const double cg =
+					GateUpgradeClebschGordan(l1, m1, l2, m2, L, M);
+				if (std::abs(cg) < 1.0e-14)
+					continue;
+				sum += out_u * cg * in1 * in2;
+			}
+		}
+	}
+	sum *= GateUpgradeRealCouplingPhase(l1, l2, L);
+	if (std::abs(sum.imag()) > 1.0e-10)
+		ERROR("SUS2-SH edge-L1 upgrade CG transform produced a non-real coefficient.");
+	return sum.real();
+}
+
+std::string GateUpgradeTensorKey(const std::string& left,
+                                 const std::string& right,
+                                 int L)
+{
+	std::ostringstream oss;
+	oss << "(" << left << "x" << right << ")->" << L;
+	return oss.str();
+}
+
+class GateUpgradeGraphBuilder {
+public:
+	GateUpgradeGraphBuilder(int lmax, int kmax)
+		: lmax_(lmax), kmax_(kmax)
+	{
+		for (int l = lmax_; l >= 0; --l) {
+			for (int k = kmax_ - 1; k >= 0; --k) {
+				GateUpgradeQIndex q;
+				q.l = l;
+				q.k = k;
+				q.mu = k * (lmax_ + 1) + l;
+				std::ostringstream key;
+				key << "q" << q.mu << "_l" << l << "_k" << k;
+				q.key = key.str();
+				q_.push_back(q);
+			}
+		}
+	}
+
+	void AddScalarsFromMetadata(const std::vector<SHScalarInfo>& scalar_infos)
+	{
+		std::vector<char> required_q(q_.size(), 0);
+		for (const SHScalarInfo& spec : scalar_infos) {
+			const int factor_count = spec.body_order - 1;
+			if (factor_count < 1 || factor_count > 5)
+				ERROR("SUS2-SH edge-L1 upgrade found invalid sh_scalar_info body order");
+			for (int factor = 0; factor < factor_count; ++factor) {
+				const int q = spec.q[factor];
+				if (q < 0 || q >= static_cast<int>(q_.size()))
+					ERROR("SUS2-SH edge-L1 upgrade found invalid q index");
+				required_q[q] = 1;
+			}
+		}
+		for (int q = 0; q < static_cast<int>(required_q.size()); ++q)
+			if (required_q[q])
+				BasicTensor(q);
+		for (const SHScalarInfo& spec : scalar_infos)
+			BuildScalar(spec);
+	}
+
+	std::vector<int> L1SourceMomentBases() const
+	{
+		std::vector<int> bases;
+		for (const GateUpgradeTensor& tensor : tensors_) {
+			if (!tensor.zero && tensor.l == 1
+			    && static_cast<int>(tensor.node.size()) == 3)
+				bases.push_back(tensor.node[0]);
+		}
+		std::sort(bases.begin(), bases.end());
+		bases.erase(std::unique(bases.begin(), bases.end()), bases.end());
+		return bases;
+	}
+
+	int NodeCount() const { return node_count_; }
+
+private:
+	GateUpgradeTensor BasicTensor(int q_index)
+	{
+		if (q_index < 0 || q_index >= static_cast<int>(q_.size()))
+			ERROR("SUS2-SH edge-L1 upgrade q index is out of range");
+		const GateUpgradeQIndex& q = q_[q_index];
+		std::map<std::string, int>::const_iterator found =
+			tensor_lookup_.find(q.key);
+		if (found != tensor_lookup_.end())
+			return tensors_[found->second];
+
+		GateUpgradeTensor tensor;
+		tensor.key = q.key;
+		tensor.l = q.l;
+		tensor.zero = false;
+		tensor.node.resize(2 * q.l + 1);
+		for (int m = -q.l; m <= q.l; ++m)
+			tensor.node[m + q.l] = AddNode();
+		const int index = static_cast<int>(tensors_.size());
+		tensors_.push_back(tensor);
+		tensor_lookup_[q.key] = index;
+		return tensors_.back();
+	}
+
+	GateUpgradeTensor Couple(const GateUpgradeTensor& left,
+	                         const GateUpgradeTensor& right,
+	                         int L)
+	{
+		const GateUpgradeTensor left_copy = left;
+		const GateUpgradeTensor right_copy = right;
+		const std::string key = GateUpgradeTensorKey(left_copy.key,
+		                                             right_copy.key,
+		                                             L);
+		std::map<std::string, int>::const_iterator found =
+			tensor_lookup_.find(key);
+		if (found != tensor_lookup_.end())
+			return tensors_[found->second];
+
+		GateUpgradeTensor out;
+		out.key = key;
+		out.l = L;
+		if (left_copy.zero || right_copy.zero) {
+			out.zero = true;
+			const int index = static_cast<int>(tensors_.size());
+			tensors_.push_back(out);
+			tensor_lookup_[key] = index;
+			return tensors_.back();
+		}
+
+		std::map<std::string, double> local_coeffs;
+		for (int rm1 = -left_copy.l; rm1 <= left_copy.l; ++rm1) {
+			for (int rm2 = -right_copy.l; rm2 <= right_copy.l; ++rm2) {
+				for (int rM = -L; rM <= L; ++rM) {
+					const double coeff = GateUpgradeRealCGCoeff(
+						left_copy.l, rm1, right_copy.l, rm2, L, rM);
+					if (std::abs(coeff) < 1.0e-12)
+						continue;
+					int left_node = left_copy.node[rm1 + left_copy.l];
+					int right_node = right_copy.node[rm2 + right_copy.l];
+					if (right_node < left_node)
+						std::swap(left_node, right_node);
+					std::ostringstream local_key;
+					local_key << left_node << ',' << right_node << ',' << (rM + L);
+					local_coeffs[local_key.str()] += coeff;
+				}
+			}
+		}
+		bool nonzero = false;
+		for (std::map<std::string, double>::const_iterator it = local_coeffs.begin();
+		     it != local_coeffs.end(); ++it) {
+			if (std::abs(it->second) >= 1.0e-12) {
+				nonzero = true;
+				break;
+			}
+		}
+		if (!nonzero) {
+			out.zero = true;
+			const int index = static_cast<int>(tensors_.size());
+			tensors_.push_back(out);
+			tensor_lookup_[key] = index;
+			return tensors_.back();
+		}
+
+		out.zero = false;
+		out.node.resize(2 * L + 1);
+		for (int M = -L; M <= L; ++M)
+			out.node[M + L] = AddNode();
+		const int index = static_cast<int>(tensors_.size());
+		tensors_.push_back(out);
+		tensor_lookup_[key] = index;
+		return tensors_.back();
+	}
+
+	int BuildScalar(const SHScalarInfo& spec)
+	{
+		const GateUpgradeTensor t0 = BasicTensor(spec.q[0]);
+		if (spec.body_order == 2)
+			return t0.node[0];
+		const GateUpgradeTensor t1 = BasicTensor(spec.q[1]);
+		if (spec.body_order == 3) {
+			const GateUpgradeTensor scalar = Couple(t0, t1, 0);
+			return scalar.zero ? -1 : scalar.node[0];
+		}
+		const GateUpgradeTensor t2 = BasicTensor(spec.q[2]);
+		if (spec.body_order == 4) {
+			const GateUpgradeTensor pair = Couple(t0, t1, spec.intermediate_l);
+			if (pair.zero)
+				return -1;
+			const GateUpgradeTensor scalar = Couple(pair, t2, 0);
+			return scalar.zero ? -1 : scalar.node[0];
+		}
+		const GateUpgradeTensor t3 = BasicTensor(spec.q[3]);
+		const GateUpgradeTensor left = Couple(t0, t1, spec.intermediate_l);
+		const GateUpgradeTensor right_pair = Couple(t2, t3, spec.intermediate_l);
+		if (spec.body_order == 6) {
+			const GateUpgradeTensor t4 = BasicTensor(spec.q[4]);
+			if (left.zero || right_pair.zero)
+				return -1;
+			const GateUpgradeTensor right =
+				Couple(right_pair, t4, spec.intermediate_l);
+			if (right.zero)
+				return -1;
+			const GateUpgradeTensor scalar = Couple(left, right, 0);
+			return scalar.zero ? -1 : scalar.node[0];
+		}
+		if (left.zero || right_pair.zero)
+			return -1;
+		const GateUpgradeTensor scalar = Couple(left, right_pair, 0);
+		return scalar.zero ? -1 : scalar.node[0];
+	}
+
+	int AddNode()
+	{
+		return node_count_++;
+	}
+
+	int lmax_;
+	int kmax_;
+	int node_count_ = 0;
+	std::vector<GateUpgradeQIndex> q_;
+	std::vector<GateUpgradeTensor> tensors_;
+	std::map<std::string, int> tensor_lookup_;
+};
+
+std::vector<int> BuildFullEdgeL1SourceMomentBasesFromScalarInfo(
+	int lmax,
+	int kmax,
+	const std::vector<SHScalarInfo>& scalar_infos)
+{
+	GateUpgradeGraphBuilder builder(lmax, kmax);
+	builder.AddScalarsFromMetadata(scalar_infos);
+	return builder.L1SourceMomentBases();
 }
 
 bool TwoLayerProfileEnabledOnRank0()
@@ -585,6 +943,54 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	DistributeCoeffs();
 	BuildTwoLayerGateProductProgram();
 	BuildTwoLayerGateBodyOrderBuckets();
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
+void MLMTPR::UpgradeTwoLayerGateToEdgeL1()
+{
+	if (!is_sh_potential_)
+		ERROR("--two-layer-gate-edge-l1 can only upgrade a SUS2-SH model");
+	if (!two_layer_gate_enabled_)
+		ERROR("--two-layer-gate-edge-l1 requires a two-layer gate model or --two-layer-gate");
+	if (two_layer_gate_edge_l1_enabled_)
+		return;
+	if (sh_l_max_ < 1)
+		ERROR("--two-layer-gate-edge-l1 requires --l-max >= 1");
+	if (two_layer_gate_site_mode_ != "neighbor")
+		ERROR("SUS2-SH edge L1 gate first version supports neighbor site mode only");
+	if (!has_sh_scalar_info_)
+		ERROR("SUS2-SH edge-L1 gate upgrade requires sh_scalar_info metadata");
+	if (static_cast<int>(sh_scalar_info_.size()) != alpha_scalar_moments)
+		ERROR("SUS2-SH edge-L1 gate upgrade found inconsistent sh_scalar_info metadata");
+
+	std::vector<int> source_moment_indices =
+		BuildFullEdgeL1SourceMomentBasesFromScalarInfo(
+			sh_l_max_, sh_k_max_, sh_scalar_info_);
+	if (source_moment_indices.empty())
+		ERROR("--two-layer-gate-edge-l1 selected no L=1 source moments");
+	for (int base : source_moment_indices) {
+		if (base < 0 || base + 2 >= alpha_moments_count)
+			ERROR("SUS2-SH edge-L1 gate upgrade produced an invalid source moment index");
+	}
+
+	two_layer_gate_edge_l1_enabled_ = true;
+	two_layer_gate_edge_l1_source_mu_indices_.clear();
+	two_layer_gate_edge_l1_source_moment_indices_.swap(source_moment_indices);
+	two_layer_gate_edge_l1_weights_.assign(TwoLayerGateEdgeL1WeightCount(), 0.0);
+	two_layer_gate_edge_l1_values_.clear();
+	two_layer_gate_edge_l1_weighted_values_.clear();
+	two_layer_gate_edge_l1_adjoints_.clear();
+	two_layer_gate_edge_l1_value_buffer_.clear();
+	two_layer_gate_edge_l1_signal_buffer_.clear();
+	two_layer_gate_edge_l1_chi_buffer_.clear();
+	two_layer_gate_edge_l1_chi_adj_buffer_.clear();
+	two_layer_gate_edge_l1_weights_by_source_.clear();
+	two_layer_gate_edge_l1_coord_loss_.clear();
+	two_layer_gate_edge_l1_energy_adjoint_buffer_.clear();
+	active_two_layer_gate_edge_l1_coord_loss_ = nullptr;
+
+	DistributeCoeffs();
+	BuildTwoLayerGateProductProgram();
 	ClearTwoLayerEdgePrimitiveCache();
 }
 

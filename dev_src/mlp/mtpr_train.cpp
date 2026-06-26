@@ -1228,8 +1228,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
+	const bool requested_two_layer_gate_edge_l1 =
+		opts["two-layer-gate-edge-l1"] != "";
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
 	bool plain_to_gate_upgrade = false;
+	bool edge_l1_gate_upgrade = false;
 	bool plain_to_gate_disabled_controls = false;
 	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
@@ -1259,6 +1262,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		do_lin = false;
 		do_lin_rescale = false;
 		fine_tune = false;
+	}
+	if (requested_two_layer_gate_edge_l1) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-edge-l1 requires a two-layer gate model or --two-layer-gate");
+		if (!mtpr.TwoLayerGateEdgeL1Enabled()) {
+			mtpr.UpgradeTwoLayerGateToEdgeL1();
+			edge_l1_gate_upgrade = true;
+		}
 	}
 	if (custom_two_layer_gate_tanh_amplitude) {
 		if (!mtpr.TwoLayerGateEnabled())
@@ -1348,6 +1359,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (plain_to_gate_disabled_controls)
 			std::cout << "plain-to-gate upgrade disabled do-lin/do-lin-rescale/fine-tune"
 				          << std::endl;
+		}
+		if (prank == 0 && edge_l1_gate_upgrade) {
+			std::cout << "SUS2-SH two-layer gate edge-L1 upgrade enabled: "
+			          << "source_moment_count="
+			          << mtpr.TwoLayerGateEdgeL1SourceCount()
+			          << " edge_l1_weight_count="
+			          << mtpr.TwoLayerGateEdgeL1WeightCount()
+			          << " initialized_weights=zero"
+			          << std::endl;
 		}
 		if (prank == 0 && mtpr.TwoLayerGateEnabled())
 			std::cout << "two-layer gate tanh amplitude: "

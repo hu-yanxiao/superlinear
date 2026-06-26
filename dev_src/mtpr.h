@@ -630,6 +630,7 @@ public:
 					                                  bool independent_gate_radial_coeffs,
 					                                  const std::string& gate_site_mode = "neighbor",
 					                                  const std::string& gate_mode = "mu-body-linear-combo");
+					void UpgradeTwoLayerGateToEdgeL1();
 			void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;
