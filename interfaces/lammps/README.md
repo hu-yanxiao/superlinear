@@ -162,3 +162,7 @@ RBJacobi_sss_lmp
 Other radial basis names are parsed by the CPU side when implemented in the
 SUS2 interface sources, but only the `_lmp` variants above use the
 preinterpolation table.
+
+CPU `pair_style sus2mtp` supports SUS2-SH `two_layer_gate_edge_l1` models.
+Kokkos pair styles currently reject those models with an explicit unsupported
+error.

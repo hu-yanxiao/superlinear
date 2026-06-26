@@ -201,6 +201,12 @@ class PairSUS2MTP : public Pair {
   std::vector<double> two_layer_gate_additive_coeffs;
   std::vector<double> two_layer_gate_additive_ratios;
   std::vector<unsigned char> two_layer_gate_additive_ratio_valid;
+  bool two_layer_gate_edge_l1_enabled = false;
+  int two_layer_gate_edge_l1_source_count = 0;
+  int two_layer_gate_edge_l1_weight_count = 0;
+  std::vector<int> two_layer_gate_edge_l1_source_moment_indices;
+  std::vector<double> two_layer_gate_edge_l1_weights;
+  std::vector<double> two_layer_gate_edge_l1_weights_by_source;
   std::vector<size_t> two_layer_gate_edge_offsets;
   int *two_layer_gate_edge_neighbors_raw = nullptr;
   int *two_layer_gate_edge_types_raw = nullptr;
@@ -277,6 +283,8 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_center_adjoint_scratch = nullptr;
   double *two_layer_gate_values = nullptr;
   double *two_layer_gate_adjoints = nullptr;
+  double *two_layer_gate_edge_l1_weighted_values = nullptr;
+  double *two_layer_gate_edge_l1_weighted_adjoints = nullptr;
   double *two_layer_gate_multiplier_mu_cache = nullptr;
   double *two_layer_gate_deriv_mu_cache = nullptr;
   unsigned char *two_layer_gate_mu_cache_valid = nullptr;
@@ -297,6 +305,7 @@ class PairSUS2MTP : public Pair {
   std::vector<double> static_fixed_gate_main_base_basic;
   int two_layer_raw_jac_size = 0;
   int two_layer_atom_buffer_size = 0;
+  int two_layer_gate_edge_l1_atom_buffer_size = 0;
   int two_layer_gate_mu_cache_atom_size = 0;
   int two_layer_gate_mu_cache_size = 0;
   int two_layer_radial_cache_size = 0;
@@ -319,11 +328,16 @@ class PairSUS2MTP : public Pair {
   bool *within_cutoff = nullptr;    // First created during compute using grow
 
   bool has_nonzero_two_layer_gate_weights() const;
+  bool has_nonzero_two_layer_gate_edge_l1_weights() const;
+  bool two_layer_gate_edge_l1_active() const;
   bool requires_two_layer_gate_sh() const;
   int two_layer_gate_signal_stride() const;
+  int two_layer_gate_edge_l1_weighted_stride() const;
+  int two_layer_gate_comm_stride() const;
   double two_layer_gate_mu_signal(const double *, int) const;
 	  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
 	  void prepare_two_layer_gate_weight_layouts();
+  void prepare_two_layer_gate_edge_l1_layout();
 	  void prepare_two_layer_gate_product_layout();
 	  void forward_two_layer_gate_products();
 	  void backprop_two_layer_gate_products(const double *);
@@ -341,7 +355,15 @@ class PairSUS2MTP : public Pair {
                                               double);
   void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
-                               double = 0.0);
+                               double = 0.0, bool = false);
+  int find_two_layer_gate_edge_l1_raw_source_moment_index(int) const;
+  void fill_two_layer_gate_edge_l1_weighted_values_for_atom(int,
+                                                            const double *);
+  void prepare_two_layer_gate_edge_l1_signal(int, const double *, double,
+                                             const double *, double *);
+  void accumulate_two_layer_gate_edge_l1_u_adjoints(int, const double *,
+                                                    const double *);
+  void seed_two_layer_gate_edge_l1_moment_adjoints(int, double *) const;
   void accumulate_sh_basic_edge(int, const double *, double, double, bool, int,
                                 bool = false, bool = false,
                                 double * = nullptr, double * = nullptr,
