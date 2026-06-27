@@ -1254,12 +1254,39 @@ int MLMTPR::TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const
 	return TwoLayerGateAdditiveCoeffOffset() + type_outer * radial_func_count + mu;
 }
 
+const double* MLMTPR::TwoLayerGateAdditiveCoeffRowData(int type_outer) const
+{
+	if (!two_layer_gate_enabled_)
+		return nullptr;
+	if (type_outer < 0 || type_outer >= species_count)
+		ERROR("SUS2-SH two-layer gate additive type index is out of range");
+	const int coeff_index = TwoLayerGateAdditiveCoeffOffset()
+		+ type_outer * radial_func_count;
+	if (coeff_index >= 0
+	    && coeff_index + radial_func_count
+		    <= static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs.data() + coeff_index;
+	const int local_index = type_outer * radial_func_count;
+	if (local_index >= 0
+	    && local_index + radial_func_count
+		    <= static_cast<int>(two_layer_gate_additive_coeffs_.size()))
+		return two_layer_gate_additive_coeffs_.data() + local_index;
+	return nullptr;
+}
+
 double MLMTPR::TwoLayerGateAdditiveCoeff(int type_outer, int mu) const
 {
 	if (!two_layer_gate_enabled_)
 		return 0.0;
-	const int coeff_index = TwoLayerGateAdditiveCoeffIndex(type_outer, mu);
-	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("SUS2-SH two-layer gate additive mu index is out of range");
+	const double* coeff_row = TwoLayerGateAdditiveCoeffRowData(type_outer);
+	if (coeff_row != nullptr)
+		return coeff_row[mu];
+	const int coeff_index = TwoLayerGateAdditiveCoeffOffset()
+		+ type_outer * radial_func_count + mu;
+	if (coeff_index >= 0
+	    && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
 	const int local_index = type_outer * radial_func_count + mu;
 	if (local_index >= 0

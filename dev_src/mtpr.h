@@ -671,6 +671,7 @@ public:
 		int TwoLayerGateRadialCoeffIndex(int mu, int xi) const;
 		double TwoLayerGateRadialCoeff(int mu, int xi) const;
 		int TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
+		const double* TwoLayerGateAdditiveCoeffRowData(int type_outer) const;
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
 		int TwoLayerGateTypeCoeffIndex(int type_outer) const;
 		double TwoLayerGateTypeCoeff(int type_outer) const;

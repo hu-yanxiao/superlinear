@@ -959,10 +959,6 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 	if (need_gate_additive_param
 	    && static_cast<int>(two_layer_gate_gate_additive_param_mu_buffer_.size()) != radial_func_count)
 		two_layer_gate_gate_additive_param_mu_buffer_.resize(radial_func_count);
-	if (static_cast<int>(two_layer_gate_scaled_mu_vals_buffer_.size()) != radial_func_count)
-		two_layer_gate_scaled_mu_vals_buffer_.resize(radial_func_count);
-	if (static_cast<int>(two_layer_gate_scaled_mu_ders_buffer_.size()) != radial_func_count)
-		two_layer_gate_scaled_mu_ders_buffer_.resize(radial_func_count);
 
 	double* additive_by_mu = need_additive ? two_layer_gate_additive_mu_buffer_.data() : nullptr;
 	double* type_scale_by_mu = need_type_scale ? two_layer_gate_type_scale_mu_buffer_.data() : nullptr;
@@ -976,9 +972,6 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 		need_gate_outer_param ? two_layer_gate_gate_outer_param_mu_buffer_.data() : nullptr;
 	double* gate_additive_param_by_mu =
 		need_gate_additive_param ? two_layer_gate_gate_additive_param_mu_buffer_.data() : nullptr;
-	const bool need_gate_derivatives =
-		need_additive || need_additive_param || need_gate_residual_param
-		|| need_gate_outer_param || need_gate_additive_param;
 	if (!two_layer_gate_enabled_) {
 		const double pair_type_scale = center_type_coeff * outer_type_coeff;
 		for (int mu = 0; mu < radial_func_count; ++mu) {
@@ -1003,10 +996,24 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 	}
 
 	(void)neighbor_atom_index;
+	const double* additive_coeff_row = TwoLayerGateAdditiveCoeffRowData(type_outer);
+	double additive_coeff_scalar = 1.0;
+	bool use_additive_coeff_scalar = false;
+	if (additive_coeff_row == nullptr
+	    && type_outer >= 0
+	    && type_outer < static_cast<int>(two_layer_gate_additive_coeffs_.size())) {
+		additive_coeff_scalar = two_layer_gate_additive_coeffs_[type_outer];
+		use_additive_coeff_scalar = true;
+	}
 
 	if (buffer_mask == kGateMuBufferTypeScale) {
 		for (int mu = 0; mu < radial_func_count; ++mu) {
-			const double additive_coeff = TwoLayerGateAdditiveCoeff(type_outer, mu);
+			const double additive_coeff =
+				additive_coeff_row != nullptr
+					? additive_coeff_row[mu]
+					: (use_additive_coeff_scalar
+						   ? additive_coeff_scalar
+						   : TwoLayerGateAdditiveCoeff(type_outer, mu));
 			const double gate_signal =
 				(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
 			type_scale_by_mu[mu] = center_type_coeff
@@ -1016,7 +1023,12 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 	}
 
 	for (int mu = 0; mu < radial_func_count; ++mu) {
-		const double additive_coeff = TwoLayerGateAdditiveCoeff(type_outer, mu);
+		const double additive_coeff =
+			additive_coeff_row != nullptr
+				? additive_coeff_row[mu]
+				: (use_additive_coeff_scalar
+					   ? additive_coeff_scalar
+					   : TwoLayerGateAdditiveCoeff(type_outer, mu));
 		const double gate_signal =
 			(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
 		const double gate_outer = outer_type_coeff + additive_coeff * gate_signal;
@@ -2180,10 +2192,17 @@ void MLMTPR::PrepareTwoLayerEdgeGateTypeScaleCache(
 		static_cast<size_t>(C) * radial_func_count, 1.0);
 	for (int type = 0; type < C; ++type) {
 		type_coeff_by_type[type] = regression_coeffs[shared_type_offset + type];
-		for (int mu = 0; mu < radial_func_count; ++mu)
+		const double* additive_coeff_row =
+			TwoLayerGateAdditiveCoeffRowData(type);
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			const double additive_coeff =
+				additive_coeff_row != nullptr
+					? additive_coeff_row[mu]
+					: TwoLayerGateAdditiveCoeff(type, mu);
 			additive_coeff_by_type_mu[
 				static_cast<size_t>(type) * radial_func_count + mu] =
-				TwoLayerGateAdditiveCoeff(type, mu);
+				additive_coeff;
+		}
 	}
 	two_layer_edge_gate_type_scale_cache_.resize(edge_count * radial_func_count);
 	two_layer_edge_gate_additive_cache_.resize(edge_count * radial_func_count);
@@ -4105,6 +4124,12 @@ void MLMTPR::AddTwoLayerGateX2Penalty(
 						edge_sh_values, neighbor_atom_index_for_tanh)
 					: TwoLayerGateNeighborSignals(nbh, j);
 
+			const double* additive_coeff_row =
+				TwoLayerGateAdditiveCoeffRowData(type_outer);
+			const int additive_coeff_index_base =
+				need_grad
+					? TwoLayerGateAdditiveCoeffIndex(type_outer, 0)
+					: -1;
 			std::fill(gate_adjoint_by_mu.begin(),
 			          gate_adjoint_by_mu.end(),
 			          0.0);
@@ -4112,14 +4137,16 @@ void MLMTPR::AddTwoLayerGateX2Penalty(
 				const double gate_signal =
 					gate_signal_by_mu == nullptr ? 0.0 : gate_signal_by_mu[mu];
 				const double additive_coeff =
-					TwoLayerGateAdditiveCoeff(type_outer, mu);
+					additive_coeff_row != nullptr
+						? additive_coeff_row[mu]
+						: TwoLayerGateAdditiveCoeff(type_outer, mu);
 				const double x = additive_coeff * gate_signal;
 				out_penalty_accumulator += norm * x * x;
 				if (!need_grad)
 					continue;
 				const double x_adjoint = 2.0 * norm * x;
 				(*out_penalty_grad_accumulator)[
-					TwoLayerGateAdditiveCoeffIndex(type_outer, mu)] +=
+					additive_coeff_index_base + mu] +=
 					x_adjoint * gate_signal;
 				const double gate_adjoint = x_adjoint * additive_coeff;
 				gate_adjoint_by_mu[mu] = gate_adjoint;
