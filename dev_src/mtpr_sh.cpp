@@ -1002,9 +1002,7 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 		return;
 	}
 
-	(void)outer_type_coeff;
 	(void)neighbor_atom_index;
-	const double gate_type_coeff = TwoLayerGateTypeCoeff(type_outer);
 
 	if (buffer_mask == kGateMuBufferTypeScale) {
 		for (int mu = 0; mu < radial_func_count; ++mu) {
@@ -1012,7 +1010,7 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 			const double gate_signal =
 				(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
 			type_scale_by_mu[mu] = center_type_coeff
-				* (gate_type_coeff + additive_coeff * gate_signal);
+				* (outer_type_coeff + additive_coeff * gate_signal);
 		}
 		return;
 	}
@@ -1021,7 +1019,7 @@ void MLMTPR::PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
 		const double additive_coeff = TwoLayerGateAdditiveCoeff(type_outer, mu);
 		const double gate_signal =
 			(gate_signal_by_mu == nullptr) ? 0.0 : gate_signal_by_mu[mu];
-		const double gate_outer = gate_type_coeff + additive_coeff * gate_signal;
+		const double gate_outer = outer_type_coeff + additive_coeff * gate_signal;
 		if (need_additive) {
 			additive_by_mu[mu] = additive_coeff;
 		}
@@ -1853,8 +1851,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			if (prepare_moment_values_from_cache)
 				for (int moment_index : two_layer_gate_required_moment_indices_)
 					moment_vals[moment_index] = 0.0;
-			const double center_type_coeff = prepare_moment_values_from_cache
-				? regression_coeffs[shared_type_offset + type_central]
+			const double gate_center_type_coeff = prepare_moment_values_from_cache
+				? TwoLayerGateTypeCoeff(type_central)
 				: 0.0;
 		for (int j = 0; j < nbh.count; ++j) {
 			const size_t edge = two_layer_edge_offsets_cache_[ind]
@@ -2056,9 +2054,10 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 				}
 			}
 					if (prepare_moment_values_from_cache) {
-					const double outer_type_coeff =
-						regression_coeffs[shared_type_offset + type_outer];
-					const double type_scale = center_type_coeff * outer_type_coeff;
+					const double gate_outer_type_coeff =
+						TwoLayerGateTypeCoeff(type_outer);
+					const double type_scale =
+						gate_center_type_coeff * gate_outer_type_coeff;
 					const double* gate_mu_values = use_gate_radial ? gate_mu_vals : mu_vals;
 					for (int bi = 0;
 					     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -2177,12 +2176,10 @@ void MLMTPR::PrepareTwoLayerEdgeGateTypeScaleCache(
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
 	std::vector<double> type_coeff_by_type(C, 0.0);
-	std::vector<double> gate_type_coeff_by_type(C, 1.0);
 	std::vector<double> additive_coeff_by_type_mu(
 		static_cast<size_t>(C) * radial_func_count, 1.0);
 	for (int type = 0; type < C; ++type) {
 		type_coeff_by_type[type] = regression_coeffs[shared_type_offset + type];
-		gate_type_coeff_by_type[type] = TwoLayerGateTypeCoeff(type);
 		for (int mu = 0; mu < radial_func_count; ++mu)
 			additive_coeff_by_type_mu[
 				static_cast<size_t>(type) * radial_func_count + mu] =
@@ -2222,7 +2219,7 @@ void MLMTPR::PrepareTwoLayerEdgeGateTypeScaleCache(
 			const int type_outer = nbh.types[j];
 			if (type_outer >= species_count)
 				throw MlipException("Too few species count in the MTP potential!");
-			const double gate_type_coeff = gate_type_coeff_by_type[type_outer];
+			const double outer_type_coeff = type_coeff_by_type[type_outer];
 			const int gate_neighbor_atom_index = nbh.inds[j];
 			const double* sh_values =
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
@@ -2285,7 +2282,7 @@ void MLMTPR::PrepareTwoLayerEdgeGateTypeScaleCache(
 				}
 				type_scale_row[mu] =
 					center_type_coeff
-					* (gate_type_coeff + additive_coeff * gate_signal);
+					* (outer_type_coeff + additive_coeff * gate_signal);
 				additive_row[mu] = additive_coeff;
 				multiplier_row[mu] = 1.0;
 			}
@@ -3488,7 +3485,7 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
-	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 	const bool use_edge_cache =
 		HasTwoLayerEdgePrimitiveCache(cache_atom_index, false);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
@@ -3551,8 +3548,9 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 		     ++bi) {
@@ -3811,8 +3809,8 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 		const int type_central = nbh.my_type;
 		if (type_central >= species_count)
 			throw MlipException("Too few species count in the MTP potential!");
-		const double center_type_coeff =
-			regression_coeffs[shared_type_offset + type_central];
+		const double gate_center_type_coeff =
+			TwoLayerGateTypeCoeff(type_central);
 		const double* atom_adjoints =
 			two_layer_gate_edge_l1_adjoints_.data()
 			+ static_cast<size_t>(ind) * source_count * 3;
@@ -3969,9 +3967,10 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 				}
 			}
 
-			const double outer_type_coeff =
-				regression_coeffs[shared_type_offset + type_outer];
-			const double type_scale = center_type_coeff * outer_type_coeff;
+			const double gate_outer_type_coeff =
+				TwoLayerGateTypeCoeff(type_outer);
+			const double type_scale =
+				gate_center_type_coeff * gate_outer_type_coeff;
 			Vector3 edge_der(0.0, 0.0, 0.0);
 			for (int active_pos = 0;
 			     active_pos < static_cast<int>(active_basic_adjoints.size());
@@ -4502,8 +4501,8 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		const int type_central = nbh.my_type;
 		if (type_central >= species_count)
 			throw MlipException("Too few species count in the MTP potential!");
-		const double center_type_coeff =
-			regression_coeffs[shared_type_offset + type_central];
+		const double gate_center_type_coeff =
+			TwoLayerGateTypeCoeff(type_central);
 
 		for (int j = 0; j < nbh.count; ++j) {
 			const int type_outer = nbh.types[j];
@@ -4565,9 +4564,10 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				source_radial_ss_values[source] = radial_ss_value;
 			}
 
-			const double outer_type_coeff =
-				regression_coeffs[shared_type_offset + type_outer];
-			const double type_scale = center_type_coeff * outer_type_coeff;
+			const double gate_outer_type_coeff =
+				TwoLayerGateTypeCoeff(type_outer);
+			const double type_scale =
+				gate_center_type_coeff * gate_outer_type_coeff;
 			std::vector<double> radial_accum(source_count, 0.0);
 			for (int source = 0; source < source_count; ++source) {
 				const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
@@ -4580,10 +4580,10 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 					const double y = sh_values_use[sh_index];
 					const double radial_value = source_radial_values[source];
 					radial_accum[source] += adjoint * y;
-					out_grad_accumulator[shared_type_offset + type_central] +=
-						adjoint * outer_type_coeff * radial_value * y;
-					out_grad_accumulator[shared_type_offset + type_outer] +=
-						adjoint * center_type_coeff * radial_value * y;
+					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
+						adjoint * gate_outer_type_coeff * radial_value * y;
+					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+						adjoint * gate_center_type_coeff * radial_value * y;
 				}
 			}
 
@@ -4646,7 +4646,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 	std::vector<double>& radial_derivatives = grad_mu_contract_ders_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
-	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 
 	for (int j = 0; j < nbh.count; ++j) {
@@ -4696,8 +4696,9 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		double* moment_der = sh_gate_moment_ders_.data()
 			+ static_cast<size_t>(j) * coord_stride;
 		for (int basic_index : two_layer_gate_required_basic_indices_) {
@@ -4835,7 +4836,7 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
-	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -4924,8 +4925,9 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -5055,7 +5057,7 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
-	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -5144,8 +5146,9 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -5283,8 +5286,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 		static_cast<int>(radial_eval_to_scaling_block_.size());
 	const int radial_val_stride = eval_block_count * R;
 	const int radial_der_stride = radial_val_stride * 5;
-	const double center_type_coeff =
-		regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff =
+		TwoLayerGateTypeCoeff(type_central);
 
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = radial_ders_buffer_;
@@ -5402,9 +5405,10 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 					}
 				}
 
-					const double outer_type_coeff =
-						regression_coeffs[shared_type_offset + type_outer];
-					const double type_scale = center_type_coeff * outer_type_coeff;
+					const double gate_outer_type_coeff =
+						TwoLayerGateTypeCoeff(type_outer);
+					const double type_scale =
+						gate_center_type_coeff * gate_outer_type_coeff;
 					for (int bi = 0;
 					     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 					     ++bi) {
@@ -5586,8 +5590,9 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-			const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+			const double type_scale =
+				gate_center_type_coeff * gate_outer_type_coeff;
 			double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
 			double* radial_coeff_coord_accum = grad_radial_coeff_coord_accum_.data();
 			for (int mu : two_layer_gate_required_mu_indices_) {
@@ -5634,12 +5639,12 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 
 			const int sigma_coeff_offset =
 				C + 2 * C * C * scaling_block + type_central * C + type_outer;
-			out_grad_accumulator[shared_type_offset + type_central] +=
-				value_weight * outer_type_coeff * dot_val * y
-				+ coord_weight * outer_type_coeff * base_direction;
-			out_grad_accumulator[shared_type_offset + type_outer] +=
-				value_weight * center_type_coeff * dot_val * y
-				+ coord_weight * center_type_coeff * base_direction;
+			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
+				value_weight * gate_outer_type_coeff * dot_val * y
+				+ coord_weight * gate_outer_type_coeff * base_direction;
+			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+				value_weight * gate_center_type_coeff * dot_val * y
+				+ coord_weight * gate_center_type_coeff * base_direction;
 			out_grad_accumulator[sigma_coeff_offset] +=
 				value_weight * type_scale * dot_s * y
 				+ coord_weight * type_scale * sigma_direction;
@@ -5814,8 +5819,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		static_cast<int>(radial_eval_to_scaling_block_.size());
 	const int radial_val_stride = eval_block_count * R;
 	const int radial_der_stride = radial_val_stride * 5;
-	const double center_type_coeff =
-		regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff =
+		TwoLayerGateTypeCoeff(type_central);
 
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = radial_ders_buffer_;
@@ -5932,9 +5937,10 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 					}
 				}
 
-				const double outer_type_coeff =
-					regression_coeffs[shared_type_offset + type_outer];
-				const double type_scale = center_type_coeff * outer_type_coeff;
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer);
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
 				for (int bi = 0;
 				     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 				     ++bi) {
@@ -6116,8 +6122,9 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
 		double* radial_coeff_coord_accum = grad_radial_coeff_coord_accum_.data();
 		for (int mu : two_layer_gate_required_mu_indices_) {
@@ -6164,12 +6171,12 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 
 			const int sigma_coeff_offset =
 				C + 2 * C * C * scaling_block + type_central * C + type_outer;
-			out_grad_accumulator[shared_type_offset + type_central] +=
-				value_weight * outer_type_coeff * dot_val * y
-				+ coord_weight * outer_type_coeff * base_direction;
-			out_grad_accumulator[shared_type_offset + type_outer] +=
-				value_weight * center_type_coeff * dot_val * y
-				+ coord_weight * center_type_coeff * base_direction;
+			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
+				value_weight * gate_outer_type_coeff * dot_val * y
+				+ coord_weight * gate_outer_type_coeff * base_direction;
+			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+				value_weight * gate_center_type_coeff * dot_val * y
+				+ coord_weight * gate_center_type_coeff * base_direction;
 			out_grad_accumulator[sigma_coeff_offset] +=
 				value_weight * type_scale * dot_s * y
 				+ coord_weight * type_scale * sigma_direction;
@@ -6486,7 +6493,7 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int shared_type_offset = radial_coeff_base + R;
-	const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
+	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -6572,8 +6579,9 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			}
 		}
 
-		const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-		const double type_scale = center_type_coeff * outer_type_coeff;
+		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
+		const double type_scale =
+			gate_center_type_coeff * gate_outer_type_coeff;
 		const double inv_r = has_direction ? 1.0 / r : 0.0;
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -7642,7 +7650,7 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						if (value_accum != 0.0) {
 							out_grad_accumulator[shared_type_offset + type_central] +=
 								gate_outer * dot_val * value_accum;
-						out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+						out_grad_accumulator[shared_type_offset + type_outer] +=
 							center_type_coeff * dot_val * value_accum;
 					}
 					if (direct_accum != 0.0) {
@@ -8366,7 +8374,7 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 									+ type_central * C + type_outer;
 									grad_out[shared_type_offset + type_central] +=
 										gate_outer * mu_contribution;
-									grad_out[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+									grad_out[shared_type_offset + type_outer] +=
 										center_type_coeff * mu_contribution;
 								grad_out[sigma_coeff_offset] += type_scale * (
 									radial_s_derivatives_use[mu] * value_accum
@@ -8644,7 +8652,7 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 
 					const int sigma_coeff_offset = C + 2 * C * C * scaling_block + type_central * C + type_outer;
 					grad_out[shared_type_offset + type_central] += center_grad;
-					grad_out[TwoLayerGateTypeCoeffIndex(type_outer)] += gate_type_grad;
+					grad_out[shared_type_offset + type_outer] += gate_type_grad;
 				grad_out[sigma_coeff_offset] += sigma_grad;
 				grad_out[sigma_coeff_offset + C * C] += shift_grad;
 					if (two_layer_gate_enabled_)

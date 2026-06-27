@@ -365,6 +365,27 @@ struct DevGateMuBodyOrderResult {
 	double worst_actual = 0.0;
 };
 
+struct DevGateTypeSeparationResult {
+	int checked_outer_pairs = 0;
+	int checked_gate_scalars = 0;
+	int active_gate_scalars = 0;
+	int outer_worst_config = -1;
+	int outer_worst_atom = -1;
+	int outer_worst_neighbor = -1;
+	int outer_worst_mu = -1;
+	int scalar_worst_config = -1;
+	int scalar_worst_atom = -1;
+	int scalar_worst_q = -1;
+	double outer_worst_abs_err = 0.0;
+	double outer_worst_rel_err = 0.0;
+	double outer_worst_expected = 0.0;
+	double outer_worst_actual = 0.0;
+	double scalar_worst_abs_err = 0.0;
+	double scalar_worst_rel_err = 0.0;
+	double scalar_worst_expected = 0.0;
+	double scalar_worst_actual = 0.0;
+};
+
 void UpdateWorst(double analytic,
                  double finite_difference,
                  double& worst_abs_err,
@@ -655,6 +676,153 @@ public:
 
 		two_layer_gate_weights_ = saved_weights;
 		two_layer_gate_body_mix_weights_ = saved_body_mix_weights;
+		regression_coeffs = saved_regression_coeffs;
+		two_layer_gate_values_from_edge_cache_ready_ = false;
+		active_two_layer_gate_values_ = saved_gate_values;
+		return result;
+	}
+};
+
+class DevGateTypeSeparationProbe : public MLMTPR {
+public:
+	DevGateTypeSeparationProbe(const std::string& mtp_filename)
+		: MLMTPR(mtp_filename)
+	{
+	}
+
+	void SetGateTypeCoeffForProbe(int type, double value)
+	{
+		if (type < 0 || type >= species_count)
+			ERROR("SUS2-SH gate type separation check found invalid type index");
+		if (static_cast<int>(two_layer_gate_type_coeffs_.size()) != species_count)
+			ERROR("SUS2-SH gate type coefficient block has inconsistent size");
+		two_layer_gate_type_coeffs_[type] = value;
+		const int coeff_index = TwoLayerGateTypeCoeffIndex(type);
+		if (coeff_index < 0
+		    || coeff_index >= static_cast<int>(regression_coeffs.size()))
+			ERROR("SUS2-SH gate type coefficient index is out of range");
+		regression_coeffs[coeff_index] = value;
+	}
+
+	void FillGateTypeCoeffsForProbe(double value)
+	{
+		for (int type = 0; type < species_count; ++type)
+			SetGateTypeCoeffForProbe(type, value);
+		two_layer_gate_values_from_edge_cache_ready_ = false;
+	}
+
+	DevGateTypeSeparationResult Check(std::vector<Configuration>& configs,
+	                                  int max_atoms,
+	                                  double gate_type_scale,
+	                                  double outer_type_probe)
+	{
+		if (!two_layer_gate_enabled_)
+			ERROR("Model does not have two-layer gate enabled.");
+		if (TwoLayerGateTypeCoeffCount() != species_count)
+			ERROR("SUS2-SH gate type separation check requires one gate type coefficient per species.");
+		if (radial_func_count <= 0)
+			ERROR("SUS2-SH gate type separation check found no radial channels.");
+		if (!std::isfinite(gate_type_scale) || gate_type_scale == 0.0)
+			ERROR("--gate-type-scale should be a finite nonzero value");
+		if (!std::isfinite(outer_type_probe))
+			ERROR("--outer-type-probe should be finite");
+		if (two_layer_gate_required_moments_.empty()
+		    || two_layer_gate_required_moment_indices_.empty())
+			BuildTwoLayerGateProductProgram();
+
+		const std::vector<double> saved_gate_type_coeffs =
+			two_layer_gate_type_coeffs_;
+		const std::vector<double> saved_regression_coeffs = regression_coeffs;
+		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+		active_two_layer_gate_values_ = nullptr;
+
+		const int C = species_count;
+		const int R = p_RadialBasis->rb_size;
+		const int radial_coeff_base = C + 2 * C * C * K_;
+		const int shared_type_offset = radial_coeff_base + R;
+		std::vector<double> zero_gate_signal(radial_func_count, 0.0);
+		std::vector<double> base_scalars;
+		std::vector<double> scaled_scalars;
+		DevGateTypeSeparationResult result;
+
+		for (int cfg_index = 0;
+		     cfg_index < static_cast<int>(configs.size());
+		     ++cfg_index) {
+			Neighborhoods neighborhoods(configs[cfg_index], CutOff());
+			const int atom_limit = max_atoms <= 0
+				? configs[cfg_index].size()
+				: std::min(max_atoms, configs[cfg_index].size());
+			for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
+				const Neighborhood& nbh = neighborhoods[atom_index];
+				const int type_central = nbh.my_type;
+				if (type_central < 0 || type_central >= species_count)
+					ERROR("SUS2-SH gate type separation check found invalid center type");
+				const double center_type_coeff =
+					regression_coeffs[shared_type_offset + type_central];
+
+				for (int j = 0; j < nbh.count; ++j) {
+					const int type_outer = nbh.types[j];
+					if (type_outer < 0 || type_outer >= species_count)
+						ERROR("SUS2-SH gate type separation check found invalid neighbor type");
+					const double outer_type_coeff =
+						regression_coeffs[shared_type_offset + type_outer];
+					FillGateTypeCoeffsForProbe(1.0);
+					SetGateTypeCoeffForProbe(type_outer, outer_type_probe);
+					PrepareTwoLayerGateNeighborMuBuffers(
+						type_outer, center_type_coeff, outer_type_coeff,
+						zero_gate_signal.data(), nbh.inds[j],
+						kGateMuBufferTypeScale);
+					const double expected =
+						center_type_coeff * outer_type_coeff;
+					for (int mu = 0; mu < radial_func_count; ++mu) {
+						const double actual =
+							two_layer_gate_type_scale_mu_buffer_[mu];
+						const double old_abs = result.outer_worst_abs_err;
+						UpdateWorst(expected, actual,
+						            result.outer_worst_abs_err,
+						            result.outer_worst_rel_err,
+						            result.outer_worst_expected,
+						            result.outer_worst_actual);
+						if (result.outer_worst_abs_err > old_abs) {
+							result.outer_worst_config = cfg_index;
+							result.outer_worst_atom = atom_index;
+							result.outer_worst_neighbor = j;
+							result.outer_worst_mu = mu;
+						}
+						++result.checked_outer_pairs;
+					}
+				}
+
+				FillGateTypeCoeffsForProbe(1.0);
+				CalcTwoLayerGateScalarValuesOnly(nbh, base_scalars);
+				FillGateTypeCoeffsForProbe(gate_type_scale);
+				CalcTwoLayerGateScalarValuesOnly(nbh, scaled_scalars);
+				for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+					const int body_order = TwoLayerGateWeightBodyOrder(q);
+					const double expected =
+						base_scalars[q]
+						* std::pow(gate_type_scale,
+						           2.0 * static_cast<double>(body_order - 1));
+					const double actual = scaled_scalars[q];
+					const double old_abs = result.scalar_worst_abs_err;
+					UpdateWorst(expected, actual,
+					            result.scalar_worst_abs_err,
+					            result.scalar_worst_rel_err,
+					            result.scalar_worst_expected,
+					            result.scalar_worst_actual);
+					if (result.scalar_worst_abs_err > old_abs) {
+						result.scalar_worst_config = cfg_index;
+						result.scalar_worst_atom = atom_index;
+						result.scalar_worst_q = q;
+					}
+					if (std::abs(expected) > 1.0e-14)
+						++result.active_gate_scalars;
+					++result.checked_gate_scalars;
+				}
+			}
+		}
+
+		two_layer_gate_type_coeffs_ = saved_gate_type_coeffs;
 		regression_coeffs = saved_regression_coeffs;
 		two_layer_gate_values_from_edge_cache_ready_ = false;
 		active_two_layer_gate_values_ = saved_gate_values;
@@ -1466,7 +1634,78 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			const bool failed =
 				result.worst_abs_err > abs_tolerance
 				&& result.worst_rel_err > rel_tolerance;
-			if (failed)
+		if (failed)
+			exit(1);
+		} END_COMMAND;
+
+		BEGIN_COMMAND("check-two-layer-gate-type-separation-dev",
+			"checks release two-layer gate outer v_t and inner c_gate_t separation",
+			"mlp-sus2 check-two-layer-gate-type-separation-dev model.mtp cfg --max-configs=1 --max-atoms=1 --gate-type-scale=2 --outer-type-probe=3 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
+		) {
+			if (args.size() != 2) {
+				std::cout << "mlp-sus2 check-two-layer-gate-type-separation-dev: model and cfg arguments are required\n";
+				return 1;
+			}
+			DevGateTypeSeparationProbe mtpr(args[0]);
+			std::ifstream ifs(args[1], std::ios::binary);
+			if (!ifs)
+				ERROR("Cannot open configuration file for gate type separation check.");
+
+			const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+			std::vector<Configuration> configs;
+			Configuration cfg;
+			while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+			       && cfg.Load(ifs)) {
+				configs.push_back(cfg);
+			}
+			if (configs.empty())
+				ERROR("No configurations loaded for gate type separation check.");
+
+			const int max_atoms = ParseDevIntOption(opts, "max-atoms", 1);
+			const double gate_type_scale =
+				ParseDevDoubleOption(opts, "gate-type-scale", 2.0);
+			const double outer_type_probe =
+				ParseDevDoubleOption(opts, "outer-type-probe", 3.0);
+			const double abs_tolerance =
+				ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-12);
+			const double rel_tolerance =
+				ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-10);
+
+			const DevGateTypeSeparationResult result =
+				mtpr.Check(configs, max_atoms, gate_type_scale, outer_type_probe);
+			if (mpi_rank == 0) {
+				std::cout << std::setprecision(12)
+				          << "checked_outer_pairs=" << result.checked_outer_pairs
+				          << " checked_gate_scalars=" << result.checked_gate_scalars
+				          << " active_gate_scalars=" << result.active_gate_scalars
+				          << " outer_worst_config=" << result.outer_worst_config
+				          << " outer_worst_atom=" << result.outer_worst_atom
+				          << " outer_worst_neighbor=" << result.outer_worst_neighbor
+				          << " outer_worst_mu=" << result.outer_worst_mu
+				          << " outer_expected=" << result.outer_worst_expected
+				          << " outer_actual=" << result.outer_worst_actual
+				          << " outer_abs_err=" << result.outer_worst_abs_err
+				          << " outer_rel_err=" << result.outer_worst_rel_err
+				          << " scalar_worst_config=" << result.scalar_worst_config
+				          << " scalar_worst_atom=" << result.scalar_worst_atom
+				          << " scalar_worst_q=" << result.scalar_worst_q
+				          << " scalar_expected=" << result.scalar_worst_expected
+				          << " scalar_actual=" << result.scalar_worst_actual
+				          << " scalar_abs_err=" << result.scalar_worst_abs_err
+				          << " scalar_rel_err=" << result.scalar_worst_rel_err
+				          << std::endl;
+			}
+			if (result.checked_outer_pairs == 0
+			    || result.checked_gate_scalars == 0
+			    || result.active_gate_scalars == 0)
+				exit(1);
+			const bool outer_failed =
+				result.outer_worst_abs_err > abs_tolerance
+				&& result.outer_worst_rel_err > rel_tolerance;
+			const bool scalar_failed =
+				result.scalar_worst_abs_err > abs_tolerance
+				&& result.scalar_worst_rel_err > rel_tolerance;
+			if (outer_failed || scalar_failed)
 				exit(1);
 		} END_COMMAND;
 
