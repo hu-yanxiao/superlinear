@@ -58,7 +58,6 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 					"two-layer-gate",
 					"two-layer-gate-body-order",
 					"two-layer-gate-mode",
-					"two-layer-gate-tanh-amplitude",
 					"two-layer-gate-site-mode",
 					"two-layer-gate-shared-radial",
 					"two-layer-gate-edge-l1",
@@ -573,6 +572,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --gate-scalar-l2=<double>: L2 penalty on shared gate scalar weights.\n"
 			"    --gate-mix-l2=<double>: L2 penalty on mu-body-linear-combo mix weights around 1.\n"
 			"    --gate-full-l2=<double>: L2 penalty on mu-scalar-full gate weights.\n"
+			"    --gate-x-l2=<double>: per-type/mu second-moment penalty on x_t,mu=a_t,mu*g_mu. Default=1e-4; set 0 to disable.\n"
 			"    --atomic-energies=<e0,e1,...>: fix isolated element energies by enforcing\n"
 			"                                   shift_t + species_t = e_t. Default=off\n"
 				"    --atomic-energy-weight=<double>: BFGS penalty weight for --atomic-energies.\n"
@@ -612,8 +612,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
 					"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
-					"    --two-layer-gate-tanh-amplitude=<double>: bounded additive gate amplitude. Default=0.8\n"
-				"    --two-layer-gate-site-mode=neighbor|double: gate on neighbor j only, or on center i and neighbor j. Default=neighbor\n"
+				"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
 				"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
 				"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
 						"    --two-layer-residual: rejected by mu-body-order gate models.\n"

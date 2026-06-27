@@ -41,6 +41,7 @@ rb_size = scalar_int("radial_basis_size")
 alpha = scalar_int("alpha_scalar_moments")
 gate_radial_count = scalar_int("two_layer_gate_radial_coeff_count")
 gate_additive_count = scalar_int("two_layer_gate_additive_coeff_count")
+gate_type_count = scalar_int("two_layer_gate_type_coeff_count")
 gate_weight_count = scalar_int("two_layer_gate_weight_count")
 gate_body_mix_count = scalar_int("two_layer_gate_body_mix_weight_count")
 edge_l1_count = scalar_int("two_layer_gate_edge_l1_weight_count")
@@ -62,6 +63,7 @@ edge_begin = (
     base_nonlinear
     + gate_radial_count
     + gate_additive_count
+    + gate_type_count
     + gate_weight_count
     + gate_body_mix_count
 )
@@ -115,6 +117,7 @@ for weights in E F S EFS; do
     --gate-scalar-l2=0 \
     --gate-mix-l2=0 \
     --gate-full-l2=0 \
+    --gate-x-l2=0 \
     --displacement=1e-2 \
     --abs-tolerance=1e-12 \
     --rel-tolerance=1e-6 \

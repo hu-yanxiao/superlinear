@@ -469,9 +469,9 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"potential-name",
 				"inline-sh-model",
 					"two-layer-gate",
-						"two-layer-gate-body-order",
-						"two-layer-gate-mode",
-						"two-layer-gate-tanh-amplitude",
+							"two-layer-gate-body-order",
+							"two-layer-gate-mode",
+							"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
 					"two-layer-gate-shared-radial",
 					"two-layer-gate-edge-l1",
@@ -1121,12 +1121,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	    && scalar_weight_l2_preset != "recommended")
 		ERROR("--scalar-weight-l2-preset should be 'none' or 'recommended'");
 	double scalar_head_l2 = 0.0;
-	double gate_scalar_l2 = 0.0;
-	double gate_mix_l2 = 0.0;
-	double gate_full_l2 = 0.0;
-	if (scalar_weight_l2_preset == "recommended") {
-		scalar_head_l2 = 1.0e-5;
-		gate_scalar_l2 = 1.0e-4;
+		double gate_scalar_l2 = 0.0;
+		double gate_mix_l2 = 0.0;
+		double gate_full_l2 = 0.0;
+		double gate_x_l2 = 1.0e-4;
+		if (scalar_weight_l2_preset == "recommended") {
+			scalar_head_l2 = 1.0e-5;
+			gate_scalar_l2 = 1.0e-4;
 		gate_mix_l2 = 1.0e-5;
 		gate_full_l2 = 1.0e-4;
 	}
@@ -1134,38 +1135,34 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		scalar_head_l2 = stod(opts["scalar-head-l2"]);
 	if (opts["gate-scalar-l2"] != "")
 		gate_scalar_l2 = stod(opts["gate-scalar-l2"]);
-	if (opts["gate-mix-l2"] != "")
-		gate_mix_l2 = stod(opts["gate-mix-l2"]);
-	if (opts["gate-full-l2"] != "")
-		gate_full_l2 = stod(opts["gate-full-l2"]);
-	if (!std::isfinite(scalar_head_l2) || scalar_head_l2 < 0.0)
-		ERROR("--scalar-head-l2 should be a finite non-negative value");
-	if (!std::isfinite(gate_scalar_l2) || gate_scalar_l2 < 0.0)
+		if (opts["gate-mix-l2"] != "")
+			gate_mix_l2 = stod(opts["gate-mix-l2"]);
+		if (opts["gate-full-l2"] != "")
+			gate_full_l2 = stod(opts["gate-full-l2"]);
+		if (opts["gate-x-l2"] != "")
+			gate_x_l2 = stod(opts["gate-x-l2"]);
+		if (!std::isfinite(scalar_head_l2) || scalar_head_l2 < 0.0)
+			ERROR("--scalar-head-l2 should be a finite non-negative value");
+		if (!std::isfinite(gate_scalar_l2) || gate_scalar_l2 < 0.0)
 		ERROR("--gate-scalar-l2 should be a finite non-negative value");
 	if (!std::isfinite(gate_mix_l2) || gate_mix_l2 < 0.0)
-		ERROR("--gate-mix-l2 should be a finite non-negative value");
-	if (!std::isfinite(gate_full_l2) || gate_full_l2 < 0.0)
-		ERROR("--gate-full-l2 should be a finite non-negative value");
+			ERROR("--gate-mix-l2 should be a finite non-negative value");
+		if (!std::isfinite(gate_full_l2) || gate_full_l2 < 0.0)
+			ERROR("--gate-full-l2 should be a finite non-negative value");
+		if (!std::isfinite(gate_x_l2) || gate_x_l2 < 0.0)
+			ERROR("--gate-x-l2 should be a finite non-negative value");
 
-	bool custom_two_layer_gate_tanh_amplitude = false;
-	double two_layer_gate_tanh_amplitude = 0.8;
 	if (opts["two-layer-gate-tanh-amplitude"] != "") {
-		two_layer_gate_tanh_amplitude = stod(opts["two-layer-gate-tanh-amplitude"]);
-		custom_two_layer_gate_tanh_amplitude = true;
+		ERROR("--two-layer-gate-tanh-amplitude is obsolete in the release additive-node gate.");
 	}
-	if (!std::isfinite(two_layer_gate_tanh_amplitude)
-	    || two_layer_gate_tanh_amplitude < 0.0
-	    || two_layer_gate_tanh_amplitude > 1.0)
-		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1]");
 	bool custom_two_layer_gate_site_mode = false;
 	std::string two_layer_gate_site_mode = "neighbor";
 	if (opts["two-layer-gate-site-mode"] != "") {
 		two_layer_gate_site_mode = opts["two-layer-gate-site-mode"];
 		custom_two_layer_gate_site_mode = true;
 	}
-	if (two_layer_gate_site_mode != "neighbor"
-	    && two_layer_gate_site_mode != "double")
-		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'");
+	if (two_layer_gate_site_mode != "neighbor")
+		ERROR("--two-layer-gate-site-mode=double is obsolete; release gate supports 'neighbor' only");
 	bool custom_two_layer_gate_mode = false;
 	std::string two_layer_gate_mode = "mu-body-linear-combo";
 	if (opts["two-layer-gate-mode"] != "") {
@@ -1271,11 +1268,6 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			edge_l1_gate_upgrade = true;
 		}
 	}
-	if (custom_two_layer_gate_tanh_amplitude) {
-		if (!mtpr.TwoLayerGateEnabled())
-			ERROR("--two-layer-gate-tanh-amplitude requires a two-layer gate model or --two-layer-gate");
-		mtpr.SetTwoLayerGateTanhAmplitude(two_layer_gate_tanh_amplitude);
-	}
 	if (custom_two_layer_gate_site_mode) {
 		if (!mtpr.TwoLayerGateEnabled())
 			ERROR("--two-layer-gate-site-mode requires a two-layer gate model or --two-layer-gate");
@@ -1329,6 +1321,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.gate_scalar_l2_regularization = gate_scalar_l2;
 	trainer.gate_mix_l2_regularization = gate_mix_l2;
 	trainer.gate_full_l2_regularization = gate_full_l2;
+	trainer.gate_x_l2_regularization = gate_x_l2;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
 	trainer.force_loss_kind = force_loss_kind;
@@ -1370,8 +1363,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << std::endl;
 		}
 		if (prank == 0 && mtpr.TwoLayerGateEnabled())
-			std::cout << "two-layer gate tanh amplitude: "
-			          << mtpr.TwoLayerGateTanhAmplitude() << std::endl;
+			std::cout << "two-layer gate scale mode: additive-node" << std::endl;
 		if (prank == 0)
 			std::cout << "radial smoothness penalty: " << radial_smooth
 			          << " grid=" << radial_smooth_grid << std::endl;

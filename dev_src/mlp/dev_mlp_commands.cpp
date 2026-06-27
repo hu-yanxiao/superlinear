@@ -115,6 +115,7 @@ public:
 		gate_scalar_l2_regularization = 0.0;
 		gate_mix_l2_regularization = 0.0;
 		gate_full_l2_regularization = 0.0;
+		gate_x_l2_regularization = 1.0e-4;
 		fixed_atomic_energies.clear();
 	}
 
@@ -143,6 +144,9 @@ public:
 				const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
 				const int gate_additive_end =
 					gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
+				const int gate_type_begin = mtpr->TwoLayerGateTypeCoeffOffset();
+				const int gate_type_end =
+					gate_type_begin + mtpr->TwoLayerGateTypeCoeffCount();
 				const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
 				const int gate_weight_end =
 					gate_weight_begin + mtpr->TwoLayerGateWeightCount();
@@ -153,6 +157,7 @@ public:
 				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
 				return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
 				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+				    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
 				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
 				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 				    || (coeff_index >= linear_begin + mtpr->species_count
@@ -928,8 +933,14 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	if (index < mtpr.BaseNonlinearCoeffCount())
 		return "nonlinear";
 	if (index >= mtpr.TwoLayerGateRadialCoeffOffset()
-	    && index < mtpr.TwoLayerGateWeightOffset())
+	    && index < mtpr.TwoLayerGateAdditiveCoeffOffset())
 		return "two_layer_gate_radial_coeff";
+	if (index >= mtpr.TwoLayerGateAdditiveCoeffOffset()
+	    && index < mtpr.TwoLayerGateTypeCoeffOffset())
+		return "two_layer_gate_additive_coeff";
+	if (index >= mtpr.TwoLayerGateTypeCoeffOffset()
+	    && index < mtpr.TwoLayerGateWeightOffset())
+		return "two_layer_gate_type_coeff";
 	if (index >= mtpr.TwoLayerGateWeightOffset()
 	    && index < mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount())
 		return "two_layer_gate_weight";
@@ -1003,7 +1014,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -1033,6 +1044,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
 		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
 		const double gate_full_l2 = ParseDevDoubleOption(opts, "gate-full-l2", 0.0);
+		const double gate_x_l2 = ParseDevDoubleOption(opts, "gate-x-l2", 1.0e-4);
 		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-7);
 		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
@@ -1050,6 +1062,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		probe.gate_scalar_l2_regularization = gate_scalar_l2;
 		probe.gate_mix_l2_regularization = gate_mix_l2;
 		probe.gate_full_l2_regularization = gate_full_l2;
+		probe.gate_x_l2_regularization = gate_x_l2;
 		probe.residual_stage = residual_stage;
 		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::Result result =
@@ -1063,7 +1076,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
 				          << " gate_radial_end=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
 				          << " gate_additive_begin=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
-				          << " gate_additive_end=" << mtpr.TwoLayerGateWeightOffset()
+				          << " gate_additive_end=" << mtpr.TwoLayerGateTypeCoeffOffset()
+				          << " gate_type_begin=" << mtpr.TwoLayerGateTypeCoeffOffset()
+				          << " gate_type_end=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_begin=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
@@ -1087,7 +1102,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-direction-dev",
 		"checks a directional MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-direction-dev: model and cfg arguments are required\n";
@@ -1117,6 +1132,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
 		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
 		const double gate_full_l2 = ParseDevDoubleOption(opts, "gate-full-l2", 0.0);
+		const double gate_x_l2 = ParseDevDoubleOption(opts, "gate-x-l2", 1.0e-4);
 		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-4);
 		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
@@ -1134,6 +1150,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		probe.gate_scalar_l2_regularization = gate_scalar_l2;
 		probe.gate_mix_l2_regularization = gate_mix_l2;
 		probe.gate_full_l2_regularization = gate_full_l2;
+		probe.gate_x_l2_regularization = gate_x_l2;
 		probe.residual_stage = residual_stage;
 		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::DirectionalResult result =
@@ -1460,8 +1477,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses exact body-order k+1 scalar buckets),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
-				"         --two-layer-gate-tanh-amplitude=<double> (default=0.8),\n"
-			"         --two-layer-gate-site-mode=neighbor|double (default=neighbor),\n"
+			"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
 			"         --two-layer-gate-shared-radial (default for gate models),\n"
 			"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
 			"         --two-layer-residual (rejected by mu-body-order gate models),\n"

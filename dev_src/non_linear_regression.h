@@ -41,6 +41,9 @@ protected:
 	bool NeedForceTerms(const Configuration& orig) const;
 	bool NeedStressTerms(const Configuration& orig) const;
 	bool NeedPositionDerivativeTerms(const Configuration& orig) const;
+	void AddGateXRegularization(Configuration& cfg,
+	                            const Neighborhoods* neighborhoods,
+	                            Array1D* grad_accumulator);
 	void EvaluateTrainingConfiguration(const Configuration& orig,
 	                                   Configuration& cfg,
 	                                   const Neighborhoods* neighborhoods,
@@ -67,10 +70,11 @@ public:
 	int radial_smooth_grid = 128;
 	std::vector<double> fixed_atomic_energies;
 	double fixed_atomic_energy_weight = 1.0e8;
-	double scalar_head_l2_regularization = 0.0;
-	double gate_scalar_l2_regularization = 0.0;
-	double gate_mix_l2_regularization = 0.0;
-	double gate_full_l2_regularization = 0.0;
+		double scalar_head_l2_regularization = 0.0;
+		double gate_scalar_l2_regularization = 0.0;
+		double gate_mix_l2_regularization = 0.0;
+		double gate_full_l2_regularization = 0.0;
+		double gate_x_l2_regularization = 1.0e-4;
 	ForceLossKind force_loss_kind = ForceLossKind::L2;
 	double force_log_cosh_scale = 2.0;
 

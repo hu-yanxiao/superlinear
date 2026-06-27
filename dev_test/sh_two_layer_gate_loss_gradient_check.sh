@@ -47,6 +47,7 @@ PY
   --energy-weight=1 \
   --force-weight=1 \
   --stress-weight=0 \
+  --gate-x-l2=0 \
   --displacement=1.0e-3 \
   --abs-tolerance=1.0e-5 \
   --rel-tolerance=1.0e-4

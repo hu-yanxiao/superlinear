@@ -155,6 +155,34 @@ bool NonLinearRegression::NeedPositionDerivativeTerms(const Configuration& orig)
 	return NeedForceTerms(orig) || NeedStressTerms(orig);
 }
 
+void NonLinearRegression::AddGateXRegularization(
+	Configuration& cfg,
+	const Neighborhoods* neighborhoods,
+	Array1D* grad_accumulator)
+{
+	if (gate_x_l2_regularization == 0.0)
+		return;
+	if (!std::isfinite(gate_x_l2_regularization)
+	    || gate_x_l2_regularization < 0.0)
+		ERROR("--gate-x-l2 should be a finite non-negative value");
+
+	MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+	if (mtpr == nullptr || !mtpr->TwoLayerGateEnabled())
+		return;
+
+	if (neighborhoods != nullptr) {
+		mtpr->AddTwoLayerGateX2Penalty(
+			cfg, *neighborhoods, gate_x_l2_regularization,
+			loss_, grad_accumulator);
+		return;
+	}
+
+	Neighborhoods local_neighborhoods(cfg, p_mlip->CutOff());
+	mtpr->AddTwoLayerGateX2Penalty(
+		cfg, local_neighborhoods, gate_x_l2_regularization,
+		loss_, grad_accumulator);
+}
+
 void NonLinearRegression::EvaluateTrainingConfiguration(
 	const Configuration& orig,
 	Configuration& cfg,
@@ -299,6 +327,7 @@ void NonLinearRegression::AddLoss(const Configuration & orig,
 	if (wgt_energy!=0 && orig.has_energy())
 		loss_ += wgt_energy * (orig.energy-cfg.energy)*(orig.energy-cfg.energy) 
 				 * d / ((d + fn*avef)*cfg.size());
+	AddGateXRegularization(cfg, neighborhoods, nullptr);
 	
 }
 
@@ -486,6 +515,7 @@ void NonLinearRegression::AddLossGrad(const Configuration & orig,
 		else
 			p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, loss_grad_);
 	}
+	AddGateXRegularization(cfg, neighborhoods, &loss_grad_);
 }
 
 

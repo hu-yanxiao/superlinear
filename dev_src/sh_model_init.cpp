@@ -759,8 +759,6 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool two_layer_gate_shared_radial = two_layer_gate;
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
 	const int two_layer_gate_body_order = kmax + 1;
-	const double two_layer_gate_tanh_amplitude =
-		DoubleOpt(opts, "two-layer-gate-tanh-amplitude", 0.8);
 	std::string two_layer_gate_mode =
 		StringOpt(opts, "two-layer-gate-mode", "mu-body-linear-combo");
 	if (two_layer_gate_mode == "mu-body-order")
@@ -793,13 +791,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
 	if (HasOpt(opts, "two-layer-gate-mode") && !two_layer_gate)
 		ERROR("--two-layer-gate-mode requires --two-layer-gate.");
-	if (!std::isfinite(two_layer_gate_tanh_amplitude)
-	    || two_layer_gate_tanh_amplitude < 0.0
-	    || two_layer_gate_tanh_amplitude > 1.0)
-		ERROR("--two-layer-gate-tanh-amplitude should be finite and in [0, 1].");
-	if (two_layer_gate_site_mode != "neighbor"
-	    && two_layer_gate_site_mode != "double")
-		ERROR("--two-layer-gate-site-mode should be 'neighbor' or 'double'.");
+	if (HasOpt(opts, "two-layer-gate-tanh-amplitude"))
+		ERROR("--two-layer-gate-tanh-amplitude is obsolete in the release additive-node gate.");
+	if (two_layer_gate_site_mode != "neighbor")
+		ERROR("--two-layer-gate-site-mode=double is obsolete; release gate supports 'neighbor' only.");
 	if (HasOpt(opts, "two-layer-gate-site-mode") && !two_layer_gate)
 		ERROR("--two-layer-gate-site-mode requires --two-layer-gate.");
 	if (two_layer_gate_edge_l1 && two_layer_gate_site_mode != "neighbor")
@@ -908,11 +903,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 
 		ofs << "two_layer_gate_enabled = true\n";
 		ofs << "two_layer_gate_mode = " << two_layer_gate_mode << "\n";
-		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
-		ofs << "two_layer_gate_include_one_body = false\n";
-		ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
-		ofs << "two_layer_gate_tanh_amplitude = "
-		    << two_layer_gate_tanh_amplitude << "\n";
+			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
+			ofs << "two_layer_gate_include_one_body = false\n";
+			ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
+			ofs << "two_layer_gate_scale_mode = additive-node\n";
 		if (two_layer_gate_shared_radial) {
 			const int gate_radial_count = kmax * (lmax + 1) * rb_size;
 			ofs << "two_layer_gate_radial_mode = shared-radial\n";
@@ -924,11 +918,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << 1.0e-2;
 			}
 			ofs << "}\n";
-		}
-		const int radial_func_count = kmax * (lmax + 1);
-		const int gate_additive_count = species_count;
-		ofs << "two_layer_gate_additive_coeff_count = "
-		    << gate_additive_count << "\n";
+			}
+			const int radial_func_count = kmax * (lmax + 1);
+			const int gate_additive_count = species_count * radial_func_count;
+			ofs << "two_layer_gate_additive_coeff_count = "
+			    << gate_additive_count << "\n";
 		ofs << "two_layer_gate_additive_coeffs = {";
 		for (int i = 0; i < gate_additive_count; ++i) {
 			if (i != 0)

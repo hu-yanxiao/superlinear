@@ -56,7 +56,7 @@ if ./bin/mlp-sus2 init-sh "$tmp_dir/reject_double.mtp" \
   echo "edge L1 gate should reject double site mode in the first version" >&2
   exit 1
 fi
-grep -qi "edge.*l1" "$reject_log"
+grep -q "double is obsolete" "$reject_log"
 
 ./bin/mlp-sus2 init-sh "$legacy_model" \
   --species-count=2 \
