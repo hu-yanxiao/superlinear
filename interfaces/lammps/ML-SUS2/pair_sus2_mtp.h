@@ -382,6 +382,11 @@ class PairSUS2MTP : public Pair {
                                   const double * = nullptr,
                                   const double * = nullptr,
                                   const double * = nullptr);
+  void dot_gate_scaled_sh_basic_edge_adjoint(int, int, int, const double *,
+                                             double, int, int, double,
+                                             const double *, const double *,
+                                             double &, double &, double &,
+                                             double *, bool = false);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;
   void configure_static_fixed_types();
