@@ -81,6 +81,8 @@ make ml_sus2_avx512_skx -j 16
 
 The Intel make targets expect Intel MPI and oneAPI MKL variables such as
 `MKLROOT` to be available.
+For branch benchmarking, `make ml_sus2_avx2_noipo -j 16` is also provided as a
+faster exact CPU build target.
 
 ## GPU / Kokkos Build
 
@@ -163,6 +165,7 @@ Other radial basis names are parsed by the CPU side when implemented in the
 SUS2 interface sources, but only the `_lmp` variants above use the
 preinterpolation table.
 
-CPU `pair_style sus2mtp` supports SUS2-SH `two_layer_gate_edge_l1` models.
-Kokkos pair styles currently reject those models with an explicit unsupported
-error.
+CPU `pair_style sus2mtp` supports release additive-node two-layer-gate models,
+including `two_layer_gate_edge_l1` / full-L1 metadata. Kokkos pair styles
+currently reject any SUS2-SH two-layer-gate model with an explicit unsupported
+error; no-gate SUS2-SH models remain supported by the existing Kokkos path.

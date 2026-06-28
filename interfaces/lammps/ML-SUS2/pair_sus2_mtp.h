@@ -199,6 +199,7 @@ class PairSUS2MTP : public Pair {
   std::vector<double> two_layer_gate_body_mix_weights;
   std::vector<double> two_layer_gate_radial_coeffs;
   std::vector<double> two_layer_gate_additive_coeffs;
+  std::vector<double> two_layer_gate_type_coeffs;
   std::vector<double> two_layer_gate_additive_ratios;
   std::vector<unsigned char> two_layer_gate_additive_ratio_valid;
   bool two_layer_gate_edge_l1_enabled = false;
@@ -343,8 +344,10 @@ class PairSUS2MTP : public Pair {
 	  void backprop_two_layer_gate_products(const double *);
 	  void backprop_two_layer_gate_products_compact(const double *);
 	  int gate_body_order_for_mu(int) const;
-  void prepare_two_layer_gate_additive_ratios();
-  void compute_two_layer_gate_sh(int, int);
+	  void prepare_two_layer_gate_additive_ratios();
+  double outer_type_coeff(int) const;
+  double two_layer_gate_type_coeff(int) const;
+	  void compute_two_layer_gate_sh(int, int);
   void compute_zbl(int, int);
   void accumulate_zbl_pair(int, int, int, int, const double *, double,
                            int, int);
@@ -368,7 +371,7 @@ class PairSUS2MTP : public Pair {
                                 bool = false, bool = false,
                                 double * = nullptr, double * = nullptr,
                                 double * = nullptr, double * = nullptr,
-                                double * = nullptr);
+                                double * = nullptr, bool = false);
   void accumulate_sh_basic_edge_gate_required(const double *, double,
                                               double * = nullptr,
                                               double * = nullptr);

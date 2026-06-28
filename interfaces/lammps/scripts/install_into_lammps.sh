@@ -24,8 +24,7 @@ cp "$PKG_ROOT"/ML-SUS2/*.cpp "$PKG_ROOT"/ML-SUS2/*.h "$LAMMPS_SRC/"
 cp "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.cpp \
    "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.h \
    "$LAMMPS_SRC/KOKKOS/"
-cp "$PKG_ROOT"/MAKE/OPTIONS/Makefile.ml_sus2_avx2 \
-   "$PKG_ROOT"/MAKE/OPTIONS/Makefile.ml_sus2_avx512_skx \
+cp "$PKG_ROOT"/MAKE/OPTIONS/Makefile.ml_sus2_* \
    "$LAMMPS_SRC/MAKE/OPTIONS/"
 
 CMAKE_LIST="$LAMMPS_ROOT/cmake/CMakeLists.txt"

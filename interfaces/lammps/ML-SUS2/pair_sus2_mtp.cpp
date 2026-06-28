@@ -92,11 +92,18 @@ bool should_use_gate_required_basic_subset(int required_basic_count,
                                         "SUS2_SH_GATE_REQUIRED_BASIC");
   if (override >= 0) return override != 0;
 
-  if (required_basics_are_y00 && !center_gate_enabled &&
-      !cache_body_signal_derivs && sh_basic_mu_fast)
+  const bool can_use_dependency_subset =
+      !center_gate_enabled && !cache_body_signal_derivs;
+  if (required_basics_are_y00 && can_use_dependency_subset)
     return true;
 
-  return body_linear_combo && !center_gate_enabled && !cache_body_signal_derivs &&
+  // Full scalar gates already carry an exact dependency closure from the gate
+  // scalar moments back to the basic moments, so the first-layer SH pass can
+  // populate only that subset instead of all alpha_index_basic_count entries.
+  if (!body_linear_combo && can_use_dependency_subset && gate_signal_stride > 0)
+    return true;
+
+  return body_linear_combo && can_use_dependency_subset &&
          sh_basic_mu_fast && gate_body_stride > 0 && gate_body_stride <= 4 &&
          gate_signal_stride == gate_body_stride &&
          alpha_index_basic_count - required_basic_count >=
@@ -120,11 +127,15 @@ bool should_use_gate_required_dot(int required_basic_count,
                                         "SUS2_SH_GATE_REQUIRED_DOT");
   if (override >= 0) return override != 0;
 
-  if (required_basics_are_y00 && !center_gate_enabled &&
-      !cache_body_signal_derivs && sh_basic_mu_fast)
+  const bool can_use_dependency_subset =
+      !center_gate_enabled && !cache_body_signal_derivs;
+  if (required_basics_are_y00 && can_use_dependency_subset)
     return true;
 
-  return body_linear_combo && !center_gate_enabled && !cache_body_signal_derivs &&
+  if (!body_linear_combo && can_use_dependency_subset && gate_signal_stride > 0)
+    return true;
+
+  return body_linear_combo && can_use_dependency_subset &&
          sh_basic_mu_fast && gate_body_stride > 0 && gate_body_stride <= 4 &&
          gate_signal_stride == gate_body_stride &&
          required_basic_count * 2 <= alpha_index_basic_count;
@@ -493,8 +504,7 @@ void fill_body_combo_gate_table_radials_fixed(
     const double *base_der_row,
     const double *base_der_next_row,
     const double ddr,
-    const double additive_coeff,
-    const double tanh_amplitude,
+    const double *additive_ratio_by_mu,
     const double *body_mix_weights,
     const double *gate_signal_by_mu,
     double *residual_radial_vals,
@@ -512,11 +522,9 @@ void fill_body_combo_gate_table_radials_fixed(
     const double gate_signal = dot_fixed_stride<BodyStride>(
         body_mix_weights + static_cast<size_t>(mu) * BodyStride,
         gate_signal_by_mu);
-    const double arg = additive_coeff * gate_signal;
-    const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-    const double sech2 = 1.0 - tanh_arg * tanh_arg;
-    const double gate_multiplier = 1.0 + tanh_amplitude * tanh_arg;
-    const double gate_deriv = tanh_amplitude * additive_coeff * sech2;
+    const double additive_ratio = additive_ratio_by_mu[mu];
+    const double gate_multiplier = 1.0 + additive_ratio * gate_signal;
+    const double gate_deriv = additive_ratio;
     if (FillCache) {
       gate_multiplier_cache[mu] = gate_multiplier;
       gate_deriv_cache[mu] = gate_deriv;
@@ -536,8 +544,7 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     const double *base_der_row,
     const double *base_der_next_row,
     const double ddr,
-    const double additive_coeff,
-    const double tanh_amplitude,
+    const double *additive_ratio_by_mu,
     const double *body_mix_weights,
     const double *gate_signal_by_mu,
     double *residual_radial_vals,
@@ -551,14 +558,14 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     if (fill_cache)
       fill_body_combo_gate_table_radials_fixed<1, true>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
     else
       fill_body_combo_gate_table_radials_fixed<1, false>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
@@ -567,14 +574,14 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     if (fill_cache)
       fill_body_combo_gate_table_radials_fixed<2, true>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
     else
       fill_body_combo_gate_table_radials_fixed<2, false>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
@@ -583,14 +590,14 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     if (fill_cache)
       fill_body_combo_gate_table_radials_fixed<3, true>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
     else
       fill_body_combo_gate_table_radials_fixed<3, false>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
@@ -599,14 +606,14 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     if (fill_cache)
       fill_body_combo_gate_table_radials_fixed<4, true>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
     else
       fill_body_combo_gate_table_radials_fixed<4, false>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
@@ -615,14 +622,14 @@ inline bool fill_body_combo_gate_table_radials_specialized(
     if (fill_cache)
       fill_body_combo_gate_table_radials_fixed<5, true>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
     else
       fill_body_combo_gate_table_radials_fixed<5, false>(
           radial_func_count, base_row, base_next_row, base_der_row,
-          base_der_next_row, ddr, additive_coeff, tanh_amplitude,
+          base_der_next_row, ddr, additive_ratio_by_mu,
           body_mix_weights, gate_signal_by_mu, residual_radial_vals,
           radial_values, radial_derivatives, gate_multiplier_cache,
           gate_deriv_cache);
@@ -642,8 +649,7 @@ void fill_full_grouped_gate_table_radials_fast(
     const double *base_der_row,
     const double *base_der_next_row,
     const double ddr,
-    const double additive_coeff,
-    const double tanh_amplitude,
+    const double *additive_ratio_by_mu,
     const double *gate_signal_by_group,
     double *residual_radial_vals,
     double *radial_values,
@@ -651,25 +657,18 @@ void fill_full_grouped_gate_table_radials_fast(
     double *gate_multiplier_cache,
     double *gate_deriv_cache)
 {
-  double group_multiplier[kMaxGateSignalGroupFast];
-  double group_deriv[kMaxGateSignalGroupFast];
-  for (int g = 0; g < gate_signal_count; g++) {
-    const double arg = additive_coeff * gate_signal_by_group[g];
-    const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-    const double sech2 = 1.0 - tanh_arg * tanh_arg;
-    group_multiplier[g] = 1.0 + tanh_amplitude * tanh_arg;
-    group_deriv[g] = tanh_amplitude * additive_coeff * sech2;
-  }
-
-  #pragma omp simd
+#pragma omp simd
   for (int mu = 0; mu < radial_func_count; mu++) {
     const double base_val =
         base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
     const double base_der =
         base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
     const int group = full_signal_group_for_mu[mu];
-    const double gate_multiplier = group_multiplier[group];
-    const double gate_deriv = group_deriv[group];
+    const double additive_ratio = additive_ratio_by_mu[mu];
+    const double gate_signal =
+        (group >= 0 && group < gate_signal_count) ? gate_signal_by_group[group] : 0.0;
+    const double gate_multiplier = 1.0 + additive_ratio * gate_signal;
+    const double gate_deriv = additive_ratio;
     if (FillCache) {
       gate_multiplier_cache[mu] = gate_multiplier;
       gate_deriv_cache[mu] = gate_deriv;
@@ -2524,19 +2523,19 @@ void PairSUS2MTP::ensure_two_layer_gate_mu_cache_for_atom(int jtype,
       !two_layer_gate_additive_ratio_valid[jtype])
     error->one(FLERR, "SUS2-SH static fixed gate main cache requires additive gate ratios.");
 
-  const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
+  const double *additive_ratio_by_mu =
+      two_layer_gate_additive_ratios.data() +
+      static_cast<size_t>(jtype) * radial_func_count;
   double *__restrict mult = two_layer_gate_multiplier_mu_cache +
       static_cast<size_t>(atom_index) * radial_func_count;
   double *__restrict deriv = two_layer_gate_deriv_mu_cache +
       static_cast<size_t>(atom_index) * radial_func_count;
-  #pragma omp simd
+#pragma omp simd
   for (int mu = 0; mu < radial_func_count; mu++) {
     const double gate_signal = two_layer_gate_mu_signal(gate_signal_by_mu, mu);
-    const double arg = additive_coeff * gate_signal;
-    const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-    const double sech2 = 1.0 - tanh_arg * tanh_arg;
-    mult[mu] = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-    deriv[mu] = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+    const double additive_ratio = additive_ratio_by_mu[mu];
+    mult[mu] = 1.0 + additive_ratio * gate_signal;
+    deriv[mu] = additive_ratio;
   }
   two_layer_gate_mu_cache_valid[atom_index] = 1;
 }
@@ -2670,6 +2669,9 @@ int PairSUS2MTP::two_layer_gate_additive_coeff_index(int type_outer, int mu) con
 {
   if (mu < 0 || mu >= radial_func_count)
     error->one(FLERR, "SUS2-SH two-layer gate additive mu index is out of range.");
+  const int per_mu_count = species_count * radial_func_count;
+  if (static_cast<int>(two_layer_gate_additive_coeffs.size()) == per_mu_count)
+    return type_outer * radial_func_count + mu;
   return type_outer;
 }
 
@@ -2686,20 +2688,47 @@ void PairSUS2MTP::prepare_two_layer_gate_additive_ratios()
   two_layer_gate_additive_ratios.clear();
   two_layer_gate_additive_ratio_valid.clear();
   if (!two_layer_gate_enabled) return;
-  if (static_cast<int>(two_layer_gate_additive_coeffs.size()) !=
-      species_count)
+  const int additive_count = static_cast<int>(two_layer_gate_additive_coeffs.size());
+  if (additive_count != species_count &&
+      additive_count != species_count * radial_func_count)
     return;
 
   two_layer_gate_additive_ratios.assign(
       static_cast<size_t>(species_count) * radial_func_count, 0.0);
   two_layer_gate_additive_ratio_valid.assign(species_count, 0);
   for (int jtype = 0; jtype < species_count; jtype++) {
+    const double out_coeff = outer_type_coeff(jtype);
+    bool has_nonzero_additive = false;
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      if (two_layer_gate_additive_coeff(jtype, mu) != 0.0) {
+        has_nonzero_additive = true;
+        break;
+      }
+    }
+    if (std::abs(out_coeff) < 1.0e-300 && has_nonzero_additive)
+      error->one(FLERR, "SUS2-SH additive-node gate requires nonzero outer type coefficient.");
     two_layer_gate_additive_ratio_valid[jtype] = 1;
     const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
     for (int mu = 0; mu < radial_func_count; mu++)
       two_layer_gate_additive_ratios[ratio_offset + mu] =
-          two_layer_gate_additive_coeffs[jtype];
+          out_coeff == 0.0 ? 0.0 : two_layer_gate_additive_coeff(jtype, mu) / out_coeff;
   }
+}
+
+double PairSUS2MTP::outer_type_coeff(int type) const
+{
+  if (type < 0 || type >= species_count)
+    error->one(FLERR, "SUS2-SH outer type coefficient index is out of range.");
+  return regression_coeffs[radial_coeffs_offset + radial_basis_size + type];
+}
+
+double PairSUS2MTP::two_layer_gate_type_coeff(int type) const
+{
+  if (type < 0 || type >= species_count)
+    error->one(FLERR, "SUS2-SH gate type coefficient index is out of range.");
+  if (static_cast<int>(two_layer_gate_type_coeffs.size()) == species_count)
+    return two_layer_gate_type_coeffs[type];
+  return outer_type_coeff(type);
 }
 
 void PairSUS2MTP::ensure_two_layer_atom_buffers()
@@ -2811,11 +2840,12 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
       jtype >= static_cast<int>(two_layer_gate_additive_ratio_valid.size()) ||
       !two_layer_gate_additive_ratio_valid[jtype])
     return false;
-  if (static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
-    error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
   if (static_cast<int>(two_layer_gate_additive_ratios.size()) !=
       species_count * radial_func_count)
-    error->one(FLERR, "SUS2-SH two-layer gate additive ratio storage is inconsistent.");
+    error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
+  const double *__restrict additive_ratio_by_mu =
+      two_layer_gate_additive_ratios.data() +
+      static_cast<size_t>(jtype) * radial_func_count;
 
   const bool use_gate_mu_cache =
       gate_atom_index >= 0 &&
@@ -2841,7 +2871,6 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
   const double *__restrict base_next_row = radial_list[table_index][r_next];
   const double *__restrict base_der_row = radial_der_list[table_index][r_list];
   const double *__restrict base_der_next_row = radial_der_list[table_index][r_next];
-  const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
   const bool full_identity_gate_signal =
       !two_layer_gate_body_linear_combo && two_layer_gate_full_identity_signal;
   const int body_gate_signal_stride =
@@ -2866,35 +2895,35 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
       static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()) ==
           radial_func_count;
 
-  if (full_grouped_gate_signal &&
-      (gate_multiplier_cache == nullptr || fill_gate_mu_cache)) {
-    if (fill_gate_mu_cache) {
-      fill_full_grouped_gate_table_radials_fast<true>(
+	  if (full_grouped_gate_signal &&
+	      (gate_multiplier_cache == nullptr || fill_gate_mu_cache)) {
+	    if (fill_gate_mu_cache) {
+	      fill_full_grouped_gate_table_radials_fast<true>(
           radial_func_count, full_group_signal_count,
           two_layer_gate_full_signal_group_for_mu.data(), base_row,
           base_next_row, base_der_row, base_der_next_row, ddr,
-          additive_coeff, two_layer_gate_tanh_amplitude, gate_signal_by_mu,
+          additive_ratio_by_mu, gate_signal_by_mu,
           two_layer_gate_residual_radial_vals, radial_vals, radial_ders,
           gate_multiplier_cache, gate_deriv_cache);
-      two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
-    } else {
-      fill_full_grouped_gate_table_radials_fast<false>(
+	      two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
+	    } else {
+	      fill_full_grouped_gate_table_radials_fast<false>(
           radial_func_count, full_group_signal_count,
           two_layer_gate_full_signal_group_for_mu.data(), base_row,
           base_next_row, base_der_row, base_der_next_row, ddr,
-          additive_coeff, two_layer_gate_tanh_amplitude, gate_signal_by_mu,
+          additive_ratio_by_mu, gate_signal_by_mu,
           two_layer_gate_residual_radial_vals, radial_vals, radial_ders,
           gate_multiplier_cache, gate_deriv_cache);
-    }
-    return true;
-  }
+	    }
+	    return true;
+	  }
 
-  if (body_small_gate_signal &&
-      (gate_multiplier_cache == nullptr || fill_gate_mu_cache) &&
-      fill_body_combo_gate_table_radials_specialized(
+	  if (body_small_gate_signal &&
+	      (gate_multiplier_cache == nullptr || fill_gate_mu_cache) &&
+	      fill_body_combo_gate_table_radials_specialized(
           body_gate_signal_stride, fill_gate_mu_cache, radial_func_count,
           base_row, base_next_row, base_der_row, base_der_next_row, ddr,
-          additive_coeff, two_layer_gate_tanh_amplitude, body_mix_weights,
+          additive_ratio_by_mu, body_mix_weights,
           gate_signal_by_mu, two_layer_gate_residual_radial_vals,
           radial_vals, radial_ders, gate_multiplier_cache, gate_deriv_cache)) {
     if (fill_gate_mu_cache)
@@ -2917,13 +2946,9 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
                        static_cast<size_t>(mu) * body_gate_signal_stride,
                    gate_signal_by_mu, body_gate_signal_stride)
              : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-      const double arg = additive_coeff * gate_signal;
-      const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-      const double sech2 = 1.0 - tanh_arg * tanh_arg;
-      const double gate_multiplier =
-          1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-      const double gate_deriv =
-          two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+      const double additive_ratio = additive_ratio_by_mu[mu];
+      const double gate_multiplier = 1.0 + additive_ratio * gate_signal;
+      const double gate_deriv = additive_ratio;
       two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
       radial_vals[mu] = base_val * gate_multiplier;
       radial_ders[mu] = base_der * gate_multiplier;
@@ -2943,13 +2968,9 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
                        static_cast<size_t>(mu) * body_gate_signal_stride,
                    gate_signal_by_mu, body_gate_signal_stride)
              : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-      const double arg = additive_coeff * gate_signal;
-      const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-      const double sech2 = 1.0 - tanh_arg * tanh_arg;
-      const double gate_multiplier =
-          1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-      const double gate_deriv =
-          two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+      const double additive_ratio = additive_ratio_by_mu[mu];
+      const double gate_multiplier = 1.0 + additive_ratio * gate_signal;
+      const double gate_deriv = additive_ratio;
       gate_multiplier_cache[mu] = gate_multiplier;
       gate_deriv_cache[mu] = gate_deriv;
       two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
@@ -3019,17 +3040,17 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
         if (jtype >= 0 &&
             jtype < static_cast<int>(two_layer_gate_additive_ratio_valid.size()) &&
             two_layer_gate_additive_ratio_valid[jtype]) {
-          if (static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
-            error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
           if (static_cast<int>(two_layer_gate_additive_ratios.size()) !=
               species_count * radial_func_count)
             error->one(FLERR, "SUS2-SH two-layer gate additive ratio storage is inconsistent.");
+          const double *__restrict additive_ratio_by_mu =
+              two_layer_gate_additive_ratios.data() +
+              static_cast<size_t>(jtype) * radial_func_count;
           const int r_next = r_list + 1;
           double *base_row = radial_list[table_index][r_list];
           double *base_next_row = radial_list[table_index][r_next];
           double *base_der_row = radial_der_list[table_index][r_list];
           double *base_der_next_row = radial_der_list[table_index][r_next];
-          const double additive_coeff = two_layer_gate_additive_coeffs[jtype];
           const bool table_full_identity_gate_signal =
               gate_signal_is_full_mu ||
               (!two_layer_gate_body_linear_combo && two_layer_gate_full_identity_signal);
@@ -3063,8 +3084,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                   radial_func_count, table_full_group_signal_count,
                   two_layer_gate_full_signal_group_for_mu.data(), base_row,
                   base_next_row, base_der_row, base_der_next_row, ddr,
-                  additive_coeff, two_layer_gate_tanh_amplitude,
-                  gate_signal_by_mu, two_layer_gate_residual_radial_vals,
+                  additive_ratio_by_mu, gate_signal_by_mu,
+                  two_layer_gate_residual_radial_vals,
                   radial_vals, radial_ders, gate_multiplier_cache,
                   gate_deriv_cache);
               two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
@@ -3073,8 +3094,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                   radial_func_count, table_full_group_signal_count,
                   two_layer_gate_full_signal_group_for_mu.data(), base_row,
                   base_next_row, base_der_row, base_der_next_row, ddr,
-                  additive_coeff, two_layer_gate_tanh_amplitude,
-                  gate_signal_by_mu, two_layer_gate_residual_radial_vals,
+                  additive_ratio_by_mu, gate_signal_by_mu,
+                  two_layer_gate_residual_radial_vals,
                   radial_vals, radial_ders, gate_multiplier_cache,
                   gate_deriv_cache);
             }
@@ -3086,93 +3107,85 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                          table_body_gate_signal_stride, fill_gate_mu_cache,
                          radial_func_count, base_row, base_next_row,
                          base_der_row, base_der_next_row, ddr,
-                         additive_coeff, two_layer_gate_tanh_amplitude,
-                         table_body_mix_weights, gate_signal_by_mu,
+                         additive_ratio_by_mu, table_body_mix_weights,
+                         gate_signal_by_mu,
                          two_layer_gate_residual_radial_vals, radial_vals,
-	                         radial_ders, gate_multiplier_cache,
-	                         gate_deriv_cache)) {
-	            if (fill_gate_mu_cache)
-	              two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
-	            used_precomputed_table = true;
-	          } else if (table_full_identity_gate_signal &&
-	                     gate_multiplier_cache == nullptr) {
-	            #pragma omp simd
-	            for (int mu = 0; mu < radial_func_count; mu++) {
-	              const double base_val =
-	                  base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
-	              const double base_der =
-	                  base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
-	              const double arg = additive_coeff * gate_signal_by_mu[mu];
-	              const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-	              const double sech2 = 1.0 - tanh_arg * tanh_arg;
-	              const double gate_multiplier =
-	                  1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-	              const double gate_deriv =
-	                  two_layer_gate_tanh_amplitude * additive_coeff * sech2;
-	              two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
-	              radial_vals[mu] = base_val * gate_multiplier;
-	              radial_ders[mu] = base_der * gate_multiplier;
-	            }
-	            used_precomputed_table = true;
-	          } else {
-		          for (int mu = 0; mu < radial_func_count; mu++) {
-	            const double base_val =
-	                base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
-            const double base_der =
-                base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
-            double gate_multiplier;
-            double gate_deriv;
-            if (gate_multiplier_cache == nullptr) {
-              const double gate_signal = table_full_identity_gate_signal
-                  ? gate_signal_by_mu[mu]
-                  : (table_body_small_gate_signal
-                     ? dot_small_stride(
-                           table_body_mix_weights +
-                               static_cast<size_t>(mu) *
-                                   table_body_gate_signal_stride,
-                           gate_signal_by_mu, table_body_gate_signal_stride)
-                     : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-              const double arg = additive_coeff * gate_signal;
-              const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-              const double sech2 = 1.0 - tanh_arg * tanh_arg;
-              gate_multiplier = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-              gate_deriv = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
-            } else if (fill_gate_mu_cache) {
-              const double gate_signal = table_full_identity_gate_signal
-                  ? gate_signal_by_mu[mu]
-                  : (table_body_small_gate_signal
-                     ? dot_small_stride(
-                           table_body_mix_weights +
-                               static_cast<size_t>(mu) *
-                                   table_body_gate_signal_stride,
-                           gate_signal_by_mu, table_body_gate_signal_stride)
-                     : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-              const double arg = additive_coeff * gate_signal;
-              const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-              const double sech2 = 1.0 - tanh_arg * tanh_arg;
-              gate_multiplier =
-                  1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-              gate_deriv =
-                  two_layer_gate_tanh_amplitude * additive_coeff * sech2;
-              gate_multiplier_cache[mu] = gate_multiplier;
-              gate_deriv_cache[mu] = gate_deriv;
-            } else {
-              gate_multiplier = gate_multiplier_cache[mu];
-              gate_deriv = gate_deriv_cache[mu];
+                         radial_ders, gate_multiplier_cache,
+                         gate_deriv_cache)) {
+            if (fill_gate_mu_cache)
+              two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
+            used_precomputed_table = true;
+          } else if (table_full_identity_gate_signal &&
+                     gate_multiplier_cache == nullptr) {
+#pragma omp simd
+            for (int mu = 0; mu < radial_func_count; mu++) {
+              const double base_val =
+                  base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+              const double base_der =
+                  base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+              const double additive_ratio = additive_ratio_by_mu[mu];
+              const double gate_multiplier =
+                  1.0 + additive_ratio * gate_signal_by_mu[mu];
+              const double gate_deriv = additive_ratio;
+              two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
+              radial_vals[mu] = base_val * gate_multiplier;
+              radial_ders[mu] = base_der * gate_multiplier;
             }
-	            two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
-	            radial_vals[mu] = base_val * gate_multiplier;
-	            radial_ders[mu] = base_der * gate_multiplier;
-	          }
-	          if (fill_gate_mu_cache)
-	            two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
-	          used_precomputed_table = true;
-	          }
-	        }
+            used_precomputed_table = true;
+          } else {
+            for (int mu = 0; mu < radial_func_count; mu++) {
+              const double base_val =
+                  base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+              const double base_der =
+                  base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+              double gate_multiplier;
+              double gate_deriv;
+              if (gate_multiplier_cache == nullptr) {
+                const double gate_signal = table_full_identity_gate_signal
+                    ? gate_signal_by_mu[mu]
+                    : (table_body_small_gate_signal
+                       ? dot_small_stride(
+                             table_body_mix_weights +
+                                 static_cast<size_t>(mu) *
+                                     table_body_gate_signal_stride,
+                             gate_signal_by_mu, table_body_gate_signal_stride)
+                       : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
+                const double additive_ratio = additive_ratio_by_mu[mu];
+                gate_multiplier = 1.0 + additive_ratio * gate_signal;
+                gate_deriv = additive_ratio;
+              } else if (fill_gate_mu_cache) {
+                const double gate_signal = table_full_identity_gate_signal
+                    ? gate_signal_by_mu[mu]
+                    : (table_body_small_gate_signal
+                       ? dot_small_stride(
+                             table_body_mix_weights +
+                                 static_cast<size_t>(mu) *
+                                     table_body_gate_signal_stride,
+                             gate_signal_by_mu, table_body_gate_signal_stride)
+                       : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
+                const double additive_ratio = additive_ratio_by_mu[mu];
+                gate_multiplier = 1.0 + additive_ratio * gate_signal;
+                gate_deriv = additive_ratio;
+                gate_multiplier_cache[mu] = gate_multiplier;
+                gate_deriv_cache[mu] = gate_deriv;
+              } else {
+                gate_multiplier = gate_multiplier_cache[mu];
+                gate_deriv = gate_deriv_cache[mu];
+              }
+              two_layer_gate_residual_radial_vals[mu] = base_val * gate_deriv;
+              radial_vals[mu] = base_val * gate_multiplier;
+              radial_ders[mu] = base_der * gate_multiplier;
+            }
+            if (fill_gate_mu_cache)
+              two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
+            used_precomputed_table = true;
+          }
+        }
         // two_layer_gate_additive_table_fallback: if the exact main-table
         // ratio is unavailable, leave the table path and use the analytic
         // additive calculation below.
-      } else if (!use_gate_additive) {
+      } else if (!use_gate_additive &&
+                 (!use_gate_radial || two_layer_gate_shared_radial)) {
         double ***value_table =
             (use_gate_radial && two_layer_gate_radial_list) ? two_layer_gate_radial_list : radial_list;
         double ***der_table =
@@ -3223,17 +3236,23 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     }
   }
 
-  const double center_type_coeff = regression_coeffs[radial_coeffs_offset + R + itype];
-  const double outer_type_coeff = regression_coeffs[radial_coeffs_offset + R + jtype];
-  const double species_factor = center_type_coeff * outer_type_coeff;
+  const double center_type_coeff =
+      use_gate_radial ? two_layer_gate_type_coeff(itype) : outer_type_coeff(itype);
+  const double outer_type_coeff_value =
+      use_gate_radial ? two_layer_gate_type_coeff(jtype) : outer_type_coeff(jtype);
+  const double species_factor = center_type_coeff * outer_type_coeff_value;
   if (use_gate_radial && two_layer_gate_shared_radial &&
       static_cast<int>(two_layer_gate_radial_coeffs.size()) < radial_func_count * R)
     error->one(FLERR, "SUS2-SH two-layer gate radial coefficient storage is inconsistent.");
   if (use_gate_additive &&
-      static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
+      static_cast<int>(two_layer_gate_additive_ratios.size()) !=
+          species_count * radial_func_count)
     error->one(FLERR, "SUS2-SH two-layer gate additive coefficient storage is inconsistent.");
-  const double gate_additive_coeff =
-      use_gate_additive ? two_layer_gate_additive_coeffs[jtype] : 0.0;
+  const double *__restrict gate_additive_ratio_by_mu =
+      use_gate_additive
+          ? two_layer_gate_additive_ratios.data() +
+                static_cast<size_t>(jtype) * radial_func_count
+          : nullptr;
   const bool full_identity_gate_signal =
       use_gate_additive &&
       (gate_signal_is_full_mu ||
@@ -3265,7 +3284,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
       double gate_multiplier;
       double gate_deriv;
       if (gate_multiplier_cache == nullptr) {
-        const double additive_coeff = gate_additive_coeff;
+        const double additive_ratio = gate_additive_ratio_by_mu[mu];
         const double gate_signal = full_identity_gate_signal
             ? gate_signal_by_mu[mu]
             : (body_small_gate_signal
@@ -3274,13 +3293,10 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                          static_cast<size_t>(mu) * body_gate_signal_stride,
                      gate_signal_by_mu, body_gate_signal_stride)
                : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-        const double arg = additive_coeff * gate_signal;
-        const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-        const double sech2 = 1.0 - tanh_arg * tanh_arg;
-        gate_multiplier = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-        gate_deriv = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+        gate_multiplier = 1.0 + additive_ratio * gate_signal;
+        gate_deriv = additive_ratio;
       } else if (fill_gate_mu_cache) {
-        const double additive_coeff = gate_additive_coeff;
+        const double additive_ratio = gate_additive_ratio_by_mu[mu];
         const double gate_signal = full_identity_gate_signal
             ? gate_signal_by_mu[mu]
             : (body_small_gate_signal
@@ -3289,11 +3305,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
                          static_cast<size_t>(mu) * body_gate_signal_stride,
                      gate_signal_by_mu, body_gate_signal_stride)
                : two_layer_gate_mu_signal(gate_signal_by_mu, mu));
-        const double arg = additive_coeff * gate_signal;
-        const double tanh_arg = (arg == 0.0 ? 0.0 : std::tanh(arg));
-        const double sech2 = 1.0 - tanh_arg * tanh_arg;
-        gate_multiplier = 1.0 + two_layer_gate_tanh_amplitude * tanh_arg;
-        gate_deriv = two_layer_gate_tanh_amplitude * additive_coeff * sech2;
+        gate_multiplier = 1.0 + additive_ratio * gate_signal;
+        gate_deriv = additive_ratio;
         gate_multiplier_cache[mu] = gate_multiplier;
         gate_deriv_cache[mu] = gate_deriv;
       } else {
@@ -3343,7 +3356,8 @@ void PairSUS2MTP::accumulate_sh_basic_edge(int jj,
                                            double *direct_jac_y,
                                            double *direct_jac_z,
                                            double *cached_sh_values,
-                                           double *cached_sh_ders)
+                                           double *cached_sh_ders,
+                                           bool use_cached_sh_input)
 {
   const double inv_dist = 1.0 / dist;
   if (jj < 0) {
@@ -3383,16 +3397,24 @@ void PairSUS2MTP::accumulate_sh_basic_edge(int jj,
     return;
   }
 
-  double sh_values[kMaxSHComponents];
-  double sh_ders[3 * kMaxSHComponents];
-  eval_real_sh(r, inv_dist, sh_l_max, sh_values, sh_ders);
-  if (cached_sh_values != nullptr || cached_sh_ders != nullptr) {
+  double sh_values_storage[kMaxSHComponents];
+  double sh_ders_storage[3 * kMaxSHComponents];
+  const double *__restrict sh_values = cached_sh_values;
+  const double *__restrict sh_ders = cached_sh_ders;
+  if (!use_cached_sh_input || cached_sh_values == nullptr ||
+      cached_sh_ders == nullptr) {
+    eval_real_sh(r, inv_dist, sh_l_max, sh_values_storage, sh_ders_storage);
+    sh_values = sh_values_storage;
+    sh_ders = sh_ders_storage;
+  }
+  if (!use_cached_sh_input &&
+      (cached_sh_values != nullptr || cached_sh_ders != nullptr)) {
     const int sh_component_count = (sh_l_max + 1) * (sh_l_max + 1);
     if (cached_sh_values != nullptr)
-      std::memcpy(cached_sh_values, sh_values,
+      std::memcpy(cached_sh_values, sh_values_storage,
                   static_cast<size_t>(sh_component_count) * sizeof(double));
     if (cached_sh_ders != nullptr)
-      std::memcpy(cached_sh_ders, sh_ders,
+      std::memcpy(cached_sh_ders, sh_ders_storage,
                   static_cast<size_t>(3 * sh_component_count) * sizeof(double));
   }
 
@@ -4206,6 +4228,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool cache_gate_force_sh_derivs =
       recompute_gate_force_jacobians &&
       env_flag_enabled("SUS2_LAMMPS_GATE_SH_DERIV_CACHE");
+  const bool reuse_first_layer_sh_cache_for_main =
+      cache_gate_force_sh_derivs && !use_compact_gate_raw;
   const size_t radial_cache_capacity =
       cache_gate_force_radials
       ? edge_capacity * static_cast<size_t>(radial_func_count)
@@ -4487,7 +4511,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	          }
 	          gate_values_i[s] = value;
 	        }
-	      } else {
+      } else {
         std::fill(gate_body_values.begin(), gate_body_values.end(), 0.0);
         if (gate_scalars_basic_only) {
           for (int q : basic_gate_scalar_indices) {
@@ -4540,7 +4564,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
           for (int g = 0; g < gate_signal_stride; g++)
             gate_values_i[g] += scalar_value * weights_by_mu[g];
 	        }
-	      }
+      }
     }
     if (edge_l1_active)
       fill_two_layer_gate_edge_l1_weighted_values_for_atom(i,
@@ -4787,18 +4811,25 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
                     two_layer_gate_residual_radial_vals,
                     static_cast<size_t>(radial_func_count) * sizeof(double));
       }
-	      const int raw_offset = active_local * alpha_index_basic_count;
+      const int raw_offset = active_local * alpha_index_basic_count;
 	      const size_t main_sh_base =
 	          active_idx * static_cast<size_t>(sh_component_count);
+      const size_t gate_sh_base =
+          active_idx * static_cast<size_t>(sh_component_count);
 	      profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
 	      accumulate_sh_basic_edge(
 	          active_local, r, dist, 1.0, !use_compact_gate_raw, raw_offset,
 	          true, two_layer_gate_center_enabled,
           nullptr, nullptr, nullptr,
-          use_compact_gate_raw
-	          ? two_layer_gate_edge_main_sh_values_raw + main_sh_base
-	          : nullptr,
-	          nullptr);
+          reuse_first_layer_sh_cache_for_main
+              ? two_layer_gate_edge_sh_values_raw + gate_sh_base
+              : (use_compact_gate_raw
+                 ? two_layer_gate_edge_main_sh_values_raw + main_sh_base
+                 : nullptr),
+          reuse_first_layer_sh_cache_for_main
+              ? two_layer_gate_edge_sh_ders_raw + 3 * gate_sh_base
+              : nullptr,
+          reuse_first_layer_sh_cache_for_main);
 	      add_profile_time(profile_gate_v2,
 	                       profile_v2_times[kGateProfileV2MainSHBasic],
 	                       profile_v2_sub_start);
@@ -6427,8 +6458,9 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_full_scalar_cache.clear();
   two_layer_gate_full_scalar_adjoint_cache.clear();
 	  two_layer_gate_body_mix_weights.clear();
-  two_layer_gate_radial_coeffs.clear();
-  two_layer_gate_additive_coeffs.clear();
+	  two_layer_gate_radial_coeffs.clear();
+	  two_layer_gate_additive_coeffs.clear();
+	  two_layer_gate_type_coeffs.clear();
   zbl_enabled = false;
   zbl_inner = sus2_mtp_zbl::DefaultInnerCutoff();
   zbl_outer = sus2_mtp_zbl::DefaultOuterCutoff();
@@ -7435,7 +7467,11 @@ access to the buffer size that is not provided in PFR.
         keyword = first_keyword(post_scalar_line);
       }
       if (keyword == "two_layer_gate_scale_mode") {
-        error->one(FLERR, "SUS2-SH mu-body-order gate models do not use two_layer_gate_scale_mode.");
+        const std::string scale_mode = parse_string_assignment(post_scalar_line);
+        if (scale_mode != "additive-node")
+          error->one(FLERR, "LAMMPS SUS2-SH release gate supports only two_layer_gate_scale_mode=additive-node.");
+        post_scalar_line = std::string(tfr.next_line());
+        keyword = first_keyword(post_scalar_line);
       }
       if (keyword == "two_layer_gate_bias") {
         error->one(FLERR, "SUS2-SH mu-body-order gate models do not use two_layer_gate_bias.");
@@ -7478,8 +7514,9 @@ access to the buffer size that is not provided in PFR.
       }
       if (keyword == "two_layer_gate_additive_coeff_count") {
         const int additive_count = parse_int_assignment(post_scalar_line);
-        const int expected_additive_count = species_count;
-        if (additive_count != expected_additive_count)
+        const int expected_additive_count = species_count * radial_func_count;
+        if (additive_count != expected_additive_count &&
+            additive_count != species_count)
           error->one(FLERR, "SUS2-SH two-layer gate additive coefficient count is inconsistent.");
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "two_layer_gate_additive_coeffs")
@@ -7487,11 +7524,38 @@ access to the buffer size that is not provided in PFR.
         two_layer_gate_additive_coeffs = parse_double_list_line(post_scalar_line);
         if (static_cast<int>(two_layer_gate_additive_coeffs.size()) != additive_count)
           error->one(FLERR, "SUS2-SH two-layer gate additive coeff list has wrong size.");
+        if (additive_count == species_count) {
+          std::vector<double> expanded(
+              static_cast<size_t>(species_count) * radial_func_count, 0.0);
+          for (int type = 0; type < species_count; type++)
+            for (int mu = 0; mu < radial_func_count; mu++)
+              expanded[static_cast<size_t>(type) * radial_func_count + mu] =
+                  two_layer_gate_additive_coeffs[type];
+          two_layer_gate_additive_coeffs.swap(expanded);
+        }
+		post_scalar_line = std::string(tfr.next_line());
+		keyword = first_keyword(post_scalar_line);
+	      } else {
+	        two_layer_gate_additive_coeffs.assign(
+	            static_cast<size_t>(species_count) * radial_func_count, 1.0 / 12.0);
+	      }
+	      if (keyword == "two_layer_gate_type_coeff_count") {
+	        const int gate_type_count = parse_int_assignment(post_scalar_line);
+	        if (gate_type_count != species_count)
+          error->one(FLERR, "SUS2-SH two-layer gate type coefficient count is inconsistent.");
+        post_scalar_line = std::string(tfr.next_line());
+        if (first_keyword(post_scalar_line) != "two_layer_gate_type_coeffs")
+          error->one(FLERR, "SUS2-SH two-layer gate is missing type coeffs.");
+        two_layer_gate_type_coeffs = parse_double_list_line(post_scalar_line);
+        if (static_cast<int>(two_layer_gate_type_coeffs.size()) != gate_type_count)
+          error->one(FLERR, "SUS2-SH two-layer gate type coeff list has wrong size.");
         post_scalar_line = std::string(tfr.next_line());
         keyword = first_keyword(post_scalar_line);
       } else {
-        two_layer_gate_additive_coeffs.assign(species_count, 1.0 / 12.0);
-      }
+	        two_layer_gate_type_coeffs.assign(species_count, 1.0);
+	        for (int type = 0; type < species_count; type++)
+	          two_layer_gate_type_coeffs[type] = outer_type_coeff(type);
+	      }
       if (keyword != "two_layer_gate_weight_count")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_weight_count.");
       two_layer_gate_weight_count = parse_int_assignment(post_scalar_line);
@@ -7849,14 +7913,18 @@ access to the buffer size that is not provided in PFR.
       static_cast<int>(two_layer_gate_radial_coeffs.size());
   int two_layer_gate_additive_count =
       static_cast<int>(two_layer_gate_additive_coeffs.size());
+  int two_layer_gate_type_count =
+      static_cast<int>(two_layer_gate_type_coeffs.size());
   MPI_Bcast(&two_layer_gate_radial_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_additive_count, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_type_count, 1, MPI_INT, 0, world);
   if (comm->me != 0) {
     two_layer_gate_scalar_indices.resize(two_layer_gate_scalar_count);
     two_layer_gate_weights.resize(two_layer_gate_weight_count);
     two_layer_gate_body_mix_weights.resize(two_layer_gate_body_mix_weight_count);
     two_layer_gate_radial_coeffs.resize(two_layer_gate_radial_count);
     two_layer_gate_additive_coeffs.resize(two_layer_gate_additive_count);
+    two_layer_gate_type_coeffs.resize(two_layer_gate_type_count);
     two_layer_gate_edge_l1_source_moment_indices.resize(
         two_layer_gate_edge_l1_source_count);
     two_layer_gate_edge_l1_weights.resize(
@@ -7898,6 +7966,9 @@ access to the buffer size that is not provided in PFR.
         two_layer_gate_weight_count != expected_gate_weight_count ||
         two_layer_gate_body_mix_weight_count != expected_gate_body_mix_count)
       error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
+    if (two_layer_gate_additive_count != species_count * radial_func_count ||
+        two_layer_gate_type_count != species_count)
+      error->all(FLERR, "SUS2-SH release two-layer gate coefficient sizes are inconsistent.");
     two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
     std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
     for (int q = 0; q < two_layer_gate_scalar_count; q++) {
@@ -7942,6 +8013,9 @@ access to the buffer size that is not provided in PFR.
               MPI_DOUBLE, 0, world);
   if (two_layer_gate_additive_count > 0)
     MPI_Bcast(two_layer_gate_additive_coeffs.data(), two_layer_gate_additive_count,
+              MPI_DOUBLE, 0, world);
+  if (two_layer_gate_type_count > 0)
+    MPI_Bcast(two_layer_gate_type_coeffs.data(), two_layer_gate_type_count,
               MPI_DOUBLE, 0, world);
 
   // Broadcast scaling_map string
@@ -8323,8 +8397,7 @@ access to the buffer size that is not provided in PFR.
           const int table_index = pair_to_table_index[i * C + j];
           if (table_index < 0) continue;
           const double species_factor =
-              regression_coeffs[C + 2 * C * C * K_scaling + R + i] *
-              regression_coeffs[C + 2 * C * C * K_scaling + R + j];
+              two_layer_gate_type_coeff(i) * two_layer_gate_type_coeff(j);
           for (int n = 0; n < list_grid_size; n++) {
             const double dist = dr * n;
             for (int mu = 0; mu < radial_func_count; mu++) {
