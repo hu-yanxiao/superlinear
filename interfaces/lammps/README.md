@@ -167,5 +167,6 @@ preinterpolation table.
 
 CPU `pair_style sus2mtp` supports release additive-node two-layer-gate models,
 including `two_layer_gate_edge_l1` / full-L1 metadata. Kokkos pair styles
-currently reject any SUS2-SH two-layer-gate model with an explicit unsupported
-error; no-gate SUS2-SH models remain supported by the existing Kokkos path.
+support no-gate SUS2-SH models and plain release additive-node two-layer-gate
+models. Kokkos currently rejects `two_layer_gate_edge_l1` / full-L1 models with
+an explicit unsupported error.

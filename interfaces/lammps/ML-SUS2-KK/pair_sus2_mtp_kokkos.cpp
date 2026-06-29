@@ -519,8 +519,15 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
       base_narg, base_args);    // This also calls read_file which parses and loads the arrays in host
 
   if (two_layer_gate_enabled) {
-    error->all(FLERR,
-               "Pair sus2mtp/kk does not support SUS2-SH release two-layer gate or edge L1 models; use CPU pair_style sus2mtp.");
+    if (two_layer_gate_edge_l1_enabled)
+      error->all(FLERR,
+                 "Pair sus2mtp/kk supports release two-layer gate models but not edge-L1/full-L1 models yet; use CPU pair_style sus2mtp.");
+    if (two_layer_gate_center_enabled)
+      error->all(FLERR,
+                 "Pair sus2mtp/kk does not support center two-layer gate models; use CPU pair_style sus2mtp.");
+    if (two_layer_residual_enabled)
+      error->all(FLERR,
+                 "Pair sus2mtp/kk does not support residual two-layer models; use CPU pair_style sus2mtp.");
   }
 
   // Store SUS2-MLIP parameters from base class (CPU version already calculated these)
@@ -665,7 +672,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	                          std::max(1, two_layer_gate_scalar_count));
 	    MemKK::realloc_kokkos(d_two_layer_gate_additive_coeffs,
 	                          "sus2mtp/kk:two_layer_gate_additive_coeffs",
-	                          std::max(1, species_count));
+	                          std::max(1, species_count * radial_func_count));
 	  }
 	  if (zbl_enabled) {
 	    const int zbl_pair_count = species_count * species_count;
@@ -863,10 +870,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	              two_layer_gate_full_weights_by_scalar[
 	                  static_cast<size_t>(q) * two_layer_gate_kk_signal_stride + s];
 	    }
-	    if (static_cast<int>(two_layer_gate_additive_coeffs.size()) != species_count)
-	      error->all(FLERR, "SUS2-SH Kokkos gate additive coefficient layout is inconsistent.");
-	    for (int idx = 0; idx < species_count; idx++)
-	      h_two_layer_gate_additive_coeffs(idx) = two_layer_gate_additive_coeffs[idx];
+	    if (static_cast<int>(two_layer_gate_additive_ratios.size()) !=
+	        species_count * radial_func_count)
+	      error->all(FLERR, "SUS2-SH Kokkos gate additive ratio layout is inconsistent.");
+	    for (int idx = 0; idx < species_count * radial_func_count; idx++)
+	      h_two_layer_gate_additive_coeffs(idx) = two_layer_gate_additive_ratios[idx];
 	  }
 	  if (zbl_enabled) {
 	    const int zbl_pair_count = species_count * species_count;
@@ -1095,8 +1103,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	        const int table_index = pair_to_table_index[shift];
 	        if (table_index < 0) continue;
 	        const double species_factor =
-	            regression_coeffs[C + 2 * C * C * K_scaling + R + i] *
-	            regression_coeffs[C + 2 * C * C * K_scaling + R + j];
+	            two_layer_gate_type_coeff(i) * two_layer_gate_type_coeff(j);
 	        for (int n = 0; n < list_grid_size; n++) {
 	          const double dist = dr * n;
 	          for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
@@ -1920,7 +1927,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      auto d_full_signal_group = d_two_layer_gate_full_signal_group_for_mu;
 	      auto d_mu_multipliers = d_two_layer_gate_mu_multipliers;
 		      auto d_mu_derivs = d_two_layer_gate_mu_derivs;
-		      const F_FLOAT tanh_amplitude = two_layer_gate_tanh_amplitude;
 		      profile_begin();
 		      Kokkos::parallel_for(
 	          "ComputeGateMuCache",
@@ -1942,17 +1948,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	              gate_signal =
 	                  d_gate_values(gate_offset + d_full_signal_group(mu));
 	            }
-	            const F_FLOAT additive_coeff = d_additive_coeffs(jtype);
-	            const F_FLOAT arg = additive_coeff * gate_signal;
-	            const F_FLOAT tanh_arg =
-	                (arg == static_cast<F_FLOAT>(0.0)) ? static_cast<F_FLOAT>(0.0)
-	                                                   : Kokkos::tanh(arg);
-	            const F_FLOAT sech2 =
-	                static_cast<F_FLOAT>(1.0) - tanh_arg * tanh_arg;
+	            const int additive_index = jtype * mu_count + mu;
+	            const F_FLOAT additive_ratio = d_additive_coeffs(additive_index);
 	            d_mu_multipliers(atom_index, mu) =
-	                static_cast<F_FLOAT>(1.0) + tanh_amplitude * tanh_arg;
+	                static_cast<F_FLOAT>(1.0) + additive_ratio * gate_signal;
 		            d_mu_derivs(atom_index, mu) =
-		                tanh_amplitude * additive_coeff * sech2;
+		                additive_ratio;
 		          });
 		      profile_end(prof_mu_cache);
 		    }
