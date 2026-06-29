@@ -194,6 +194,7 @@ class PairSUS2MTP : public Pair {
   bool two_layer_gate_full_identity_signal = false;
   std::vector<int> two_layer_gate_full_signal_group_for_mu;
   std::vector<double> two_layer_gate_full_weights_by_scalar;
+  std::vector<double> two_layer_gate_full_weights_by_signal;
   std::vector<double> two_layer_gate_full_scalar_cache;
   std::vector<double> two_layer_gate_full_scalar_adjoint_cache;
   std::vector<double> two_layer_gate_body_mix_weights;
@@ -224,6 +225,7 @@ class PairSUS2MTP : public Pair {
   double *two_layer_gate_edge_sh_ders_raw = nullptr;
   double *two_layer_gate_edge_main_sh_values_raw = nullptr;
   double *two_layer_gate_edge_residual_radial_vals_raw = nullptr;
+  double *two_layer_gate_edge_l1_signal_raw = nullptr;
   double *two_layer_gate_edge_deriv_x_raw = nullptr;
   double *two_layer_gate_edge_deriv_y_raw = nullptr;
   double *two_layer_gate_edge_deriv_z_raw = nullptr;
@@ -235,6 +237,7 @@ class PairSUS2MTP : public Pair {
   size_t two_layer_gate_edge_sh_capacity = 0;
   size_t two_layer_gate_edge_main_sh_capacity = 0;
   size_t two_layer_gate_edge_residual_radial_capacity = 0;
+  size_t two_layer_gate_edge_l1_signal_capacity = 0;
   size_t two_layer_gate_edge_deriv_capacity = 0;
   size_t two_layer_gate_edge_signal_deriv_capacity = 0;
   int alpha_moment_count, alpha_index_basic_count, alpha_index_times_count, alpha_scalar_count,
@@ -252,9 +255,13 @@ class PairSUS2MTP : public Pair {
   std::vector<int> sh_basic_mu_indices;  // Non-contiguous group index list
   std::vector<int> sh_basic_mu_adjoint_offsets;
   std::vector<int> sh_basic_mu_adjoint_indices;
+  std::vector<int> sh_basic_sh_adjoint_offsets;
+  std::vector<int> sh_basic_sh_adjoint_indices;
+  std::vector<int> sh_basic_sh_adjoint_mu_indices;
   bool sh_basic_mu_grouped = false;
   bool sh_basic_mu_indexed = false;
   bool sh_basic_mu_adjoint_indexed = false;
+  bool sh_basic_sh_adjoint_indexed = false;
   int *alpha_times_a0;          // Cached lhs moment index for each alpha-times entry
   int *alpha_times_a1;          // Cached rhs moment index for each alpha-times entry
   int *alpha_times_multiplier;  // Cached multiplier for each alpha-times entry
@@ -381,12 +388,16 @@ class PairSUS2MTP : public Pair {
                                   const double * = nullptr,
                                   const double * = nullptr,
                                   const double * = nullptr,
-                                  const double * = nullptr);
+                                  const double * = nullptr,
+                                  bool = false);
   void dot_gate_scaled_sh_basic_edge_adjoint(int, int, int, const double *,
                                              double, int, int, double,
                                              const double *, const double *,
                                              double &, double &, double &,
-                                             double *, bool = false);
+                                             double *, bool = false,
+                                             const double * = nullptr,
+                                             const double * = nullptr,
+                                             const double * = nullptr);
   bool is_static_fixed_type(int) const;
   bool static_fixed_cache_tag_matches(const tagint *, int) const;
   void configure_static_fixed_types();

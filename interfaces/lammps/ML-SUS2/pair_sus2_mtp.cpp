@@ -773,7 +773,7 @@ inline bool accumulate_full_gate_values_specialized(
     return true;
   default:
     return false;
-  }
+	  }
 }
 
 template <int Stride>
@@ -789,6 +789,119 @@ void accumulate_full_scalar_adjoints_fixed(const int scalar_count,
     const double adjoint = dot_fixed_stride<Stride>(gate_adjoint, weights);
     if (adjoint == 0.0) continue;
     moment_adjoints[scalar_moment_indices[q]] += adjoint;
+  }
+}
+
+template <int Stride, int Block>
+void accumulate_full_scalar_adjoints_signal_major_fixed(
+    const int scalar_count,
+    const double *gate_adjoint,
+    const double *full_weights_by_signal,
+    const int *scalar_moment_indices,
+    double *moment_adjoints)
+{
+  int q = 0;
+  for (; q + Block <= scalar_count; q += Block) {
+    double accum[Block] = {};
+    for (int g = 0; g < Stride; g++) {
+      const double adjoint_g = gate_adjoint[g];
+      const double *__restrict weights =
+          full_weights_by_signal + static_cast<size_t>(g) * scalar_count + q;
+      #pragma omp simd
+      for (int b = 0; b < Block; b++)
+        accum[b] += adjoint_g * weights[b];
+    }
+    for (int b = 0; b < Block; b++) {
+      if (accum[b] == 0.0) continue;
+      moment_adjoints[scalar_moment_indices[q + b]] += accum[b];
+    }
+  }
+  for (; q < scalar_count; q++) {
+    double adjoint = 0.0;
+    for (int g = 0; g < Stride; g++)
+      adjoint += gate_adjoint[g] *
+          full_weights_by_signal[static_cast<size_t>(g) * scalar_count + q];
+    if (adjoint == 0.0) continue;
+    moment_adjoints[scalar_moment_indices[q]] += adjoint;
+  }
+}
+
+inline bool accumulate_full_scalar_adjoints_signal_major_specialized(
+    const int stride,
+    const int scalar_count,
+    const double *gate_adjoint,
+    const double *full_weights_by_signal,
+    const int *scalar_moment_indices,
+    double *moment_adjoints)
+{
+  switch (stride) {
+  case 1:
+    accumulate_full_scalar_adjoints_signal_major_fixed<1, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 2:
+    accumulate_full_scalar_adjoints_signal_major_fixed<2, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 3:
+    accumulate_full_scalar_adjoints_signal_major_fixed<3, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 4:
+    accumulate_full_scalar_adjoints_signal_major_fixed<4, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 5:
+    accumulate_full_scalar_adjoints_signal_major_fixed<5, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 6:
+    accumulate_full_scalar_adjoints_signal_major_fixed<6, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 8:
+    accumulate_full_scalar_adjoints_signal_major_fixed<8, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 9:
+    accumulate_full_scalar_adjoints_signal_major_fixed<9, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 10:
+    accumulate_full_scalar_adjoints_signal_major_fixed<10, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 12:
+    accumulate_full_scalar_adjoints_signal_major_fixed<12, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 15:
+    accumulate_full_scalar_adjoints_signal_major_fixed<15, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 16:
+    accumulate_full_scalar_adjoints_signal_major_fixed<16, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  case 20:
+    accumulate_full_scalar_adjoints_signal_major_fixed<20, 8>(
+        scalar_count, gate_adjoint, full_weights_by_signal,
+        scalar_moment_indices, moment_adjoints);
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -1490,6 +1603,7 @@ PairSUS2MTP::~PairSUS2MTP()
     memory->destroy(two_layer_gate_edge_sh_ders_raw);
     memory->destroy(two_layer_gate_edge_main_sh_values_raw);
     memory->destroy(two_layer_gate_edge_residual_radial_vals_raw);
+    memory->destroy(two_layer_gate_edge_l1_signal_raw);
     memory->destroy(two_layer_gate_edge_deriv_x_raw);
     memory->destroy(two_layer_gate_edge_deriv_y_raw);
     memory->destroy(two_layer_gate_edge_deriv_z_raw);
@@ -1843,6 +1957,7 @@ void PairSUS2MTP::seed_two_layer_gate_edge_l1_moment_adjoints(
 void PairSUS2MTP::prepare_two_layer_gate_weight_layouts()
 {
   two_layer_gate_full_weights_by_scalar.clear();
+  two_layer_gate_full_weights_by_signal.clear();
   two_layer_gate_full_scalar_cache.clear();
   two_layer_gate_full_scalar_adjoint_cache.clear();
   two_layer_gate_scalar_body_bucket.clear();
@@ -1946,14 +2061,22 @@ void PairSUS2MTP::prepare_two_layer_gate_weight_layouts()
       static_cast<size_t>(two_layer_gate_scalar_count) *
           two_layer_gate_full_signal_count,
       0.0);
+  two_layer_gate_full_weights_by_signal.assign(
+      static_cast<size_t>(two_layer_gate_full_signal_count) *
+          two_layer_gate_scalar_count,
+      0.0);
   for (int group = 0; group < two_layer_gate_full_signal_count; group++) {
     const int mu = representative_mu[group];
     const size_t src_offset =
         static_cast<size_t>(mu) * two_layer_gate_scalar_count;
     for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+      const double weight = two_layer_gate_weights[src_offset + q];
       two_layer_gate_full_weights_by_scalar[
           static_cast<size_t>(q) * two_layer_gate_full_signal_count + group] =
-          two_layer_gate_weights[src_offset + q];
+          weight;
+      two_layer_gate_full_weights_by_signal[
+          static_cast<size_t>(group) * two_layer_gate_scalar_count + q] =
+          weight;
     }
   }
 }
@@ -3606,7 +3729,8 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
                                              const double *cached_radial_vals,
                                              const double *cached_radial_ders,
                                              const double *cached_sh_values,
-                                             const double *cached_sh_ders)
+                                             const double *cached_sh_ders,
+                                             bool use_sh_major_jacdot)
 {
   if (cached_radial_vals == nullptr || cached_radial_ders == nullptr)
     calc_pair_radial_values(itype, jtype, dist, two_layer_gate_shared_radial,
@@ -3684,6 +3808,42 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
     return;
   }
 
+  const int sh_component_count = (sh_l_max + 1) * (sh_l_max + 1);
+  if (use_sh_major_jacdot && sh_basic_sh_adjoint_indexed &&
+      static_cast<int>(sh_basic_sh_adjoint_offsets.size()) ==
+          sh_component_count + 1 &&
+      static_cast<int>(sh_basic_sh_adjoint_indices.size()) ==
+          alpha_index_basic_count &&
+      static_cast<int>(sh_basic_sh_adjoint_mu_indices.size()) ==
+          alpha_index_basic_count) {
+    const double rx_over_r = r[0] * inv_dist;
+    const double ry_over_r = r[1] * inv_dist;
+    const double rz_over_r = r[2] * inv_dist;
+    for (int sh_idx = 0; sh_idx < sh_component_count; sh_idx++) {
+      const int begin = sh_basic_sh_adjoint_offsets[sh_idx];
+      const int end = sh_basic_sh_adjoint_offsets[sh_idx + 1];
+      if (begin == end) continue;
+      double radial_der_adjoint = 0.0;
+      double radial_val_adjoint = 0.0;
+      for (int pos = begin; pos < end; pos++) {
+        const int k = sh_basic_sh_adjoint_indices[pos];
+        const double adjoint = basic_adjoints[k];
+        const int mu = sh_basic_sh_adjoint_mu_indices[pos];
+        radial_der_adjoint += adjoint * edge_radial_ders[mu];
+        radial_val_adjoint += adjoint * edge_radial_vals[mu];
+      }
+      const double ylm = edge_sh_values[sh_idx];
+      const int der_base = 3 * sh_idx;
+      fx += rx_over_r * ylm * radial_der_adjoint +
+            edge_sh_ders[der_base + 0] * radial_val_adjoint;
+      fy += ry_over_r * ylm * radial_der_adjoint +
+            edge_sh_ders[der_base + 1] * radial_val_adjoint;
+      fz += rz_over_r * ylm * radial_der_adjoint +
+            edge_sh_ders[der_base + 2] * radial_val_adjoint;
+    }
+    return;
+  }
+
   const bool sh_basic_mu_adjoint_fast =
       sh_basic_mu_grouped || sh_basic_mu_adjoint_indexed;
   if (sh_basic_mu_adjoint_fast) {
@@ -3756,11 +3916,25 @@ void PairSUS2MTP::dot_gate_scaled_sh_basic_edge_adjoint(
     double &fy,
     double &fz,
     double *gate_adjoint_by_mu,
-    bool gate_signal_is_full_mu)
+    bool gate_signal_is_full_mu,
+    const double *cached_radial_vals,
+    const double *cached_radial_ders,
+    const double *cached_residual_radial)
 {
-  calc_pair_radial_values(itype, jtype, dist, false, gate_signal_by_mu, true,
-                          gate_atom_index, table_index, table_bin,
-                          table_frac, gate_signal_is_full_mu);
+  const bool use_cached_radials =
+      cached_radial_vals != nullptr && cached_radial_ders != nullptr &&
+      cached_residual_radial != nullptr;
+  if (!use_cached_radials)
+    calc_pair_radial_values(itype, jtype, dist, false, gate_signal_by_mu, true,
+                            gate_atom_index, table_index, table_bin,
+                            table_frac, gate_signal_is_full_mu);
+  const double *__restrict edge_radial_vals =
+      use_cached_radials ? cached_radial_vals : radial_vals;
+  const double *__restrict edge_radial_ders =
+      use_cached_radials ? cached_radial_ders : radial_ders;
+  const double *__restrict edge_residual_radials =
+      use_cached_radials ? cached_residual_radial
+                         : two_layer_gate_residual_radial_vals;
   const double inv_dist = 1.0 / dist;
   double sh_values[kMaxSHComponents];
   double sh_ders[3 * kMaxSHComponents];
@@ -3775,9 +3949,9 @@ void PairSUS2MTP::dot_gate_scaled_sh_basic_edge_adjoint(
           ? sh_basic_mu_offsets[mu + 1]
           : sh_basic_mu_adjoint_offsets[mu + 1];
       if (begin == end) continue;
-      const double radial_val = radial_vals[mu];
-      const double radial_der = radial_ders[mu];
-      const double residual_radial = two_layer_gate_residual_radial_vals[mu];
+      const double radial_val = edge_radial_vals[mu];
+      const double radial_der = edge_radial_ders[mu];
+      const double residual_radial = edge_residual_radials[mu];
       double ylm_adjoint = 0.0;
       double dylm_adjoint_x = 0.0;
       double dylm_adjoint_y = 0.0;
@@ -3812,8 +3986,8 @@ void PairSUS2MTP::dot_gate_scaled_sh_basic_edge_adjoint(
     const double pref = weighted_basic_adjoints[k];
     const int mu = alpha_basic_mu[k];
     const int sh_idx = alpha_basic_sh_index[k];
-    const double radial_val = radial_vals[mu];
-    const double radial_der = radial_ders[mu];
+    const double radial_val = edge_radial_vals[mu];
+    const double radial_der = edge_radial_ders[mu];
     const double ylm = sh_values[sh_idx];
     const double radial_der_pref = radial_der * inv_dist * ylm;
     fx += pref *
@@ -3823,7 +3997,7 @@ void PairSUS2MTP::dot_gate_scaled_sh_basic_edge_adjoint(
     fz += pref *
           (radial_der_pref * r[2] + radial_val * sh_ders[3 * sh_idx + 2]);
     gate_adjoint_by_mu[mu] +=
-        pref * two_layer_gate_residual_radial_vals[mu] * ylm;
+        pref * edge_residual_radials[mu] * ylm;
   }
 }
 
@@ -3843,14 +4017,19 @@ void PairSUS2MTP::backprop_sh_products()
 
 void PairSUS2MTP::backprop_sh_products_from(const double *moments, int product_limit)
 {
+  const double *__restrict moment_vals = moments;
+  double *__restrict moment_adjoints = nbh_energy_ders_wrt_moments;
+  const int *__restrict product_a0 = alpha_times_a0;
+  const int *__restrict product_a1 = alpha_times_a1;
+  const int *__restrict product_out = alpha_times_out;
+  const double *__restrict product_coeff = alpha_times_coeff;
   for (int k = product_limit - 1; k >= 0; k--) {
-    const int a0 = alpha_times_a0[k];
-    const int a1 = alpha_times_a1[k];
-    const int out = alpha_times_out[k];
-    const double coeff = alpha_times_coeff[k];
-    const double adj = nbh_energy_ders_wrt_moments[out];
-    nbh_energy_ders_wrt_moments[a1] += adj * coeff * moments[a0];
-    nbh_energy_ders_wrt_moments[a0] += adj * coeff * moments[a1];
+    const int a0 = product_a0[k];
+    const int a1 = product_a1[k];
+    const int out = product_out[k];
+    const double adj_coeff = moment_adjoints[out] * product_coeff[k];
+    moment_adjoints[a1] += adj_coeff * moment_vals[a0];
+    moment_adjoints[a0] += adj_coeff * moment_vals[a1];
   }
 }
 
@@ -3883,6 +4062,8 @@ void PairSUS2MTP::forward_two_layer_gate_products()
 
 void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments)
 {
+  const double *__restrict moment_vals = moments;
+  double *__restrict moment_adjoints = nbh_energy_ders_wrt_moments;
   if (!two_layer_gate_product_out_indices.empty()) {
     const int *__restrict product_a0 =
         two_layer_gate_product_a0_indices.data();
@@ -3897,14 +4078,13 @@ void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments)
       const int a0 = product_a0[idx];
       const int a1 = product_a1[idx];
       const int out = product_out[idx];
-      const double coeff = product_coeff[idx];
-      const double adj = nbh_energy_ders_wrt_moments[out];
-      nbh_energy_ders_wrt_moments[a1] += adj * coeff * moments[a0];
-      nbh_energy_ders_wrt_moments[a0] += adj * coeff * moments[a1];
+      const double adj_coeff = moment_adjoints[out] * product_coeff[idx];
+      moment_adjoints[a1] += adj_coeff * moment_vals[a0];
+      moment_adjoints[a0] += adj_coeff * moment_vals[a1];
     }
     return;
   }
-  backprop_sh_products_from(moments, two_layer_gate_product_limit);
+  backprop_sh_products_from(moment_vals, two_layer_gate_product_limit);
 }
 
 void PairSUS2MTP::backprop_two_layer_gate_products_compact(const double *moments)
@@ -3930,6 +4110,8 @@ void PairSUS2MTP::backprop_two_layer_gate_products_compact(const double *moments
       two_layer_gate_product_compact_a1_indices.data();
   const double *__restrict product_coeff =
       two_layer_gate_product_coeffs.data();
+  const double *__restrict compact_moments = moments;
+  double *__restrict moment_adjoints = nbh_energy_ders_wrt_moments;
   for (int idx = static_cast<int>(two_layer_gate_product_out_indices.size()) - 1;
        idx >= 0; idx--) {
     const int a0 = product_a0[idx];
@@ -3939,10 +4121,9 @@ void PairSUS2MTP::backprop_two_layer_gate_products_compact(const double *moments
     const int a1_compact = product_compact_a1[idx];
     if (a0_compact < 0 || a1_compact < 0)
       error->one(FLERR, "SUS2-SH compact gate moment cache is inconsistent.");
-    const double coeff = product_coeff[idx];
-    const double adj = nbh_energy_ders_wrt_moments[out];
-    nbh_energy_ders_wrt_moments[a1] += adj * coeff * moments[a0_compact];
-    nbh_energy_ders_wrt_moments[a0] += adj * coeff * moments[a1_compact];
+    const double adj_coeff = moment_adjoints[out] * product_coeff[idx];
+    moment_adjoints[a1] += adj_coeff * compact_moments[a0_compact];
+    moment_adjoints[a0] += adj_coeff * compact_moments[a1_compact];
   }
 }
 
@@ -4056,11 +4237,12 @@ void PairSUS2MTP::unpack_reverse_comm(int n, int *list, double *buf)
         buf + static_cast<size_t>(n) * gate_signal_stride;
     for (int i = 0; i < n; i++) {
       const int atom_index = list[i];
-      double *gate_dst =
-          two_layer_gate_adjoints + static_cast<size_t>(atom_index) * gate_signal_stride;
-      const double *gate_src =
-          gate_buf + static_cast<size_t>(i) * gate_signal_stride;
-      for (int k = 0; k < gate_signal_stride; k++) gate_dst[k] += gate_src[k];
+	      double *gate_dst =
+	          two_layer_gate_adjoints + static_cast<size_t>(atom_index) * gate_signal_stride;
+	      const double *gate_src =
+	          gate_buf + static_cast<size_t>(i) * gate_signal_stride;
+	      #pragma omp simd
+	      for (int k = 0; k < gate_signal_stride; k++) gate_dst[k] += gate_src[k];
       double *edge_dst =
           two_layer_gate_edge_l1_weighted_adjoints +
           static_cast<size_t>(atom_index) * edge_l1_stride;
@@ -4174,6 +4356,11 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	      !two_layer_gate_center_enabled && gate_signal_stride == 1 &&
 	      static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()) ==
 	          radial_func_count;
+  const bool edge_l1_direct_base_mu_signal =
+      edge_l1_active && !two_layer_gate_body_linear_combo &&
+      (two_layer_gate_full_identity_signal ||
+       static_cast<int>(two_layer_gate_full_signal_group_for_mu.size()) !=
+           radial_func_count);
   const bool cache_body_signal_derivs =
       two_layer_gate_body_linear_combo && !two_layer_gate_center_enabled &&
       !compact_body_signal && gate_body_stride > 0 &&
@@ -4244,13 +4431,13 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
   const int gate_force_adjoint_fill_width =
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
-  const bool use_full_gate_batched_contraction =
-      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
-      !static_fixed_basic_cache_enabled &&
-      env_flag_enabled("SUS2_LAMMPS_FULL_GATE_BATCH_CONTRACT") &&
-      static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) ==
-          two_layer_gate_scalar_count * gate_signal_stride;
-  std::vector<double> gate_body_values(gate_body_stride, 0.0);
+	  const bool use_full_gate_batched_contraction =
+	      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
+	      !static_fixed_basic_cache_enabled &&
+	      env_flag_enabled("SUS2_LAMMPS_FULL_GATE_BATCH_CONTRACT") &&
+	      static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) ==
+	          two_layer_gate_scalar_count * gate_signal_stride;
+	  std::vector<double> gate_body_values(gate_body_stride, 0.0);
   std::vector<double> gate_signal_moment_ders;
   if (cache_body_signal_derivs)
     gate_signal_moment_ders.resize(
@@ -4258,23 +4445,26 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   if (store_gate_moment_cache)
     two_layer_gate_moment_cache.resize(
         static_cast<size_t>(inum) * gate_moment_cache_storage_width);
-  if (use_full_gate_batched_contraction) {
-    const size_t full_scalar_cache_size =
-        static_cast<size_t>(two_layer_gate_scalar_count) * inum;
-    two_layer_gate_full_scalar_cache.resize(full_scalar_cache_size);
-    two_layer_gate_full_scalar_adjoint_cache.resize(full_scalar_cache_size);
-  } else {
-    two_layer_gate_full_scalar_cache.clear();
-    two_layer_gate_full_scalar_adjoint_cache.clear();
-  }
-  std::fill(two_layer_gate_adjoints,
+	  if (use_full_gate_batched_contraction) {
+	    const size_t full_scalar_cache_size =
+	        static_cast<size_t>(two_layer_gate_scalar_count) * inum;
+	    two_layer_gate_full_scalar_cache.resize(full_scalar_cache_size);
+	    two_layer_gate_full_scalar_adjoint_cache.resize(full_scalar_cache_size);
+	  } else {
+	    two_layer_gate_full_scalar_cache.clear();
+	    two_layer_gate_full_scalar_adjoint_cache.clear();
+	  }
+	  std::fill(two_layer_gate_adjoints,
             two_layer_gate_adjoints + static_cast<size_t>(nall) * gate_signal_stride,
             0.0);
   if (edge_l1_active) {
-    std::fill(two_layer_gate_edge_l1_weighted_values,
-              two_layer_gate_edge_l1_weighted_values +
-                  static_cast<size_t>(nall) * edge_l1_weighted_stride,
-              0.0);
+    if (env_flag_enabled("SUS2_LAMMPS_GATE_EDGE_L1_ZERO_VALUES") ||
+        env_flag_enabled("SUS2_SH_GATE_EDGE_L1_ZERO_VALUES")) {
+      std::fill(two_layer_gate_edge_l1_weighted_values,
+                two_layer_gate_edge_l1_weighted_values +
+                    static_cast<size_t>(nall) * edge_l1_weighted_stride,
+                0.0);
+    }
     std::fill(two_layer_gate_edge_l1_weighted_adjoints,
               two_layer_gate_edge_l1_weighted_adjoints +
                   static_cast<size_t>(nall) * edge_l1_weighted_stride,
@@ -4302,15 +4492,29 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool recompute_gate_force_jacobians =
       recompute_body_combo_gate_force_jacobians ||
       (!two_layer_gate_body_linear_combo && !cache_full_gate_force_jacobians);
-  const bool use_gate_required_dot =
-      gate_required_dot_available && recompute_gate_force_jacobians &&
-      should_use_gate_required_dot(
-          static_cast<int>(two_layer_gate_required_basic_indices.size()),
-          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
-          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
-          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
-          gate_signal_stride);
-  const bool cache_gate_force_radials = recompute_gate_force_jacobians;
+	  const bool use_gate_required_dot =
+	      gate_required_dot_available && recompute_gate_force_jacobians &&
+	      should_use_gate_required_dot(
+	          static_cast<int>(two_layer_gate_required_basic_indices.size()),
+	          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
+	          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
+	          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
+	          gate_signal_stride);
+  const int sh_major_jacdot_override =
+      env_flag_override("SUS2_LAMMPS_GATE_SH_MAJOR_JACDOT",
+                        "SUS2_SH_GATE_SH_MAJOR_JACDOT");
+  const bool use_sh_major_gate_force_jacdot =
+      recompute_gate_force_jacobians && !use_gate_required_dot &&
+      sh_major_jacdot_override != 0 && sh_basic_sh_adjoint_indexed;
+  const int gate_force_radial_recompute_override =
+      env_flag_override("SUS2_LAMMPS_GATE_FORCE_RADIAL_RECOMPUTE",
+                        "SUS2_SH_GATE_FORCE_RADIAL_RECOMPUTE");
+  const bool recompute_gate_force_radials =
+      (gate_force_radial_recompute_override >= 0)
+      ? (gate_force_radial_recompute_override != 0)
+      : do_list;
+  const bool cache_gate_force_radials =
+      recompute_gate_force_jacobians && !recompute_gate_force_radials;
   const bool cache_gate_force_sh_derivs =
       recompute_gate_force_jacobians &&
       env_flag_enabled("SUS2_LAMMPS_GATE_SH_DERIV_CACHE");
@@ -4322,8 +4526,14 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool direct_main_gate_dot =
       !two_layer_gate_center_enabled && !use_compact_gate_raw &&
       direct_main_gate_dot_override != 0;
+  const int edge_l1_direct_cache_override =
+      env_flag_override("SUS2_LAMMPS_GATE_EDGE_L1_DIRECT_CACHE",
+                        "SUS2_SH_GATE_EDGE_L1_DIRECT_CACHE");
+  const bool cache_edge_l1_direct_main =
+      edge_l1_active && direct_main_gate_dot &&
+      edge_l1_direct_cache_override > 0;
   const size_t radial_cache_capacity =
-      cache_gate_force_radials
+      (cache_gate_force_radials || cache_edge_l1_direct_main)
       ? edge_capacity * static_cast<size_t>(radial_func_count)
       : 0;
   const size_t sh_cache_capacity =
@@ -4335,7 +4545,11 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       ? edge_capacity * static_cast<size_t>(sh_component_count)
       : 0;
   const size_t residual_radial_cache_capacity =
-      use_compact_gate_raw
+      (use_compact_gate_raw || cache_edge_l1_direct_main)
+      ? edge_capacity * static_cast<size_t>(radial_func_count)
+      : 0;
+  const size_t edge_l1_signal_capacity =
+      cache_edge_l1_direct_main
       ? edge_capacity * static_cast<size_t>(radial_func_count)
       : 0;
   const size_t deriv_capacity =
@@ -4386,13 +4600,18 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
                  "two_layer_gate_edge_main_sh_values_raw");
     two_layer_gate_edge_main_sh_capacity = main_sh_cache_capacity;
   }
-  if (residual_radial_cache_capacity >
-      two_layer_gate_edge_residual_radial_capacity) {
-    memory->grow(two_layer_gate_edge_residual_radial_vals_raw,
-                 residual_radial_cache_capacity,
-                 "two_layer_gate_edge_residual_radial_vals_raw");
-    two_layer_gate_edge_residual_radial_capacity =
-        residual_radial_cache_capacity;
+	  if (residual_radial_cache_capacity >
+	      two_layer_gate_edge_residual_radial_capacity) {
+	    memory->grow(two_layer_gate_edge_residual_radial_vals_raw,
+	                 residual_radial_cache_capacity,
+	                 "two_layer_gate_edge_residual_radial_vals_raw");
+	    two_layer_gate_edge_residual_radial_capacity =
+	        residual_radial_cache_capacity;
+	  }
+  if (edge_l1_signal_capacity > two_layer_gate_edge_l1_signal_capacity) {
+    memory->grow(two_layer_gate_edge_l1_signal_raw, edge_l1_signal_capacity,
+                 "two_layer_gate_edge_l1_signal_raw");
+    two_layer_gate_edge_l1_signal_capacity = edge_l1_signal_capacity;
   }
   if (deriv_capacity > two_layer_gate_edge_deriv_capacity) {
     memory->grow(two_layer_gate_edge_deriv_x_raw, deriv_capacity,
@@ -4626,10 +4845,10 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
 	          two_layer_gate_scalar_count * gate_signal_stride)
 	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      if (use_full_gate_batched_contraction) {
-        // Gate values are formed after all local scalar rows are available.
-      } else if (gate_scalars_basic_only) {
-	        std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
+	      if (use_full_gate_batched_contraction) {
+	        // Gate values are formed after all local scalar rows are available.
+	      } else if (gate_scalars_basic_only) {
+		        std::fill(gate_values_i, gate_values_i + gate_signal_stride, 0.0);
 	        for (int q : basic_gate_scalar_indices) {
 	          const double scalar_value =
               moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
@@ -4776,8 +4995,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       continue;
     }
 
-	  }
-  if (use_full_gate_batched_contraction) {
+		  }
+	  if (use_full_gate_batched_contraction) {
     double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
     accumulate_full_gate_values_batched(
         inum, ilist, two_layer_gate_scalar_count, gate_signal_stride,
@@ -4860,12 +5079,20 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	        const double *u_atom =
 	            two_layer_gate_edge_l1_weighted_values +
 	            static_cast<size_t>(j) * edge_l1_weighted_stride;
+        double *cached_l1_signal = cache_edge_l1_direct_main
+            ? two_layer_gate_edge_l1_signal_raw +
+                  active_idx * static_cast<size_t>(radial_func_count)
+            : nullptr;
 	        for (int mu = 0; mu < radial_func_count; mu++) {
 	          const double *u = u_atom + 3 * mu;
-	          edge_l1_signal_scratch[mu] =
-	              two_layer_gate_mu_signal(gate_signal_by_mu, mu) +
-	              u[0] * y1_values[0] + u[1] * y1_values[1] +
-	              u[2] * y1_values[2];
+          const double base_signal = edge_l1_direct_base_mu_signal
+              ? gate_signal_by_mu[mu]
+              : two_layer_gate_mu_signal(gate_signal_by_mu, mu);
+          const double edge_signal =
+              base_signal + u[0] * y1_values[0] +
+              u[1] * y1_values[1] + u[2] * y1_values[2];
+	          edge_l1_signal_scratch[mu] = edge_signal;
+          if (cached_l1_signal != nullptr) cached_l1_signal[mu] = edge_signal;
 	        }
 	        radial_gate_signal_by_mu = edge_l1_signal_scratch.data();
 	        radial_gate_signal_is_full_mu = true;
@@ -4894,6 +5121,19 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	          two_layer_gate_residual_radial_vals[mu] *= center_multiplier;
 	        }
 	      }
+      if (cache_edge_l1_direct_main) {
+        const size_t radial_base =
+            active_idx * static_cast<size_t>(radial_func_count);
+        std::memcpy(two_layer_gate_edge_radial_vals_raw + radial_base,
+                    radial_vals,
+                    static_cast<size_t>(radial_func_count) * sizeof(double));
+        std::memcpy(two_layer_gate_edge_radial_ders_raw + radial_base,
+                    radial_ders,
+                    static_cast<size_t>(radial_func_count) * sizeof(double));
+        std::memcpy(two_layer_gate_edge_residual_radial_vals_raw + radial_base,
+                    two_layer_gate_residual_radial_vals,
+                    static_cast<size_t>(radial_func_count) * sizeof(double));
+      }
 	      add_profile_time(profile_gate_v2,
 	                       profile_v2_times[kGateProfileV2MainGateRadial],
 	                       profile_v2_sub_start);
@@ -4982,27 +5222,40 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
           const double r[3] = {two_layer_gate_edge_dx_raw[active_idx],
                                two_layer_gate_edge_dy_raw[active_idx],
                                two_layer_gate_edge_dz_raw[active_idx]};
-          const double *base_gate_signal_by_mu =
-              two_layer_gate_values + static_cast<size_t>(j) * gate_signal_stride;
-          const double *radial_gate_signal_by_mu = base_gate_signal_by_mu;
-          bool radial_gate_signal_is_full_mu = false;
-          if (edge_l1_active) {
-            double y1_values[3];
-            eval_real_sh_l1_values_compact(
-                r, 1.0 / two_layer_gate_edge_dist_raw[active_idx], y1_values);
-            const double *u_atom =
-                two_layer_gate_edge_l1_weighted_values +
-                static_cast<size_t>(j) * edge_l1_weighted_stride;
-            for (int mu = 0; mu < radial_func_count; mu++) {
-              const double *u = u_atom + 3 * mu;
-              edge_l1_signal_scratch[mu] =
-                  two_layer_gate_mu_signal(base_gate_signal_by_mu, mu) +
-                  u[0] * y1_values[0] + u[1] * y1_values[1] +
-                  u[2] * y1_values[2];
+	          const double *base_gate_signal_by_mu =
+	              two_layer_gate_values + static_cast<size_t>(j) * gate_signal_stride;
+	          const double *radial_gate_signal_by_mu = base_gate_signal_by_mu;
+	          bool radial_gate_signal_is_full_mu = false;
+          const size_t radial_cache_base =
+              active_idx * static_cast<size_t>(radial_func_count);
+          const bool use_edge_l1_direct_cache =
+              edge_l1_active && cache_edge_l1_direct_main;
+          double y1_values[3] = {};
+          double y1_ders[9] = {};
+	          if (edge_l1_active) {
+            eval_real_sh_l1_compact(
+                r, 1.0 / two_layer_gate_edge_dist_raw[active_idx], y1_values,
+                y1_ders);
+            if (use_edge_l1_direct_cache) {
+              radial_gate_signal_by_mu =
+                  two_layer_gate_edge_l1_signal_raw + radial_cache_base;
+            } else {
+              const double *u_atom =
+                  two_layer_gate_edge_l1_weighted_values +
+                  static_cast<size_t>(j) * edge_l1_weighted_stride;
+              for (int mu = 0; mu < radial_func_count; mu++) {
+                const double *u = u_atom + 3 * mu;
+                const double base_signal = edge_l1_direct_base_mu_signal
+                    ? base_gate_signal_by_mu[mu]
+                    : two_layer_gate_mu_signal(base_gate_signal_by_mu, mu);
+                edge_l1_signal_scratch[mu] =
+                    base_signal + u[0] * y1_values[0] +
+                    u[1] * y1_values[1] + u[2] * y1_values[2];
+              }
+              radial_gate_signal_by_mu = edge_l1_signal_scratch.data();
             }
-            radial_gate_signal_by_mu = edge_l1_signal_scratch.data();
-            radial_gate_signal_is_full_mu = true;
-          }
+	            radial_gate_signal_is_full_mu = true;
+	          }
           dot_gate_scaled_sh_basic_edge_adjoint(
               itype, two_layer_gate_edge_types_raw[active_idx],
               edge_l1_active ? -1 : j, r,
@@ -5011,17 +5264,22 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
               two_layer_gate_edge_table_bins_raw[active_idx],
               two_layer_gate_edge_table_fracs_raw[active_idx],
               weighted_basic_moment_ders, radial_gate_signal_by_mu, fx, fy, fz,
-              two_layer_gate_adjoint_scratch, radial_gate_signal_is_full_mu);
+              two_layer_gate_adjoint_scratch, radial_gate_signal_is_full_mu,
+              use_edge_l1_direct_cache
+                  ? two_layer_gate_edge_radial_vals_raw + radial_cache_base
+                  : nullptr,
+              use_edge_l1_direct_cache
+                  ? two_layer_gate_edge_radial_ders_raw + radial_cache_base
+                  : nullptr,
+              use_edge_l1_direct_cache
+                  ? two_layer_gate_edge_residual_radial_vals_raw + radial_cache_base
+                  : nullptr);
           accumulate_two_layer_gate_signal_adjoints(
               gate_adjoints_by_mu, two_layer_gate_adjoint_scratch);
-          if (edge_l1_active) {
-            const double dist_edge = two_layer_gate_edge_dist_raw[active_idx];
-            double y1_values[3];
-            double y1_ders[9];
-            eval_real_sh_l1_compact(r, 1.0 / dist_edge, y1_values, y1_ders);
-            const double *u_atom =
-                two_layer_gate_edge_l1_weighted_values +
-                static_cast<size_t>(j) * edge_l1_weighted_stride;
+	          if (edge_l1_active) {
+	            const double *u_atom =
+	                two_layer_gate_edge_l1_weighted_values +
+	                static_cast<size_t>(j) * edge_l1_weighted_stride;
             double *u_adj_atom =
                 two_layer_gate_edge_l1_weighted_adjoints +
                 static_cast<size_t>(j) * edge_l1_weighted_stride;
@@ -5519,61 +5777,76 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
 	          two_layer_gate_scalar_count * gate_signal_stride)
 	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-      if (use_full_gate_batched_contraction) {
-        const double *__restrict scalar_adjoints =
-            two_layer_gate_full_scalar_adjoint_cache.data() +
-            static_cast<size_t>(ii);
-        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-          const double adjoint = scalar_adjoints[static_cast<size_t>(q) * inum];
-          if (adjoint == 0.0) continue;
-          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
-              adjoint;
-        }
-      } else if (gate_scalars_basic_only) {
+	      const int signal_major_reverse_override =
+	          env_flag_override("SUS2_LAMMPS_GATE_SIGNAL_MAJOR_REVERSE");
+	      const bool use_signal_major_reverse =
+	          !gate_scalars_basic_only &&
+	          signal_major_reverse_override != 0 &&
+	          static_cast<int>(two_layer_gate_full_weights_by_signal.size()) ==
+	              two_layer_gate_scalar_count * gate_signal_stride;
+	      if (use_full_gate_batched_contraction) {
+	        const double *__restrict scalar_adjoints =
+	            two_layer_gate_full_scalar_adjoint_cache.data() +
+	            static_cast<size_t>(ii);
+	        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	          const double adjoint = scalar_adjoints[static_cast<size_t>(q) * inum];
+	          if (adjoint == 0.0) continue;
+	          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
+	              adjoint;
+	        }
+	      } else if (gate_scalars_basic_only) {
 	        for (int q : basic_gate_scalar_indices) {
 	          const double *__restrict weights_by_mu =
 	              two_layer_gate_full_weights_by_scalar.data() +
-              static_cast<size_t>(q) * gate_signal_stride;
-          double adjoint = 0.0;
-          #pragma omp simd reduction(+:adjoint)
-          for (int g = 0; g < gate_signal_stride; g++)
-            adjoint += gate_adjoint_center_by_mu[g] * weights_by_mu[g];
-          if (adjoint == 0.0) continue;
-          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
-              adjoint;
-        }
-      } else if (!accumulate_full_scalar_adjoints_specialized(
-              gate_signal_stride, two_layer_gate_scalar_count,
-              gate_adjoint_center_by_mu,
-              two_layer_gate_full_weights_by_scalar.data(),
-              two_layer_gate_scalar_moment_indices.data(),
-              nbh_energy_ders_wrt_moments)) {
-        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
-          const double *__restrict weights_by_mu =
-              two_layer_gate_full_weights_by_scalar.data() +
-              static_cast<size_t>(q) * gate_signal_stride;
-          double adjoint = 0.0;
-          #pragma omp simd reduction(+:adjoint)
-          for (int g = 0; g < gate_signal_stride; g++)
-            adjoint += gate_adjoint_center_by_mu[g] * weights_by_mu[g];
-          if (adjoint == 0.0) continue;
-          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
-              adjoint;
+	              static_cast<size_t>(q) * gate_signal_stride;
+	          double adjoint = 0.0;
+	          #pragma omp simd reduction(+:adjoint)
+	          for (int g = 0; g < gate_signal_stride; g++)
+	            adjoint += gate_adjoint_center_by_mu[g] * weights_by_mu[g];
+	          if (adjoint == 0.0) continue;
+	          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
+	              adjoint;
+	        }
+	      } else if (use_signal_major_reverse &&
+	                 accumulate_full_scalar_adjoints_signal_major_specialized(
+	                     gate_signal_stride, two_layer_gate_scalar_count,
+	                     gate_adjoint_center_by_mu,
+	                     two_layer_gate_full_weights_by_signal.data(),
+	                     two_layer_gate_scalar_moment_indices.data(),
+	                     nbh_energy_ders_wrt_moments)) {
+	        // Handled by the signal-major reverse microkernel.
+	      } else if (!accumulate_full_scalar_adjoints_specialized(
+	                     gate_signal_stride, two_layer_gate_scalar_count,
+	                     gate_adjoint_center_by_mu,
+	                     two_layer_gate_full_weights_by_scalar.data(),
+	                     two_layer_gate_scalar_moment_indices.data(),
+	                     nbh_energy_ders_wrt_moments)) {
+	        for (int q = 0; q < two_layer_gate_scalar_count; q++) {
+	          const double *__restrict weights_by_mu =
+	              two_layer_gate_full_weights_by_scalar.data() +
+	              static_cast<size_t>(q) * gate_signal_stride;
+	          double adjoint = 0.0;
+	          #pragma omp simd reduction(+:adjoint)
+	          for (int g = 0; g < gate_signal_stride; g++)
+	            adjoint += gate_adjoint_center_by_mu[g] * weights_by_mu[g];
+	          if (adjoint == 0.0) continue;
+	          nbh_energy_ders_wrt_moments[two_layer_gate_scalar_moment_indices[q]] +=
+	              adjoint;
 	        }
 	      }
 	    }
       if (edge_l1_active)
         seed_two_layer_gate_edge_l1_moment_adjoints(i,
                                                      nbh_energy_ders_wrt_moments);
-	    if (gate_needs_product_backprop) {
-	      if (compact_gate_moment_cache)
-	        backprop_two_layer_gate_products_compact(gate_moments);
-	      else
-	        backprop_two_layer_gate_products(gate_moments);
-	    }
-	    add_profile_time(profile_gate_v2,
-	                     profile_v2_times[kGateProfileV2GateForceSeedBackprop],
-	                     profile_v2_sub_start);
+		    if (gate_needs_product_backprop) {
+		      if (compact_gate_moment_cache)
+		        backprop_two_layer_gate_products_compact(gate_moments);
+		      else
+		        backprop_two_layer_gate_products(gate_moments);
+		    }
+		    add_profile_time(profile_gate_v2,
+		                     profile_v2_times[kGateProfileV2GateForceSeedBackprop],
+		                     profile_v2_sub_start);
 
 	    profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
 	    for (size_t active_idx = active_begin; active_idx < active_end; active_idx++) {
@@ -5590,10 +5863,10 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
             active_idx * static_cast<size_t>(sh_component_count);
         dot_sh_basic_edge_jacobian(
             itype, jtype, r, two_layer_gate_edge_dist_raw[active_idx],
-            two_layer_gate_edge_table_indices_raw[active_idx],
-            two_layer_gate_edge_table_bins_raw[active_idx],
-            two_layer_gate_edge_table_fracs_raw[active_idx],
-            nbh_energy_ders_wrt_moments, use_gate_required_dot, fx, fy, fz,
+	            two_layer_gate_edge_table_indices_raw[active_idx],
+	            two_layer_gate_edge_table_bins_raw[active_idx],
+	            two_layer_gate_edge_table_fracs_raw[active_idx],
+	            nbh_energy_ders_wrt_moments, use_gate_required_dot, fx, fy, fz,
             cache_gate_force_radials
             ? two_layer_gate_edge_radial_vals_raw +
                 active_idx * static_cast<size_t>(radial_func_count)
@@ -5607,7 +5880,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
             : nullptr,
             cache_gate_force_sh_derivs
             ? two_layer_gate_edge_sh_ders_raw + 3 * sh_cache_base
-            : nullptr);
+            : nullptr,
+            use_sh_major_gate_force_jacdot);
       } else {
         const size_t deriv_base =
             active_idx * static_cast<size_t>(alpha_index_basic_count);
@@ -6647,8 +6921,10 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_edge_sh_capacity = 0;
   two_layer_gate_edge_main_sh_capacity = 0;
   two_layer_gate_edge_residual_radial_capacity = 0;
+  two_layer_gate_edge_l1_signal_capacity = 0;
   two_layer_gate_edge_signal_deriv_capacity = 0;
-	  two_layer_gate_full_weights_by_scalar.clear();
+  two_layer_gate_full_weights_by_scalar.clear();
+  two_layer_gate_full_weights_by_signal.clear();
   two_layer_gate_full_scalar_cache.clear();
   two_layer_gate_full_scalar_adjoint_cache.clear();
 	  two_layer_gate_body_mix_weights.clear();
@@ -8390,10 +8666,14 @@ access to the buffer size that is not provided in PFR.
   sh_basic_mu_grouped = false;
   sh_basic_mu_indexed = false;
   sh_basic_mu_adjoint_indexed = false;
+  sh_basic_sh_adjoint_indexed = false;
   sh_basic_mu_offsets.clear();
   sh_basic_mu_indices.clear();
   sh_basic_mu_adjoint_offsets.clear();
   sh_basic_mu_adjoint_indices.clear();
+  sh_basic_sh_adjoint_offsets.clear();
+  sh_basic_sh_adjoint_indices.clear();
+  sh_basic_sh_adjoint_mu_indices.clear();
   if (is_sh_model && radial_func_count > 0) {
     sh_basic_mu_offsets.assign(radial_func_count + 1, 0);
     int pos = 0;
@@ -8407,11 +8687,11 @@ access to the buffer size that is not provided in PFR.
     }
     if (pos != alpha_index_basic_count) grouped = false;
     if (grouped) sh_basic_mu_grouped = true;
-	    if (!grouped && alpha_index_basic_count > 0) {
-	      sh_basic_mu_adjoint_offsets.assign(radial_func_count + 1, 0);
-	      for (int k = 0; k < alpha_index_basic_count; k++) {
-	        const int mu = alpha_basic_mu[k];
-	        if (mu >= 0 && mu < radial_func_count)
+    if (!grouped && alpha_index_basic_count > 0) {
+      sh_basic_mu_adjoint_offsets.assign(radial_func_count + 1, 0);
+      for (int k = 0; k < alpha_index_basic_count; k++) {
+        const int mu = alpha_basic_mu[k];
+        if (mu >= 0 && mu < radial_func_count)
           sh_basic_mu_adjoint_offsets[mu + 1]++;
       }
       for (int mu = 0; mu < radial_func_count; mu++)
@@ -8421,18 +8701,41 @@ access to the buffer size that is not provided in PFR.
       std::vector<int> cursor = sh_basic_mu_adjoint_offsets;
       for (int k = 0; k < alpha_index_basic_count; k++) {
         const int mu = alpha_basic_mu[k];
-	        if (mu >= 0 && mu < radial_func_count)
-	          sh_basic_mu_adjoint_indices[cursor[mu]++] = k;
-	      }
-	      sh_basic_mu_adjoint_indexed = true;
-	      if (env_flag_enabled("SUS2_LAMMPS_GATE_MU_INDEXED_BASIC") ||
-	          env_flag_enabled("SUS2_SH_GATE_MU_INDEXED_BASIC")) {
-	        sh_basic_mu_offsets = sh_basic_mu_adjoint_offsets;
-	        sh_basic_mu_indices = sh_basic_mu_adjoint_indices;
-	        sh_basic_mu_indexed = true;
-	      }
-	    }
-	  }
+        if (mu >= 0 && mu < radial_func_count)
+          sh_basic_mu_adjoint_indices[cursor[mu]++] = k;
+      }
+      sh_basic_mu_adjoint_indexed = true;
+      if (env_flag_enabled("SUS2_LAMMPS_GATE_MU_INDEXED_BASIC") ||
+          env_flag_enabled("SUS2_SH_GATE_MU_INDEXED_BASIC")) {
+        sh_basic_mu_offsets = sh_basic_mu_adjoint_offsets;
+        sh_basic_mu_indices = sh_basic_mu_adjoint_indices;
+        sh_basic_mu_indexed = true;
+      }
+    }
+  }
+  if (is_sh_model && alpha_index_basic_count > 0) {
+    const int sh_component_count = (sh_l_max + 1) * (sh_l_max + 1);
+    sh_basic_sh_adjoint_offsets.assign(sh_component_count + 1, 0);
+    for (int k = 0; k < alpha_index_basic_count; k++) {
+      const int sh_idx = alpha_basic_sh_index[k];
+      if (sh_idx < 0 || sh_idx >= sh_component_count)
+        error->all(FLERR, "SUS2-SH basic SH index is out of range.");
+      sh_basic_sh_adjoint_offsets[sh_idx + 1]++;
+    }
+    for (int sh_idx = 0; sh_idx < sh_component_count; sh_idx++)
+      sh_basic_sh_adjoint_offsets[sh_idx + 1] +=
+          sh_basic_sh_adjoint_offsets[sh_idx];
+    sh_basic_sh_adjoint_indices.assign(alpha_index_basic_count, 0);
+    sh_basic_sh_adjoint_mu_indices.assign(alpha_index_basic_count, 0);
+    std::vector<int> cursor = sh_basic_sh_adjoint_offsets;
+    for (int k = 0; k < alpha_index_basic_count; k++) {
+      const int sh_idx = alpha_basic_sh_index[k];
+      const int pos = cursor[sh_idx]++;
+      sh_basic_sh_adjoint_indices[pos] = k;
+      sh_basic_sh_adjoint_mu_indices[pos] = alpha_basic_mu[k];
+    }
+    sh_basic_sh_adjoint_indexed = true;
+  }
   for (int i = 0; i < alpha_index_times_count; i++) {
     alpha_times_a0[i] = alpha_index_times[i][0];
     alpha_times_a1[i] = alpha_index_times[i][1];
