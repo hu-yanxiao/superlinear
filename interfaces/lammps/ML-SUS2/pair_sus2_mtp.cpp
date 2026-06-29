@@ -4526,6 +4526,10 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool direct_main_gate_dot =
       !two_layer_gate_center_enabled && !use_compact_gate_raw &&
       direct_main_gate_dot_override != 0;
+  const bool direct_main_identity_gate_adjoints =
+      direct_main_gate_dot && !edge_l1_active &&
+      !two_layer_gate_body_linear_combo && two_layer_gate_full_identity_signal &&
+      gate_signal_stride == radial_func_count;
   const int edge_l1_direct_cache_override =
       env_flag_override("SUS2_LAMMPS_GATE_EDGE_L1_DIRECT_CACHE",
                         "SUS2_SH_GATE_EDGE_L1_DIRECT_CACHE");
@@ -5217,8 +5221,13 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         double *gate_adjoints_by_mu =
             two_layer_gate_adjoints + static_cast<size_t>(j) * gate_signal_stride;
         if (direct_main_gate_dot) {
-          std::fill(two_layer_gate_adjoint_scratch,
-                    two_layer_gate_adjoint_scratch + radial_func_count, 0.0);
+          double *__restrict direct_main_gate_adjoints =
+              direct_main_identity_gate_adjoints
+              ? gate_adjoints_by_mu
+              : two_layer_gate_adjoint_scratch;
+          if (!direct_main_identity_gate_adjoints)
+            std::fill(two_layer_gate_adjoint_scratch,
+                      two_layer_gate_adjoint_scratch + radial_func_count, 0.0);
           const double r[3] = {two_layer_gate_edge_dx_raw[active_idx],
                                two_layer_gate_edge_dy_raw[active_idx],
                                two_layer_gate_edge_dz_raw[active_idx]};
@@ -5264,7 +5273,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
               two_layer_gate_edge_table_bins_raw[active_idx],
               two_layer_gate_edge_table_fracs_raw[active_idx],
               weighted_basic_moment_ders, radial_gate_signal_by_mu, fx, fy, fz,
-              two_layer_gate_adjoint_scratch, radial_gate_signal_is_full_mu,
+              direct_main_gate_adjoints, radial_gate_signal_is_full_mu,
               use_edge_l1_direct_cache
                   ? two_layer_gate_edge_radial_vals_raw + radial_cache_base
                   : nullptr,
@@ -5274,8 +5283,9 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
               use_edge_l1_direct_cache
                   ? two_layer_gate_edge_residual_radial_vals_raw + radial_cache_base
                   : nullptr);
-          accumulate_two_layer_gate_signal_adjoints(
-              gate_adjoints_by_mu, two_layer_gate_adjoint_scratch);
+          if (!direct_main_identity_gate_adjoints)
+            accumulate_two_layer_gate_signal_adjoints(
+                gate_adjoints_by_mu, two_layer_gate_adjoint_scratch);
 	          if (edge_l1_active) {
 	            const double *u_atom =
 	                two_layer_gate_edge_l1_weighted_values +
