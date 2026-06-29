@@ -3467,6 +3467,53 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     two_layer_gate_mu_cache_valid[gate_atom_index] = 1;
 }
 
+bool PairSUS2MTP::calc_pair_radial_values_for_basic_mus(int itype,
+                                                        int jtype,
+                                                        double dist,
+                                                        bool use_gate_radial,
+                                                        int cached_table_index,
+                                                        int cached_table_bin,
+                                                        double cached_table_frac)
+{
+  if (!do_list || !use_gate_radial || !two_layer_gate_shared_radial)
+    return false;
+  const std::vector<int> *offsets = nullptr;
+  if (sh_basic_mu_grouped &&
+      static_cast<int>(sh_basic_mu_offsets.size()) == radial_func_count + 1)
+    offsets = &sh_basic_mu_offsets;
+  else if (sh_basic_mu_adjoint_indexed &&
+           static_cast<int>(sh_basic_mu_adjoint_offsets.size()) ==
+               radial_func_count + 1)
+    offsets = &sh_basic_mu_adjoint_offsets;
+  if (offsets == nullptr) return false;
+
+  int table_index = cached_table_index;
+  int r_list = cached_table_bin;
+  double ddr = cached_table_frac;
+  if (table_index == -2)
+    get_radial_table_info(itype, jtype, dist, table_index, r_list, ddr);
+  if (table_index < 0) return false;
+
+  double ***value_table = two_layer_gate_radial_list ? two_layer_gate_radial_list
+                                                     : radial_list;
+  double ***der_table = two_layer_gate_radial_der_list
+      ? two_layer_gate_radial_der_list
+      : radial_der_list;
+  const int r_next = r_list + 1;
+  const double *__restrict base_row = value_table[table_index][r_list];
+  const double *__restrict base_next_row = value_table[table_index][r_next];
+  const double *__restrict base_der_row = der_table[table_index][r_list];
+  const double *__restrict base_der_next_row = der_table[table_index][r_next];
+
+  for (int mu = 0; mu < radial_func_count; mu++) {
+    if ((*offsets)[mu] == (*offsets)[mu + 1]) continue;
+    radial_vals[mu] = base_row[mu] + ddr * (base_next_row[mu] - base_row[mu]);
+    radial_ders[mu] =
+        base_der_row[mu] + ddr * (base_der_next_row[mu] - base_der_row[mu]);
+  }
+  return true;
+}
+
 void PairSUS2MTP::accumulate_sh_basic_edge(int jj,
                                            const double *r,
                                            double dist,
@@ -3730,12 +3777,19 @@ void PairSUS2MTP::dot_sh_basic_edge_jacobian(int itype,
                                              const double *cached_radial_ders,
                                              const double *cached_sh_values,
                                              const double *cached_sh_ders,
+                                             bool use_basic_radial_subset,
                                              bool use_sh_major_jacdot)
 {
-  if (cached_radial_vals == nullptr || cached_radial_ders == nullptr)
-    calc_pair_radial_values(itype, jtype, dist, two_layer_gate_shared_radial,
-                            nullptr, false, -1, table_index, table_bin,
-                            table_frac);
+  if (cached_radial_vals == nullptr || cached_radial_ders == nullptr) {
+    if (!use_basic_radial_subset ||
+        !calc_pair_radial_values_for_basic_mus(
+            itype, jtype, dist, two_layer_gate_shared_radial, table_index,
+            table_bin, table_frac)) {
+      calc_pair_radial_values(itype, jtype, dist, two_layer_gate_shared_radial,
+                              nullptr, false, -1, table_index, table_bin,
+                              table_frac);
+    }
+  }
   const double *__restrict edge_radial_vals =
       cached_radial_vals != nullptr ? cached_radial_vals : radial_vals;
   const double *__restrict edge_radial_ders =
@@ -4492,6 +4546,11 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool recompute_gate_force_jacobians =
       recompute_body_combo_gate_force_jacobians ||
       (!two_layer_gate_body_linear_combo && !cache_full_gate_force_jacobians);
+  const int gate_basic_radial_subset_override =
+      env_flag_override("SUS2_LAMMPS_GATE_BASIC_RADIAL_SUBSET",
+                        "SUS2_SH_GATE_BASIC_RADIAL_SUBSET");
+  const bool use_gate_basic_radial_subset =
+      gate_basic_radial_subset_override != 0;
 	  const bool use_gate_required_dot =
 	      gate_required_dot_available && recompute_gate_force_jacobians &&
 	      should_use_gate_required_dot(
@@ -5891,6 +5950,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
             cache_gate_force_sh_derivs
             ? two_layer_gate_edge_sh_ders_raw + 3 * sh_cache_base
             : nullptr,
+            use_gate_basic_radial_subset,
             use_sh_major_gate_force_jacdot);
       } else {
         const size_t deriv_base =

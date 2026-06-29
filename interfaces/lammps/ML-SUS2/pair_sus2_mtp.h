@@ -366,6 +366,8 @@ class PairSUS2MTP : public Pair {
   void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
                                double = 0.0, bool = false);
+  bool calc_pair_radial_values_for_basic_mus(int, int, double, bool, int = -2,
+                                             int = 0, double = 0.0);
   int find_two_layer_gate_edge_l1_raw_source_moment_index(int) const;
   void fill_two_layer_gate_edge_l1_weighted_values_for_atom(int,
                                                             const double *);
@@ -389,6 +391,7 @@ class PairSUS2MTP : public Pair {
                                   const double * = nullptr,
                                   const double * = nullptr,
                                   const double * = nullptr,
+                                  bool = false,
                                   bool = false);
   void dot_gate_scaled_sh_basic_edge_adjoint(int, int, int, const double *,
                                              double, int, int, double,
