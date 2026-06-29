@@ -44,16 +44,18 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPUnpackReverseComm {};
 	  struct TagPairSUS2MTPComputeEnvGate {};
 	  struct TagPairSUS2MTPApplyEnvGate {};
-		  struct TagPairSUS2MTPComputeGateFirstLayer {};
-		  struct TagPairSUS2MTPComputeGateProducts {};
-		  struct TagPairSUS2MTPComputeGateProductAdjoints {};
-		  struct TagPairSUS2MTPComputeGateFirstFinalize {};
-		  struct TagPairSUS2MTPComputeGateFullForward {};
-		  struct TagPairSUS2MTPComputeGateSignalDers {};
-		  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
-		  struct TagPairSUS2MTPComputeGateAdjointDers {};
-		  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
-		  struct TagPairSUS2MTPComputeGateFirstDerivs {};
+	  struct TagPairSUS2MTPComputeGateFirstLayer {};
+	  struct TagPairSUS2MTPComputeGateProducts {};
+	  struct TagPairSUS2MTPComputeGateProductAdjoints {};
+	  struct TagPairSUS2MTPComputeGateFirstFinalize {};
+	  struct TagPairSUS2MTPComputeGateFullForward {};
+	  struct TagPairSUS2MTPComputeGateSignalDers {};
+	  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
+	  struct TagPairSUS2MTPComputeGateAdjointDers {};
+	  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
+	  struct TagPairSUS2MTPComputeGateEdgeL1WeightedValues {};
+	  struct TagPairSUS2MTPComputeGateEdgeL1SeedAdjoints {};
+	  struct TagPairSUS2MTPComputeGateFirstDerivs {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivsTeam {};
 	  struct TagPairSUS2MTPComputeGateMainAlphaBasic {};
 	  struct TagPairSUS2MTPComputeAlphaBasic {};
@@ -137,6 +139,15 @@ namespace LAMMPS_NS {
 	                                                F_FLOAT &rho, F_FLOAT &rho_der) const;
 	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_mu_adjoint_kk(
 	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu) const;
+	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_mu_signal_kk(
+	      const int atom_index, const int mu) const;
+	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_edge_l1_projection_kk(
+	      const int atom_index, const int mu, const F_FLOAT *sh_values) const;
+	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_edge_l1_signal_kk(
+	      const int atom_index, const int mu, const F_FLOAT *sh_values) const;
+	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_edge_l1_adjoint_kk(
+	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu,
+	      const F_FLOAT *sh_values, F_FLOAT *y_adjoints) const;
 
   // ---------- SUS2MTP routines (in order of execution) ----------
 
@@ -192,8 +203,14 @@ namespace LAMMPS_NS {
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const;
 
-			  KOKKOS_INLINE_FUNCTION
-			  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
+		  KOKKOS_INLINE_FUNCTION
+		  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
+
+		  KOKKOS_INLINE_FUNCTION
+		  void operator()(TagPairSUS2MTPComputeGateEdgeL1WeightedValues, const int &idx) const;
+
+		  KOKKOS_INLINE_FUNCTION
+		  void operator()(TagPairSUS2MTPComputeGateEdgeL1SeedAdjoints, const int &ii) const;
 
 		  KOKKOS_INLINE_FUNCTION
 		  void operator()(TagPairSUS2MTPComputeGateFirstDerivs, const int &ii) const;
@@ -416,6 +433,10 @@ namespace LAMMPS_NS {
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_scalar;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_signal;
 	  Kokkos::View<double *, DeviceType> d_two_layer_gate_additive_coeffs;
+	  Kokkos::View<int *, DeviceType> d_two_layer_gate_edge_l1_source_moment_indices;
+	  Kokkos::View<double **, DeviceType> d_two_layer_gate_edge_l1_weights_by_source;
+	  Kokkos::View<double **, DeviceType> d_two_layer_gate_edge_l1_weighted_values;
+	  Kokkos::View<double **, DeviceType> d_two_layer_gate_edge_l1_weighted_adjoints;
 	  Kokkos::View<int *, DeviceType> d_zbl_atomic_numbers;
 	  Kokkos::View<double *, DeviceType> d_zbl_pair_inner_cutoffs;
 	  Kokkos::View<double *, DeviceType> d_zbl_pair_outer_cutoffs;
@@ -440,6 +461,10 @@ namespace LAMMPS_NS {
 	  int two_layer_gate_product_limit = 0;
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;
+	  int two_layer_gate_kk_comm_stride = 1;
+	  int two_layer_gate_kk_edge_l1_active = 0;
+	  int two_layer_gate_kk_edge_l1_stride = 0;
+	  int two_layer_gate_kk_edge_l1_source_count = 0;
 	  int two_layer_gate_kk_deriv_signal = 0;
 	  int two_layer_gate_kk_compact_body_signal = 0;
 	  int two_layer_gate_kk_full_identity_signal = 0;
