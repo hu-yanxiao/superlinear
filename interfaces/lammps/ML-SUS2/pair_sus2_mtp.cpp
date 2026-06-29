@@ -4114,7 +4114,8 @@ void PairSUS2MTP::forward_two_layer_gate_products()
   }
 }
 
-void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments)
+void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments,
+                                                   bool skip_zero_adjoints)
 {
   const double *__restrict moment_vals = moments;
   double *__restrict moment_adjoints = nbh_energy_ders_wrt_moments;
@@ -4133,6 +4134,7 @@ void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments)
       const int a1 = product_a1[idx];
       const int out = product_out[idx];
       const double adj_coeff = moment_adjoints[out] * product_coeff[idx];
+      if (skip_zero_adjoints && adj_coeff == 0.0) continue;
       moment_adjoints[a1] += adj_coeff * moment_vals[a0];
       moment_adjoints[a0] += adj_coeff * moment_vals[a1];
     }
@@ -4141,14 +4143,16 @@ void PairSUS2MTP::backprop_two_layer_gate_products(const double *moments)
   backprop_sh_products_from(moment_vals, two_layer_gate_product_limit);
 }
 
-void PairSUS2MTP::backprop_two_layer_gate_products_compact(const double *moments)
+void PairSUS2MTP::backprop_two_layer_gate_products_compact(
+    const double *moments,
+    bool skip_zero_adjoints)
 {
   if (moments == nullptr ||
       two_layer_gate_required_moment_compact_index.empty() ||
       two_layer_gate_product_out_indices.empty() ||
       two_layer_gate_product_compact_a0_indices.empty() ||
       two_layer_gate_product_compact_a1_indices.empty()) {
-    backprop_two_layer_gate_products(moments);
+    backprop_two_layer_gate_products(moments, skip_zero_adjoints);
     return;
   }
 
@@ -4176,6 +4180,7 @@ void PairSUS2MTP::backprop_two_layer_gate_products_compact(const double *moments
     if (a0_compact < 0 || a1_compact < 0)
       error->one(FLERR, "SUS2-SH compact gate moment cache is inconsistent.");
     const double adj_coeff = moment_adjoints[out] * product_coeff[idx];
+    if (skip_zero_adjoints && adj_coeff == 0.0) continue;
     moment_adjoints[a1] += adj_coeff * compact_moments[a0_compact];
     moment_adjoints[a0] += adj_coeff * compact_moments[a1_compact];
   }
@@ -4485,13 +4490,25 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
   const int gate_force_adjoint_fill_width =
       gate_scalars_basic_only ? alpha_index_basic_count : gate_moment_cache_width;
-	  const bool use_full_gate_batched_contraction =
-	      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
-	      !static_fixed_basic_cache_enabled &&
-	      env_flag_enabled("SUS2_LAMMPS_FULL_GATE_BATCH_CONTRACT") &&
-	      static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) ==
-	          two_layer_gate_scalar_count * gate_signal_stride;
-	  std::vector<double> gate_body_values(gate_body_stride, 0.0);
+  const bool full_gate_scalar_weight_layout_valid =
+      static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) ==
+          two_layer_gate_scalar_count * gate_signal_stride;
+  const bool full_gate_signal_weight_layout_valid =
+      static_cast<int>(two_layer_gate_full_weights_by_signal.size()) ==
+          two_layer_gate_scalar_count * gate_signal_stride;
+  if (!two_layer_gate_body_linear_combo && !full_gate_scalar_weight_layout_valid)
+    error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
+  const bool use_full_gate_batched_contraction =
+      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
+      !static_fixed_basic_cache_enabled &&
+      env_flag_enabled("SUS2_LAMMPS_FULL_GATE_BATCH_CONTRACT") &&
+      full_gate_scalar_weight_layout_valid;
+  const int signal_major_reverse_override =
+      env_flag_override("SUS2_LAMMPS_GATE_SIGNAL_MAJOR_REVERSE");
+  const bool use_signal_major_reverse =
+      !two_layer_gate_body_linear_combo && !gate_scalars_basic_only &&
+      signal_major_reverse_override != 0 && full_gate_signal_weight_layout_valid;
+  std::vector<double> gate_body_values(gate_body_stride, 0.0);
   std::vector<double> gate_signal_moment_ders;
   if (cache_body_signal_derivs)
     gate_signal_moment_ders.resize(
@@ -4551,14 +4568,14 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
                         "SUS2_SH_GATE_BASIC_RADIAL_SUBSET");
   const bool use_gate_basic_radial_subset =
       gate_basic_radial_subset_override != 0;
-	  const bool use_gate_required_dot =
-	      gate_required_dot_available && recompute_gate_force_jacobians &&
-	      should_use_gate_required_dot(
-	          static_cast<int>(two_layer_gate_required_basic_indices.size()),
-	          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
-	          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
-	          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
-	          gate_signal_stride);
+  const bool use_gate_required_dot =
+      gate_required_dot_available && recompute_gate_force_jacobians &&
+      should_use_gate_required_dot(
+          static_cast<int>(two_layer_gate_required_basic_indices.size()),
+          alpha_index_basic_count, two_layer_gate_required_basics_are_y00,
+          two_layer_gate_body_linear_combo, two_layer_gate_center_enabled,
+          cache_body_signal_derivs, sh_basic_mu_fast, gate_body_stride,
+          gate_signal_stride);
   const int sh_major_jacdot_override =
       env_flag_override("SUS2_LAMMPS_GATE_SH_MAJOR_JACDOT",
                         "SUS2_SH_GATE_SH_MAJOR_JACDOT");
@@ -4585,16 +4602,26 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool direct_main_gate_dot =
       !two_layer_gate_center_enabled && !use_compact_gate_raw &&
       direct_main_gate_dot_override != 0;
+  const int direct_identity_adjoint_override =
+      env_flag_override("SUS2_LAMMPS_GATE_DIRECT_IDENTITY_ADJOINT",
+                        "SUS2_SH_GATE_DIRECT_IDENTITY_ADJOINT");
   const bool direct_main_identity_gate_adjoints =
       direct_main_gate_dot && !edge_l1_active &&
       !two_layer_gate_body_linear_combo && two_layer_gate_full_identity_signal &&
-      gate_signal_stride == radial_func_count;
+      gate_signal_stride == radial_func_count && direct_identity_adjoint_override > 0;
   const int edge_l1_direct_cache_override =
       env_flag_override("SUS2_LAMMPS_GATE_EDGE_L1_DIRECT_CACHE",
                         "SUS2_SH_GATE_EDGE_L1_DIRECT_CACHE");
   const bool cache_edge_l1_direct_main =
       edge_l1_active && direct_main_gate_dot &&
       edge_l1_direct_cache_override > 0;
+  const int product_adj_skip_zero_override =
+      env_flag_override("SUS2_LAMMPS_GATE_PRODUCT_ADJ_SKIP_ZERO",
+                        "SUS2_SH_GATE_PRODUCT_ADJ_SKIP_ZERO");
+  const bool use_gate_product_adjoint_skip_zero =
+      (product_adj_skip_zero_override >= 0)
+      ? (product_adj_skip_zero_override != 0)
+      : !edge_l1_active;
   const size_t radial_cache_capacity =
       (cache_gate_force_radials || cache_edge_l1_direct_main)
       ? edge_capacity * static_cast<size_t>(radial_func_count)
@@ -4905,9 +4932,6 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         std::copy(gate_body_values.begin(), gate_body_values.end(), gate_values_i);
       }
 	    } else {
-	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-	          two_layer_gate_scalar_count * gate_signal_stride)
-	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
 	      if (use_full_gate_batched_contraction) {
 	        // Gate values are formed after all local scalar rows are available.
 	      } else if (gate_scalars_basic_only) {
@@ -5843,16 +5867,6 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	        }
 	      }
 	    } else {
-	      if (static_cast<int>(two_layer_gate_full_weights_by_scalar.size()) !=
-	          two_layer_gate_scalar_count * gate_signal_stride)
-	        error->all(FLERR, "SUS2-SH full mu/scalar gate weight layout is inconsistent.");
-	      const int signal_major_reverse_override =
-	          env_flag_override("SUS2_LAMMPS_GATE_SIGNAL_MAJOR_REVERSE");
-	      const bool use_signal_major_reverse =
-	          !gate_scalars_basic_only &&
-	          signal_major_reverse_override != 0 &&
-	          static_cast<int>(two_layer_gate_full_weights_by_signal.size()) ==
-	              two_layer_gate_scalar_count * gate_signal_stride;
 	      if (use_full_gate_batched_contraction) {
 	        const double *__restrict scalar_adjoints =
 	            two_layer_gate_full_scalar_adjoint_cache.data() +
@@ -5907,12 +5921,14 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       if (edge_l1_active)
         seed_two_layer_gate_edge_l1_moment_adjoints(i,
                                                      nbh_energy_ders_wrt_moments);
-		    if (gate_needs_product_backprop) {
-		      if (compact_gate_moment_cache)
-		        backprop_two_layer_gate_products_compact(gate_moments);
-		      else
-		        backprop_two_layer_gate_products(gate_moments);
-		    }
+      if (gate_needs_product_backprop) {
+        if (compact_gate_moment_cache)
+          backprop_two_layer_gate_products_compact(
+              gate_moments, use_gate_product_adjoint_skip_zero);
+        else
+          backprop_two_layer_gate_products(
+              gate_moments, use_gate_product_adjoint_skip_zero);
+      }
 		    add_profile_time(profile_gate_v2,
 		                     profile_v2_times[kGateProfileV2GateForceSeedBackprop],
 		                     profile_v2_sub_start);

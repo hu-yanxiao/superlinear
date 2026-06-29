@@ -348,8 +348,8 @@ class PairSUS2MTP : public Pair {
   void prepare_two_layer_gate_edge_l1_layout();
 	  void prepare_two_layer_gate_product_layout();
 	  void forward_two_layer_gate_products();
-	  void backprop_two_layer_gate_products(const double *);
-	  void backprop_two_layer_gate_products_compact(const double *);
+	  void backprop_two_layer_gate_products(const double *, bool = false);
+	  void backprop_two_layer_gate_products_compact(const double *, bool = false);
 	  int gate_body_order_for_mu(int) const;
 	  void prepare_two_layer_gate_additive_ratios();
   double outer_type_coeff(int) const;
