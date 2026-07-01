@@ -1841,19 +1841,8 @@ double MLMTPR::RadialFirstCoeffDerivativeFromValue(double coeff_value) const
 
 bool MLMTPR::IsRedundantRadialSpeciesCoeff(int coeff_index) const
 {
-	const int radial_begin = RadialCoeffOffset();
-	const int block_size = RadialCoeffBlockSize();
-	const int rb_size = p_RadialBasis->rb_size;
-	if (coeff_index < radial_begin)
-		return false;
-	const int radial_end = radial_begin + radial_func_count * block_size;
-	if (coeff_index >= radial_end)
-		return false;
-
-	const int relative_index = coeff_index - radial_begin;
-	const int mu = relative_index / block_size;
-	const int in_block = relative_index % block_size;
-	return mu > 0 && in_block >= rb_size;
+	(void)coeff_index;
+	return false;
 }
 
 void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs) const
@@ -1976,7 +1965,7 @@ void MLMTPR::RandomizeRadialCoeffs(std::mt19937_64& generator, double radial_sca
 		for (int xi = 0; xi < rb_size; ++xi)
 			regression_coeffs[block_offset + xi] = radial_scale * uniform(generator);
 		for (int type = 0; type < species_count; ++type)
-			regression_coeffs[block_offset + rb_size + type] = 1.0;
+			regression_coeffs[block_offset + rb_size + type] = 2.0;
 	}
 	EnforcePositiveRadialFirstCoeffs();
 	if (TwoLayerGateUsesSharedRadial()) {

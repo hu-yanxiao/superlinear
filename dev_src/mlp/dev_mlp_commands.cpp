@@ -137,35 +137,51 @@ public:
 			    || (coeff_index >= e0_begin && coeff_index < e0_end)
 			    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
 		}
-			case kResidualStageE1: {
-				const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
-				const int gate_radial_end =
-					gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
-				const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
-				const int gate_additive_end =
-					gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
-				const int gate_type_begin = mtpr->TwoLayerGateTypeCoeffOffset();
-				const int gate_type_end =
-					gate_type_begin + mtpr->TwoLayerGateTypeCoeffCount();
-				const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
-				const int gate_weight_end =
-					gate_weight_begin + mtpr->TwoLayerGateWeightCount();
-				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
-				const int gate_edge_l1_end =
-					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
-				const int linear_begin = mtpr->LinearCoeffOffset();
-				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
-				return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
-				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
-				    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
-				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
-				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
-				    || (coeff_index >= linear_begin + mtpr->species_count
-				        && coeff_index < linear_end);
+		case kResidualStageE1: {
+			const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
+			const int gate_radial_end =
+				gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
+			const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
+			const int gate_additive_end =
+				gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
+			const int gate_type_begin = mtpr->TwoLayerGateTypeCoeffOffset();
+			const int gate_type_end =
+				gate_type_begin + mtpr->TwoLayerGateTypeCoeffCount();
+			const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
+			const int gate_weight_end =
+				gate_weight_begin + mtpr->TwoLayerGateWeightCount();
+			const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
+			const int gate_edge_l1_end =
+				gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
+			const int linear_begin = mtpr->LinearCoeffOffset();
+			const int linear_end = linear_begin + mtpr->LinearCoeffCount();
+			return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+			    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+			    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
+			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+			    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
+			    || (coeff_index >= linear_begin + mtpr->species_count
+			        && coeff_index < linear_end);
 		}
 		default:
 			return true;
 		}
+	}
+
+	bool CoeffActiveForProbe(int coeff_index) const
+	{
+		if (!stage_active_only)
+			return true;
+		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		if (mtpr != nullptr) {
+			std::vector<int> active_coeff_indices;
+			mtpr->BuildActiveCoeffIndices(active_coeff_indices, false);
+			if (std::find(active_coeff_indices.begin(),
+			              active_coeff_indices.end(),
+			              coeff_index) == active_coeff_indices.end())
+				return false;
+		}
+		return CoeffActiveForProbeStage(coeff_index);
 	}
 
 	Result Check(std::vector<Configuration>& configs,
@@ -193,7 +209,7 @@ public:
 		if (coeff_begin >= coeff_end)
 			ERROR("Invalid coefficient range for loss-gradient check.");
 		for (int i = coeff_begin; i < coeff_end; ++i) {
-			if (stage_active_only && !CoeffActiveForProbeStage(i))
+			if (!CoeffActiveForProbe(i))
 				continue;
 			const double original = p_mlip->Coeff()[i];
 			p_mlip->Coeff()[i] = original + displacement;
@@ -249,7 +265,7 @@ public:
 
 		std::vector<double> direction(coeff_count, 0.0);
 		for (int i = coeff_begin; i < coeff_end; ++i) {
-			if (stage_active_only && !CoeffActiveForProbeStage(i))
+			if (!CoeffActiveForProbe(i))
 				continue;
 			const int phase = (i - coeff_begin) % 5;
 			const double value = static_cast<double>(phase - 2);
