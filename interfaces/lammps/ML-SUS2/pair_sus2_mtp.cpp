@@ -2820,7 +2820,6 @@ void PairSUS2MTP::prepare_two_layer_gate_additive_ratios()
       static_cast<size_t>(species_count) * radial_func_count, 0.0);
   two_layer_gate_additive_ratio_valid.assign(species_count, 0);
   for (int jtype = 0; jtype < species_count; jtype++) {
-    const double out_coeff = outer_type_coeff(jtype);
     bool has_nonzero_additive = false;
     for (int mu = 0; mu < radial_func_count; mu++) {
       if (two_layer_gate_additive_coeff(jtype, mu) != 0.0) {
@@ -2828,21 +2827,27 @@ void PairSUS2MTP::prepare_two_layer_gate_additive_ratios()
         break;
       }
     }
-    if (std::abs(out_coeff) < 1.0e-300 && has_nonzero_additive)
-      error->one(FLERR, "SUS2-SH additive-node gate requires nonzero outer type coefficient.");
     two_layer_gate_additive_ratio_valid[jtype] = 1;
     const size_t ratio_offset = static_cast<size_t>(jtype) * radial_func_count;
-    for (int mu = 0; mu < radial_func_count; mu++)
+    for (int mu = 0; mu < radial_func_count; mu++) {
+      const double out_coeff = outer_type_coeff(jtype, mu);
+      if (std::abs(out_coeff) < 1.0e-300 && has_nonzero_additive)
+        error->one(FLERR, "SUS2-SH additive-node gate requires nonzero outer type coefficient.");
       two_layer_gate_additive_ratios[ratio_offset + mu] =
           out_coeff == 0.0 ? 0.0 : two_layer_gate_additive_coeff(jtype, mu) / out_coeff;
+    }
   }
 }
 
-double PairSUS2MTP::outer_type_coeff(int type) const
+double PairSUS2MTP::outer_type_coeff(int type, int mu) const
 {
   if (type < 0 || type >= species_count)
     error->one(FLERR, "SUS2-SH outer type coefficient index is out of range.");
-  return regression_coeffs[radial_coeffs_offset + radial_basis_size + type];
+  if (mu < 0 || mu >= radial_func_count)
+    error->one(FLERR, "SUS2-SH outer type coefficient mu index is out of range.");
+  return regression_coeffs[radial_coeffs_offset +
+                           mu * (radial_basis_size + species_count) +
+                           radial_basis_size + type];
 }
 
 double PairSUS2MTP::two_layer_gate_type_coeff(int type) const
@@ -2851,7 +2856,7 @@ double PairSUS2MTP::two_layer_gate_type_coeff(int type) const
     error->one(FLERR, "SUS2-SH gate type coefficient index is out of range.");
   if (static_cast<int>(two_layer_gate_type_coeffs.size()) == species_count)
     return two_layer_gate_type_coeffs[type];
-  return outer_type_coeff(type);
+  return outer_type_coeff(type, 0);
 }
 
 void PairSUS2MTP::ensure_two_layer_atom_buffers()
@@ -3359,11 +3364,6 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     }
   }
 
-  const double center_type_coeff =
-      use_gate_radial ? two_layer_gate_type_coeff(itype) : outer_type_coeff(itype);
-  const double outer_type_coeff_value =
-      use_gate_radial ? two_layer_gate_type_coeff(jtype) : outer_type_coeff(jtype);
-  const double species_factor = center_type_coeff * outer_type_coeff_value;
   if (use_gate_radial && two_layer_gate_shared_radial &&
       static_cast<int>(two_layer_gate_radial_coeffs.size()) < radial_func_count * R)
     error->one(FLERR, "SUS2-SH two-layer gate radial coefficient storage is inconsistent.");
@@ -3397,6 +3397,11 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
   for (int mu = 0; mu < radial_func_count; mu++) {
     const int k_ = mu_to_K[mu];
     const int radial_cache_index = per_mu_sigma ? mu : k_;
+    const double center_type_coeff =
+        use_gate_radial ? two_layer_gate_type_coeff(itype) : outer_type_coeff(itype, mu);
+    const double outer_type_coeff_value =
+        use_gate_radial ? two_layer_gate_type_coeff(jtype) : outer_type_coeff(jtype, mu);
+    const double species_factor = center_type_coeff * outer_type_coeff_value;
     double val = 0.0;
     double der = 0.0;
     if (use_gate_additive)
@@ -6524,10 +6529,8 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         int radial_cache_index = per_mu_sigma ? mu : k_;
         int offset_mu = mu * (R + C);
 
-        // SUS2-MLIP: Include species-dependent factors in radial basis calculation
-        // Original: regression_coeffs[C+2*C*C*K_ + mu*(R+C) + R + type_central/outer]
-        double species_factor = regression_coeffs[radial_coeffs_offset + R + itype] *
-                              regression_coeffs[radial_coeffs_offset + R + jtype];
+        // SUS2-MLIP: Include mu-local species-dependent factors in radial basis calculation.
+        double species_factor = outer_type_coeff(itype, mu) * outer_type_coeff(jtype, mu);
 
         #pragma omp simd reduction(+:val,der)
         for (int ri = 0; ri < R; ri++) {
@@ -7612,11 +7615,11 @@ access to the buffer size that is not provided in PFR.
       utils::logmesg(lmp, "radial_coeffs keyword not found, using defaults\n");
       for (int mu = 0; mu < radial_func_count; mu++) {
         for (int ri = 0; ri < radial_basis_size + species_count; ri++) {
-          if (ri < radial_basis_size) {
-            radial_basis_coeffs[mu * (radial_basis_size + species_count) + ri] = 1e-2;
-          } else {
-            radial_basis_coeffs[mu * (radial_basis_size + species_count) + ri] = 1.1;
-          }
+	          if (ri < radial_basis_size) {
+	            radial_basis_coeffs[mu * (radial_basis_size + species_count) + ri] = 1e-2;
+	          } else {
+	            radial_basis_coeffs[mu * (radial_basis_size + species_count) + ri] = 2.0;
+	          }
         }
       }
       utils::logmesg(lmp, "radial_basis_coeffs initialized to defaults using existing unified array\n");
@@ -8108,10 +8111,10 @@ access to the buffer size that is not provided in PFR.
         post_scalar_line = std::string(tfr.next_line());
         keyword = first_keyword(post_scalar_line);
       } else {
-	        two_layer_gate_type_coeffs.assign(species_count, 1.0);
-	        for (int type = 0; type < species_count; type++)
-	          two_layer_gate_type_coeffs[type] = outer_type_coeff(type);
-	      }
+        two_layer_gate_type_coeffs.assign(species_count, 1.0);
+        for (int type = 0; type < species_count; type++)
+          two_layer_gate_type_coeffs[type] = outer_type_coeff(type, 0);
+      }
       if (keyword != "two_layer_gate_weight_count")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_weight_count.");
       two_layer_gate_weight_count = parse_int_assignment(post_scalar_line);
@@ -8939,10 +8942,6 @@ access to the buffer size that is not provided in PFR.
       for (int j = 0; j < C; j++) {
         const int table_index = pair_to_table_index[i * C + j];
         if (table_index < 0) continue;
-        const double center_type_coeff =
-            regression_coeffs[C + 2 * C * C * K_scaling + R + i];
-        const double outer_type_coeff =
-            regression_coeffs[C + 2 * C * C * K_scaling + R + j];
         for (int n = 0; n < list_grid_size; n++) {
           const double dist = dr * n;
           for (int mu = 0; mu < radial_func_count; mu++) {
@@ -8954,8 +8953,10 @@ access to the buffer size that is not provided in PFR.
                 regression_coeffs[C + 2 * k_ * C * C + C * C + C * i + j], sigma);
 
             for (int xi = 0; xi < R; xi++) {
+              const double center_type_coeff = outer_type_coeff(i, mu);
+              const double outer_type_coeff_value = outer_type_coeff(j, mu);
               factor = regression_coeffs[C + 2 * C * C * K_scaling + mu * (R + C) + xi] *
-                       center_type_coeff * outer_type_coeff;
+                       center_type_coeff * outer_type_coeff_value;
               radial_list[table_index][n][mu] += radial_basis->radial_basis_vals[xi] * factor;
               radial_der_list[table_index][n][mu] += radial_basis->radial_basis_ders[xi] * factor;
             }

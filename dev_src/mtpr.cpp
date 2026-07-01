@@ -777,6 +777,27 @@ int MLMTPR::RadialCoeffBlockSize() const
 	return p_RadialBasis->rb_size + species_count;
 }
 
+int MLMTPR::OuterTypeCoeffIndex(int type_outer, int mu) const
+{
+	if (type_outer < 0 || type_outer >= species_count)
+		ERROR("SUS2-SH outer type coefficient type index is out of range");
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("SUS2-SH outer type coefficient mu index is out of range");
+	if (p_RadialBasis == nullptr)
+		ERROR("SUS2-SH outer type coefficient requires initialized radial basis");
+	return RadialCoeffOffset() + mu * RadialCoeffBlockSize()
+		+ p_RadialBasis->rb_size + type_outer;
+}
+
+double MLMTPR::OuterTypeCoeff(int type_outer, int mu) const
+{
+	const int coeff_index = OuterTypeCoeffIndex(type_outer, mu);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	ERROR("SUS2-SH outer type coefficient storage is inconsistent");
+	return 0.0;
+}
+
 int MLMTPR::BaseNonlinearCoeffCount() const
 {
 	return RadialCoeffOffset() + radial_func_count * RadialCoeffBlockSize();
@@ -2637,8 +2658,8 @@ void MLMTPR::Load(const string& filename)
 				for (int j = 0; j < p_RadialBasis->rb_size + species_count; j++)
 				{	regression_coeffs[species_count+2*species_count*species_count* K_ +pairs_count*radial_func_count*(p_RadialBasis->rb_size + species_count) +
 					i*(p_RadialBasis->rb_size + species_count) + j] = 1e-2;
-                                        if (j >= p_RadialBasis->rb_size) {regression_coeffs[species_count+2*species_count*species_count* K_ +pairs_count*radial_func_count*(p_RadialBasis->rb_size + species_count) +
-                                        i*(p_RadialBasis->rb_size + species_count) + j] = 1.1; }
+	                                        if (j >= p_RadialBasis->rb_size) {regression_coeffs[species_count+2*species_count*species_count* K_ +pairs_count*radial_func_count*(p_RadialBasis->rb_size + species_count) +
+	                                        i*(p_RadialBasis->rb_size + species_count) + j] = 2.0; }
                                 }             
 			//	regression_coeffs[pairs_count*radial_func_count*(p_RadialBasis->rb_size) +
 			//		i*(p_RadialBasis->rb_size) + min(i, p_RadialBasis->rb_size)] = 1e-3;
@@ -7221,11 +7242,6 @@ void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 				for (int xi = 0; xi < p_RadialBasis->rb_size * 5; xi++)
 					der_[eval_block * R * 5 + xi] = p_RadialBasis->rb_ders[xi] * scaling;
 			}
-			const int shared_type_offset = C + 2 * C * C * K_ + R;
-			const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
-			const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-			const double type_scale = center_type_coeff * outer_type_coeff;
-
 			for (int mu = 0; mu < K; mu++) {
 				const int eval_block = mu_to_radial_eval_block_[mu];
 				const int radial_offset = C + 2 * C * C * K_ + mu * (R + C);
@@ -7244,11 +7260,13 @@ void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 			mu_contract_ders[mu] = dot_der;
 		}
 
-		for (int i = 0; i < alpha_index_basic_count; i++) {
-			double val = 0, der = 0;
-			int mu = alpha_index_basic_.comp0[i];
-			val = type_scale * mu_contract_vals[mu];
-			der = type_scale * mu_contract_ders[mu];
+			for (int i = 0; i < alpha_index_basic_count; i++) {
+				double val = 0, der = 0;
+				int mu = alpha_index_basic_.comp0[i];
+				const double type_scale =
+					OuterTypeCoeff(type_central, mu) * OuterTypeCoeff(type_outer, mu);
+				val = type_scale * mu_contract_vals[mu];
+				der = type_scale * mu_contract_ders[mu];
 			int k = alpha_index_basic_.comp1[i] + alpha_index_basic_.comp2[i] + alpha_index_basic_.comp3[i];
 			double powk = 1.0 / dist_powers_[k];
 			val *= powk;
@@ -7409,7 +7427,6 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 			throw MlipException("Too few species count in the MTP potential!");
 
 			const int radial_coeff_base = C + 2 * C * C * K_;
-			const int shared_type_offset = radial_coeff_base + R;
 			const double site_linear_coeff = linear_coeffs[nbh.my_type];
 			const size_t neighbor_count = static_cast<size_t>(nbh.count);
 			const size_t power_stride = static_cast<size_t>(max_alpha_index_basic_);
@@ -7528,16 +7545,15 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 				const Vector3& neighb_vec = nbh.vecs[j];
 				const int type_outer = nbh.types[j];
 				const double r = nbh.dists[j];
-				const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
-				const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-				const double type_scale = center_type_coeff * outer_type_coeff;
 				const NeighborGradCache cache = neighbor_cache(j);
 
 				prepare_neighbor_state(neighb_vec, type_outer, r, cache);
 
-				for (int i = 0; i < alpha_index_basic_count; i++) {
-					const int mu = alpha_index_basic_.comp0[i];
-					const int k = basic_total_degree_cache_[i];
+					for (int i = 0; i < alpha_index_basic_count; i++) {
+						const int mu = alpha_index_basic_.comp0[i];
+						const double type_scale =
+							OuterTypeCoeff(type_central, mu) * OuterTypeCoeff(type_outer, mu);
+						const int k = basic_total_degree_cache_[i];
 					const double powk = 1.0 / cache.dist_powers[k];
 					const double pow0 = cache.coords_powers_x[alpha_index_basic_.comp1[i]];
 					const double pow1 = cache.coords_powers_y[alpha_index_basic_.comp2[i]];
@@ -7664,14 +7680,21 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 					const Vector3& neighb_vec = nbh.vecs[j];
 					const int type_outer = nbh.types[j];
 					const double r = nbh.dists[j];
-					const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
-					const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-					const double type_scale = center_type_coeff * outer_type_coeff;
 					const NeighborGradCache cache = neighbor_cache(j);
 
-					for (int i = 0; i < alpha_index_basic_count; i++) {
-						const int mu = alpha_index_basic_.comp0[i];
-						const int scaling_block = basic_scaling_block_cache_[i];
+						for (int i = 0; i < alpha_index_basic_count; i++) {
+							const int mu = alpha_index_basic_.comp0[i];
+							const double center_type_coeff =
+								OuterTypeCoeff(type_central, mu);
+							const double outer_type_coeff =
+								OuterTypeCoeff(type_outer, mu);
+							const double type_scale =
+								center_type_coeff * outer_type_coeff;
+							const int center_type_coeff_index =
+								OuterTypeCoeffIndex(type_central, mu);
+							const int outer_type_coeff_index =
+								OuterTypeCoeffIndex(type_outer, mu);
+							const int scaling_block = basic_scaling_block_cache_[i];
 						const int radial_eval_block = basic_radial_eval_block_cache_[i];
 						const int k = basic_total_degree_cache_[i];
 						const int radial_offset = basic_radial_offset_cache_[i];
@@ -7724,8 +7747,8 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 						buff_site_energy_ders_[j][2] += site_linear_coeff * site_energy_ders_wrt_moments_[i] * jac_z;
 
 						const int sigma_coeff_offset = C + 2 * C * C * scaling_block + type_central * C + type_outer;
-						grad_out[shared_type_offset + type_central] += dloss_weight * center_grad;
-						grad_out[shared_type_offset + type_outer] += dloss_weight * outer_grad;
+						grad_out[center_type_coeff_index] += dloss_weight * center_grad;
+						grad_out[outer_type_coeff_index] += dloss_weight * outer_grad;
 						grad_out[sigma_coeff_offset] += dloss_weight * sigma_grad;
 						grad_out[sigma_coeff_offset + C * C] += dloss_weight * sigma_ss_grad;
 					}
@@ -7752,15 +7775,22 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 					const Vector3& se_weight_vec = se_ders_weights[j];
 					const int type_outer = nbh.types[j];
 					const double r = nbh.dists[j];
-					const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
-					const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-					const double type_scale = center_type_coeff * outer_type_coeff;
 					const double inv_r = 1.0 / r;
 					const NeighborGradCache cache = neighbor_cache(j);
 
-					for (int i = 0; i < alpha_index_basic_count; i++) {
-						const int mu = alpha_index_basic_.comp0[i];
-						const int scaling_block = basic_scaling_block_cache_[i];
+						for (int i = 0; i < alpha_index_basic_count; i++) {
+							const int mu = alpha_index_basic_.comp0[i];
+							const double center_type_coeff =
+								OuterTypeCoeff(type_central, mu);
+							const double outer_type_coeff =
+								OuterTypeCoeff(type_outer, mu);
+							const double type_scale =
+								center_type_coeff * outer_type_coeff;
+							const int center_type_coeff_index =
+								OuterTypeCoeffIndex(type_central, mu);
+							const int outer_type_coeff_index =
+								OuterTypeCoeffIndex(type_outer, mu);
+							const int scaling_block = basic_scaling_block_cache_[i];
 						const int radial_eval_block = basic_radial_eval_block_cache_[i];
 						const int k = basic_total_degree_cache_[i];
 						const int radial_offset = basic_radial_offset_cache_[i];
@@ -7924,8 +7954,8 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 							+ se_weight_vec[2] * derz_ss;
 
 						const int sigma_coeff_offset = C + 2 * C * C * scaling_block + type_central * C + type_outer;
-						grad_out[shared_type_offset + type_central] += dloss_weight * center_grad + coord_weight * outer_type_coeff * coord_grad;
-						grad_out[shared_type_offset + type_outer] += dloss_weight * outer_grad + coord_weight * center_type_coeff * coord_grad;
+						grad_out[center_type_coeff_index] += dloss_weight * center_grad + coord_weight * outer_type_coeff * coord_grad;
+						grad_out[outer_type_coeff_index] += dloss_weight * outer_grad + coord_weight * center_type_coeff * coord_grad;
 						grad_out[sigma_coeff_offset] += dloss_weight * sigma_grad + coord_weight * type_scale * coord_grad_s;
 						grad_out[sigma_coeff_offset + C * C] += dloss_weight * sigma_ss_grad + coord_weight * type_scale * coord_grad_ss;
 					}
@@ -7995,8 +8025,6 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 	                       * static_cast<double>(radial_func_count)
 	                       * static_cast<double>(C)
 	                       * static_cast<double>(C));
-	const int shared_type_offset = radial_begin + R;
-
 	for (int type_central = 0; type_central < C; ++type_central) {
 		for (int type_outer = 0; type_outer < C; ++type_outer) {
 			for (int q = 0; q < grid_size; ++q) {
@@ -8019,17 +8047,18 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 					double dot_der = 0.0;
 					double dot_der_slope = 0.0;
 					double dot_der_shift = 0.0;
-					for (int xi = 0; xi < R; ++xi) {
-						const double radial_coeff = regression_coeffs[radial_offset + xi];
-						dot_der += radial_coeff * p_RadialBasis->rb_ders[xi] * scaling;
-						dot_der_slope += radial_coeff * p_RadialBasis->rb_ders[2 * R + xi] * scaling;
-						dot_der_shift += radial_coeff * p_RadialBasis->rb_ders[4 * R + xi] * scaling;
-					}
-
-					const double center_type_coeff = regression_coeffs[shared_type_offset + type_central];
-					const double outer_type_coeff = regression_coeffs[shared_type_offset + type_outer];
-					const double type_scale = center_type_coeff * outer_type_coeff;
-					const double radial_der = type_scale * dot_der;
+						for (int xi = 0; xi < R; ++xi) {
+							const double radial_coeff = regression_coeffs[radial_offset + xi];
+							dot_der += radial_coeff * p_RadialBasis->rb_ders[xi] * scaling;
+							dot_der_slope += radial_coeff * p_RadialBasis->rb_ders[2 * R + xi] * scaling;
+							dot_der_shift += radial_coeff * p_RadialBasis->rb_ders[4 * R + xi] * scaling;
+						}
+						const double center_type_coeff =
+							OuterTypeCoeff(type_central, mu);
+						const double outer_type_coeff =
+							OuterTypeCoeff(type_outer, mu);
+						const double type_scale = center_type_coeff * outer_type_coeff;
+						const double radial_der = type_scale * dot_der;
 
 					out_penalty_accumulator += weight * radial_der * radial_der;
 					if (out_penalty_grad_accumulator == nullptr)
@@ -8039,10 +8068,10 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 					for (int xi = 0; xi < R; ++xi)
 						(*out_penalty_grad_accumulator)[radial_offset + xi] +=
 							common_grad * type_scale * p_RadialBasis->rb_ders[xi] * scaling;
-					(*out_penalty_grad_accumulator)[shared_type_offset + type_central] +=
-						common_grad * outer_type_coeff * dot_der;
-					(*out_penalty_grad_accumulator)[shared_type_offset + type_outer] +=
-						common_grad * center_type_coeff * dot_der;
+						(*out_penalty_grad_accumulator)[OuterTypeCoeffIndex(type_central, mu)] +=
+							common_grad * outer_type_coeff * dot_der;
+						(*out_penalty_grad_accumulator)[OuterTypeCoeffIndex(type_outer, mu)] +=
+							common_grad * center_type_coeff * dot_der;
 					(*out_penalty_grad_accumulator)[slope_offset] +=
 						common_grad * type_scale * dot_der_slope;
 					(*out_penalty_grad_accumulator)[shift_offset] +=

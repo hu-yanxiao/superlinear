@@ -573,8 +573,7 @@ public:
 		kGateMuBufferAll = (1 << 8) - 1
 	};
 		void PrepareTwoLayerGateNeighborMuBuffers(int type_outer,
-		                                          double center_type_coeff,
-		                                          double outer_type_coeff,
+		                                          int type_center,
 		                                          const double* gate_signal_by_mu,
 		                                          int neighbor_atom_index = -1,
 		                                          int buffer_mask = kGateMuBufferAll);
@@ -584,8 +583,6 @@ public:
 		                                      int buffer_mask = kGateMuBufferAll);
 		void PrepareTwoLayerGatePairMuBuffers(int type_center,
 		                                      int type_outer,
-		                                      double center_type_coeff,
-		                                      double outer_type_coeff,
 		                                      const double* center_gate_signal_by_mu,
 		                                      int center_atom_index,
 		                                      const double* neighbor_gate_signal_by_mu,
@@ -626,6 +623,8 @@ public:
 	int ScalingCoeffCount() const;
 		int RadialCoeffOffset() const;
 		int RadialCoeffBlockSize() const;
+		int OuterTypeCoeffIndex(int type_outer, int mu) const;
+		double OuterTypeCoeff(int type_outer, int mu) const;
 		int BaseNonlinearCoeffCount() const;
 						bool TwoLayerGateUsesSharedRadial() const;
 						bool TwoLayerGateUsesBodyLinearCombo() const;

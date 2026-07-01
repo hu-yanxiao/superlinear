@@ -736,11 +736,7 @@ public:
 		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
 		active_two_layer_gate_values_ = nullptr;
 
-		const int C = species_count;
-		const int R = p_RadialBasis->rb_size;
-		const int radial_coeff_base = C + 2 * C * C * K_;
-		const int shared_type_offset = radial_coeff_base + R;
-		std::vector<double> zero_gate_signal(radial_func_count, 0.0);
+			std::vector<double> zero_gate_signal(radial_func_count, 0.0);
 		std::vector<double> base_scalars;
 		std::vector<double> scaled_scalars;
 		DevGateTypeSeparationResult result;
@@ -752,30 +748,27 @@ public:
 			const int atom_limit = max_atoms <= 0
 				? configs[cfg_index].size()
 				: std::min(max_atoms, configs[cfg_index].size());
-			for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
-				const Neighborhood& nbh = neighborhoods[atom_index];
-				const int type_central = nbh.my_type;
-				if (type_central < 0 || type_central >= species_count)
-					ERROR("SUS2-SH gate type separation check found invalid center type");
-				const double center_type_coeff =
-					regression_coeffs[shared_type_offset + type_central];
+				for (int atom_index = 0; atom_index < atom_limit; ++atom_index) {
+					const Neighborhood& nbh = neighborhoods[atom_index];
+					const int type_central = nbh.my_type;
+					if (type_central < 0 || type_central >= species_count)
+						ERROR("SUS2-SH gate type separation check found invalid center type");
 
-				for (int j = 0; j < nbh.count; ++j) {
-					const int type_outer = nbh.types[j];
-					if (type_outer < 0 || type_outer >= species_count)
-						ERROR("SUS2-SH gate type separation check found invalid neighbor type");
-					const double outer_type_coeff =
-						regression_coeffs[shared_type_offset + type_outer];
-					FillGateTypeCoeffsForProbe(1.0);
+					for (int j = 0; j < nbh.count; ++j) {
+						const int type_outer = nbh.types[j];
+						if (type_outer < 0 || type_outer >= species_count)
+							ERROR("SUS2-SH gate type separation check found invalid neighbor type");
+						FillGateTypeCoeffsForProbe(1.0);
 					SetGateTypeCoeffForProbe(type_outer, outer_type_probe);
 					PrepareTwoLayerGateNeighborMuBuffers(
-						type_outer, center_type_coeff, outer_type_coeff,
+						type_outer, type_central,
 						zero_gate_signal.data(), nbh.inds[j],
 						kGateMuBufferTypeScale);
-					const double expected =
-						center_type_coeff * outer_type_coeff;
-					for (int mu = 0; mu < radial_func_count; ++mu) {
-						const double actual =
+						for (int mu = 0; mu < radial_func_count; ++mu) {
+							const double expected =
+								OuterTypeCoeff(type_central, mu)
+								* OuterTypeCoeff(type_outer, mu);
+							const double actual =
 							two_layer_gate_type_scale_mu_buffer_[mu];
 						const double old_abs = result.outer_worst_abs_err;
 						UpdateWorst(expected, actual,
