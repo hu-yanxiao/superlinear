@@ -2853,6 +2853,36 @@ double PairSUS2MTP::outer_type_coeff(int type, int mu) const
                            radial_basis_size + type];
 }
 
+bool PairSUS2MTP::detect_legacy_global_outer_type_coeffs() const
+{
+  if (two_layer_gate_enabled || radial_func_count <= 1)
+    return false;
+
+  const double tol = 1.0e-12;
+  bool first_mu_has_nondefault_type_coeff = false;
+  for (int type = 0; type < species_count; type++) {
+    if (std::abs(outer_type_coeff(type, 0) - 1.0) > tol) {
+      first_mu_has_nondefault_type_coeff = true;
+      break;
+    }
+  }
+  if (!first_mu_has_nondefault_type_coeff)
+    return false;
+
+  for (int mu = 1; mu < radial_func_count; mu++)
+    for (int type = 0; type < species_count; type++)
+      if (std::abs(outer_type_coeff(type, mu) - 1.0) > tol)
+        return false;
+  return true;
+}
+
+double PairSUS2MTP::base_outer_type_coeff(int type, int mu) const
+{
+  if (legacy_global_outer_type_coeffs)
+    return outer_type_coeff(type, 0);
+  return outer_type_coeff(type, mu);
+}
+
 double PairSUS2MTP::two_layer_gate_type_coeff(int type, int mu) const
 {
   if (type < 0 || type >= species_count)
@@ -3407,9 +3437,9 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     const int k_ = mu_to_K[mu];
     const int radial_cache_index = per_mu_sigma ? mu : k_;
     const double center_type_coeff =
-        use_gate_radial ? two_layer_gate_type_coeff(itype, mu) : outer_type_coeff(itype, mu);
+        use_gate_radial ? two_layer_gate_type_coeff(itype, mu) : base_outer_type_coeff(itype, mu);
     const double outer_type_coeff_value =
-        use_gate_radial ? two_layer_gate_type_coeff(jtype, mu) : outer_type_coeff(jtype, mu);
+        use_gate_radial ? two_layer_gate_type_coeff(jtype, mu) : base_outer_type_coeff(jtype, mu);
     const double species_factor = center_type_coeff * outer_type_coeff_value;
     double val = 0.0;
     double der = 0.0;
@@ -6539,7 +6569,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         int offset_mu = mu * (R + C);
 
         // SUS2-MLIP: Include mu-local species-dependent factors in radial basis calculation.
-        double species_factor = outer_type_coeff(itype, mu) * outer_type_coeff(jtype, mu);
+        double species_factor = base_outer_type_coeff(itype, mu) * base_outer_type_coeff(jtype, mu);
 
         #pragma omp simd reduction(+:val,der)
         for (int ri = 0; ri < R; ri++) {
@@ -6972,6 +7002,7 @@ access to the buffer size that is not provided in PFR.
   std::vector<double> alpha_times_coeff_buffer;
   sh_body_order = 0;
   sh_scalar_body_order.clear();
+  legacy_global_outer_type_coeffs = false;
   two_layer_gate_enabled = false;
   two_layer_gate_shared_radial = false;
   two_layer_gate_body_linear_combo = true;
@@ -8383,6 +8414,9 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "Error reading MTP file. Moment coefficients not found.");
       for (int i = 0; i < alpha_scalar_count; i++) { linear_coeffs[i] = line_tokens.next_double(); }
     }
+    legacy_global_outer_type_coeffs = detect_legacy_global_outer_type_coeffs();
+    if (legacy_global_outer_type_coeffs)
+      utils::logmesg(lmp, "Detected legacy global outer type coefficients; no-gate base radial uses mu=0 type coefficients.\n");
   }    // Proc 0
 
   // ---------- CRITICAL FIX: Broadcast ALL single values BEFORE allocating arrays ----------
@@ -8452,6 +8486,8 @@ access to the buffer size that is not provided in PFR.
                                     zbl_pair_constants);
   }
   int two_layer_gate_enabled_int = two_layer_gate_enabled ? 1 : 0;
+  int legacy_global_outer_type_coeffs_int =
+      legacy_global_outer_type_coeffs ? 1 : 0;
   int two_layer_gate_shared_radial_int = two_layer_gate_shared_radial ? 1 : 0;
   int two_layer_gate_body_linear_combo_int =
       two_layer_gate_body_linear_combo ? 1 : 0;
@@ -8462,6 +8498,7 @@ access to the buffer size that is not provided in PFR.
   int two_layer_gate_edge_l1_enabled_int =
       two_layer_gate_edge_l1_enabled ? 1 : 0;
   MPI_Bcast(&two_layer_gate_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&legacy_global_outer_type_coeffs_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_shared_radial_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_body_linear_combo_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_full_scalar_weights_int, 1, MPI_INT, 0, world);
@@ -8469,6 +8506,8 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(&two_layer_residual_enabled_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_edge_l1_enabled_int, 1, MPI_INT, 0, world);
   two_layer_gate_enabled = (two_layer_gate_enabled_int != 0);
+  legacy_global_outer_type_coeffs =
+      (legacy_global_outer_type_coeffs_int != 0);
   two_layer_gate_shared_radial = (two_layer_gate_shared_radial_int != 0);
   two_layer_gate_body_linear_combo =
       (two_layer_gate_body_linear_combo_int != 0);
@@ -8973,8 +9012,8 @@ access to the buffer size that is not provided in PFR.
                 regression_coeffs[C + 2 * k_ * C * C + C * C + C * i + j], sigma);
 
             for (int xi = 0; xi < R; xi++) {
-              const double center_type_coeff = outer_type_coeff(i, mu);
-              const double outer_type_coeff_value = outer_type_coeff(j, mu);
+              const double center_type_coeff = base_outer_type_coeff(i, mu);
+              const double outer_type_coeff_value = base_outer_type_coeff(j, mu);
               factor = regression_coeffs[C + 2 * C * C * K_scaling + mu * (R + C) + xi] *
                        center_type_coeff * outer_type_coeff_value;
               radial_list[table_index][n][mu] += radial_basis->radial_basis_vals[xi] * factor;

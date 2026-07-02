@@ -143,6 +143,7 @@ class PairSUS2MTP : public Pair {
   double *radial_basis_coeffs;        // These are the radial basis coeffs (c)
   int radial_func_count;              // Number of radial bases (mu_max)
   int radial_basis_size;              // Number of elements in bases
+  bool legacy_global_outer_type_coeffs = false;
   
   // Cutoff values are now managed by radial_basis object
   // Access via radial_basis->min_cutoff and radial_basis->max_cutoff
@@ -343,18 +344,20 @@ class PairSUS2MTP : public Pair {
   int two_layer_gate_edge_l1_weighted_stride() const;
   int two_layer_gate_comm_stride() const;
   double two_layer_gate_mu_signal(const double *, int) const;
-	  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
-	  void prepare_two_layer_gate_weight_layouts();
+  void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
+  void prepare_two_layer_gate_weight_layouts();
   void prepare_two_layer_gate_edge_l1_layout();
-	  void prepare_two_layer_gate_product_layout();
-	  void forward_two_layer_gate_products();
-	  void backprop_two_layer_gate_products(const double *, bool = false);
-	  void backprop_two_layer_gate_products_compact(const double *, bool = false);
-	  int gate_body_order_for_mu(int) const;
-	  void prepare_two_layer_gate_additive_ratios();
-	  double outer_type_coeff(int, int) const;
+  void prepare_two_layer_gate_product_layout();
+  void forward_two_layer_gate_products();
+  void backprop_two_layer_gate_products(const double *, bool = false);
+  void backprop_two_layer_gate_products_compact(const double *, bool = false);
+  int gate_body_order_for_mu(int) const;
+  void prepare_two_layer_gate_additive_ratios();
+  double outer_type_coeff(int, int) const;
+  bool detect_legacy_global_outer_type_coeffs() const;
+  double base_outer_type_coeff(int, int) const;
   double two_layer_gate_type_coeff(int, int) const;
-	  void compute_two_layer_gate_sh(int, int);
+  void compute_two_layer_gate_sh(int, int);
   void compute_zbl(int, int);
   void accumulate_zbl_pair(int, int, int, int, const double *, double,
                            int, int);

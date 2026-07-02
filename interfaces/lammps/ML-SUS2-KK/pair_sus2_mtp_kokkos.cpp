@@ -1081,10 +1081,13 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
           radial_basis->calc_radial_basis_ders(dist, scal, s, sigma);
 
           // 3. Apply coefficients and accumulate to preinterpolation table
+          const int type_coeff_mu = legacy_global_outer_type_coeffs ? 0 : mu;
+          const int type_coeff_offset =
+              radial_coeffs_offset + type_coeff_mu * (R + C) + R;
           for (int xi = 0; xi < R; xi++) {
             double factor = regression_coeffs[C + 2*pairs_count*K_ + mu*(R+C) + xi] *
-                           regression_coeffs[C + 2*pairs_count*K_ + R + i] *
-                           regression_coeffs[C + 2*pairs_count*K_ + R + j];
+                           regression_coeffs[type_coeff_offset + i] *
+                           regression_coeffs[type_coeff_offset + j];
 
             const double value = radial_basis->radial_basis_vals[xi] * factor;
             const double deriv = radial_basis->radial_basis_ders[xi] * factor;
@@ -1262,9 +1265,12 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
 
   const F_FLOAT scal = d_regression_coeffs[scal_idx];
   const F_FLOAT s_param = d_regression_coeffs[s_idx];
+  const int type_coeff_mu = legacy_global_outer_type_coeffs ? 0 : mu;
+  const int type_coeff_offset =
+      radial_coeffs_offset + d_mu_radial_offset(type_coeff_mu) + radial_basis_size;
   const F_FLOAT species_factor =
-      d_regression_coeffs[radial_coeffs_offset + radial_basis_size + itype] *
-      d_regression_coeffs[radial_coeffs_offset + radial_basis_size + jtype];
+      d_regression_coeffs[type_coeff_offset + itype] *
+      d_regression_coeffs[type_coeff_offset + jtype];
   const bool use_laguerre =
       radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P ||
       radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
