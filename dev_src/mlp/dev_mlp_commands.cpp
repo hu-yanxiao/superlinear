@@ -706,19 +706,22 @@ public:
 	{
 	}
 
-	void SetGateTypeCoeffForProbe(int type, double value)
-	{
-		if (type < 0 || type >= species_count)
-			ERROR("SUS2-SH gate type separation check found invalid type index");
-		if (static_cast<int>(two_layer_gate_type_coeffs_.size()) != species_count)
-			ERROR("SUS2-SH gate type coefficient block has inconsistent size");
-		two_layer_gate_type_coeffs_[type] = value;
-		const int coeff_index = TwoLayerGateTypeCoeffIndex(type);
-		if (coeff_index < 0
-		    || coeff_index >= static_cast<int>(regression_coeffs.size()))
-			ERROR("SUS2-SH gate type coefficient index is out of range");
-		regression_coeffs[coeff_index] = value;
-	}
+		void SetGateTypeCoeffForProbe(int type, double value)
+		{
+			if (type < 0 || type >= species_count)
+				ERROR("SUS2-SH gate type separation check found invalid type index");
+			if (static_cast<int>(two_layer_gate_type_coeffs_.size())
+			    != species_count * radial_func_count)
+				ERROR("SUS2-SH gate type coefficient block has inconsistent size");
+			for (int mu = 0; mu < radial_func_count; ++mu) {
+				two_layer_gate_type_coeffs_[type * radial_func_count + mu] = value;
+				const int coeff_index = TwoLayerGateTypeCoeffIndex(type, mu);
+				if (coeff_index < 0
+				    || coeff_index >= static_cast<int>(regression_coeffs.size()))
+					ERROR("SUS2-SH gate type coefficient index is out of range");
+				regression_coeffs[coeff_index] = value;
+			}
+		}
 
 	void FillGateTypeCoeffsForProbe(double value)
 	{
@@ -734,8 +737,8 @@ public:
 	{
 		if (!two_layer_gate_enabled_)
 			ERROR("Model does not have two-layer gate enabled.");
-		if (TwoLayerGateTypeCoeffCount() != species_count)
-			ERROR("SUS2-SH gate type separation check requires one gate type coefficient per species.");
+		if (TwoLayerGateTypeCoeffCount() != species_count * radial_func_count)
+			ERROR("SUS2-SH gate type separation check requires one gate type coefficient per species and mu.");
 		if (radial_func_count <= 0)
 			ERROR("SUS2-SH gate type separation check found no radial channels.");
 		if (!std::isfinite(gate_type_scale) || gate_type_scale == 0.0)
@@ -1723,7 +1726,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
-				"         --two-layer-gate (uses exact body-order k+1 scalar buckets),\n"
+				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 			"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
 			"         --two-layer-gate-shared-radial (default for gate models),\n"

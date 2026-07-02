@@ -2264,7 +2264,10 @@ int PairSUS2MTP::gate_body_order_for_mu(int mu) const
     return two_layer_gate_mu_body_order[mu];
   if (L_max <= 0)
     error->one(FLERR, "SUS2-SH two-layer gate has invalid L_max.");
-  return mu / L_max + 2;
+  const int raw_body_order = mu / L_max + 2;
+  return two_layer_gate_body_order_max >= 2
+      ? std::min(raw_body_order, two_layer_gate_body_order_max)
+      : raw_body_order;
 }
 
 bool PairSUS2MTP::is_static_fixed_type(int zero_based_type) const
@@ -2850,13 +2853,19 @@ double PairSUS2MTP::outer_type_coeff(int type, int mu) const
                            radial_basis_size + type];
 }
 
-double PairSUS2MTP::two_layer_gate_type_coeff(int type) const
+double PairSUS2MTP::two_layer_gate_type_coeff(int type, int mu) const
 {
   if (type < 0 || type >= species_count)
     error->one(FLERR, "SUS2-SH gate type coefficient index is out of range.");
+  if (mu < 0 || mu >= radial_func_count)
+    error->one(FLERR, "SUS2-SH gate type coefficient mu index is out of range.");
+  const int per_mu_count = species_count * radial_func_count;
+  if (static_cast<int>(two_layer_gate_type_coeffs.size()) == per_mu_count)
+    return two_layer_gate_type_coeffs[
+        static_cast<size_t>(type) * radial_func_count + mu];
   if (static_cast<int>(two_layer_gate_type_coeffs.size()) == species_count)
     return two_layer_gate_type_coeffs[type];
-  return outer_type_coeff(type, 0);
+  return outer_type_coeff(type, mu);
 }
 
 void PairSUS2MTP::ensure_two_layer_atom_buffers()
@@ -3398,9 +3407,9 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     const int k_ = mu_to_K[mu];
     const int radial_cache_index = per_mu_sigma ? mu : k_;
     const double center_type_coeff =
-        use_gate_radial ? two_layer_gate_type_coeff(itype) : outer_type_coeff(itype, mu);
+        use_gate_radial ? two_layer_gate_type_coeff(itype, mu) : outer_type_coeff(itype, mu);
     const double outer_type_coeff_value =
-        use_gate_radial ? two_layer_gate_type_coeff(jtype) : outer_type_coeff(jtype, mu);
+        use_gate_radial ? two_layer_gate_type_coeff(jtype, mu) : outer_type_coeff(jtype, mu);
     const double species_factor = center_type_coeff * outer_type_coeff_value;
     double val = 0.0;
     double der = 0.0;
@@ -7990,8 +7999,6 @@ access to the buffer size that is not provided in PFR.
       if (first_keyword(post_scalar_line) != "two_layer_gate_body_order_max")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_body_order_max.");
       two_layer_gate_body_order_max = parse_int_assignment(post_scalar_line);
-      if (two_layer_gate_body_order_max != sh_k_max + 1)
-        error->one(FLERR, "SUS2-SH mu-body-order gate body order should be sh_k_max + 1.");
       if (two_layer_gate_body_order_max < 2 ||
           two_layer_gate_body_order_max > sh_body_order)
         error->one(FLERR, "SUS2-SH mu-body-order gate body order is out of range.");
@@ -8098,9 +8105,11 @@ access to the buffer size that is not provided in PFR.
 	        two_layer_gate_additive_coeffs.assign(
 	            static_cast<size_t>(species_count) * radial_func_count, 1.0 / 12.0);
 	      }
-	      if (keyword == "two_layer_gate_type_coeff_count") {
-	        const int gate_type_count = parse_int_assignment(post_scalar_line);
-	        if (gate_type_count != species_count)
+      if (keyword == "two_layer_gate_type_coeff_count") {
+        const int gate_type_count = parse_int_assignment(post_scalar_line);
+        const int expected_gate_type_count = species_count * radial_func_count;
+        if (gate_type_count != expected_gate_type_count &&
+            gate_type_count != species_count)
           error->one(FLERR, "SUS2-SH two-layer gate type coefficient count is inconsistent.");
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "two_layer_gate_type_coeffs")
@@ -8108,12 +8117,25 @@ access to the buffer size that is not provided in PFR.
         two_layer_gate_type_coeffs = parse_double_list_line(post_scalar_line);
         if (static_cast<int>(two_layer_gate_type_coeffs.size()) != gate_type_count)
           error->one(FLERR, "SUS2-SH two-layer gate type coeff list has wrong size.");
+        if (gate_type_count == species_count) {
+          std::vector<double> expanded(
+              static_cast<size_t>(species_count) * radial_func_count, 0.0);
+          for (int type = 0; type < species_count; type++)
+            for (int mu = 0; mu < radial_func_count; mu++)
+              expanded[static_cast<size_t>(type) * radial_func_count + mu] =
+                  two_layer_gate_type_coeffs[type];
+          two_layer_gate_type_coeffs.swap(expanded);
+        }
         post_scalar_line = std::string(tfr.next_line());
         keyword = first_keyword(post_scalar_line);
       } else {
-        two_layer_gate_type_coeffs.assign(species_count, 1.0);
+        two_layer_gate_type_coeffs.assign(
+            static_cast<size_t>(species_count) * radial_func_count, 1.0);
         for (int type = 0; type < species_count; type++)
-          two_layer_gate_type_coeffs[type] = outer_type_coeff(type, 0);
+          for (int mu = 0; mu < radial_func_count; mu++)
+            two_layer_gate_type_coeffs[
+                static_cast<size_t>(type) * radial_func_count + mu] =
+                outer_type_coeff(type, mu);
       }
       if (keyword != "two_layer_gate_weight_count")
         error->one(FLERR, "SUS2-SH two-layer gate is missing two_layer_gate_weight_count.");
@@ -8327,7 +8349,7 @@ access to the buffer size that is not provided in PFR.
 
       two_layer_gate_mu_body_order.assign(radial_func_count, 0);
       for (int mu = 0; mu < radial_func_count; mu++) {
-        const int body_order = mu / L_max + 2;
+        const int body_order = std::min(mu / L_max + 2, two_layer_gate_body_order_max);
         if (body_order < 2 || body_order > two_layer_gate_body_order_max)
           error->one(FLERR, "SUS2-SH mu-body-order gate has an invalid mu body order.");
         two_layer_gate_mu_body_order[mu] = body_order;
@@ -8511,8 +8533,6 @@ access to the buffer size that is not provided in PFR.
   if (two_layer_gate_enabled) {
     if (sh_scalar_body_order.empty())
       error->all(FLERR, "SUS2-SH mu-body-order gate requires sh_scalar_info metadata.");
-    if (two_layer_gate_body_order_max != sh_k_max + 1)
-      error->all(FLERR, "SUS2-SH mu-body-order gate body order should be sh_k_max + 1.");
     const int expected_gate_weight_count =
         two_layer_gate_full_scalar_weights
             ? radial_func_count * two_layer_gate_scalar_count
@@ -8526,7 +8546,7 @@ access to the buffer size that is not provided in PFR.
         two_layer_gate_body_mix_weight_count != expected_gate_body_mix_count)
       error->all(FLERR, "SUS2-SH two-layer gate metadata has inconsistent sizes.");
     if (two_layer_gate_additive_count != species_count * radial_func_count ||
-        two_layer_gate_type_count != species_count)
+        two_layer_gate_type_count != species_count * radial_func_count)
       error->all(FLERR, "SUS2-SH release two-layer gate coefficient sizes are inconsistent.");
     two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
     std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);
@@ -8546,7 +8566,7 @@ access to the buffer size that is not provided in PFR.
         error->all(FLERR, "SUS2-SH mu-body-order gate is missing a required scalar body-order bucket.");
     two_layer_gate_mu_body_order.assign(radial_func_count, 0);
     for (int mu = 0; mu < radial_func_count; mu++) {
-      const int body_order = mu / L_max + 2;
+      const int body_order = std::min(mu / L_max + 2, two_layer_gate_body_order_max);
       if (body_order < 2 || body_order > two_layer_gate_body_order_max)
         error->all(FLERR, "SUS2-SH mu-body-order gate has an invalid mu body order.");
       two_layer_gate_mu_body_order[mu] = body_order;
@@ -8980,11 +9000,11 @@ access to the buffer size that is not provided in PFR.
         for (int j = 0; j < C; j++) {
           const int table_index = pair_to_table_index[i * C + j];
           if (table_index < 0) continue;
-          const double species_factor =
-              two_layer_gate_type_coeff(i) * two_layer_gate_type_coeff(j);
           for (int n = 0; n < list_grid_size; n++) {
             const double dist = dr * n;
             for (int mu = 0; mu < radial_func_count; mu++) {
+              const double species_factor =
+                  two_layer_gate_type_coeff(i, mu) * two_layer_gate_type_coeff(j, mu);
               const int k_ = mu_to_K[mu];
               const int sigma = mu_to_sigma[mu];
               radial_basis->calc_radial_basis_ders(

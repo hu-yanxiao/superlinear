@@ -1129,12 +1129,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	        const int shift = i * C + j;
 	        const int table_index = pair_to_table_index[shift];
 	        if (table_index < 0) continue;
-	        const double species_factor =
-	            two_layer_gate_type_coeff(i) * two_layer_gate_type_coeff(j);
 	        for (int n = 0; n < list_grid_size; n++) {
 	          const double dist = dr * n;
 	          for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
 	            const int mu = h_basic_mu_values(mu_group);
+	            const double species_factor =
+	                two_layer_gate_type_coeff(i, mu) * two_layer_gate_type_coeff(j, mu);
 	            const int k_ = mu_to_K[mu];
 	            const int sigma = mu_to_sigma[mu];
 	            radial_basis->calc_radial_basis_ders(

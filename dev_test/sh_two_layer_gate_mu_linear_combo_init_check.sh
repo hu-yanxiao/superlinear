@@ -70,8 +70,9 @@ if len(additive) != additive_count:
 expected_additive = 1.0 / 12.0
 if any(abs(x - expected_additive) > 1e-7 for x in additive):
     raise SystemExit("additive coefficients should initialize to 1/12")
-if type_count != species:
-    raise SystemExit(f"expected gate type coeff count {species}, got {type_count}")
+expected_type_count = species * radial_func_count
+if type_count != expected_type_count:
+    raise SystemExit(f"expected gate type/mu coeff count {expected_type_count}, got {type_count}")
 if len(type_coeffs) != type_count:
     raise SystemExit("gate type coeff list length mismatch")
 
@@ -85,7 +86,8 @@ if len(weights) != weight_count:
 if any(abs(x - 0.1) > 1e-14 for x in weights):
     raise SystemExit("shared scalar weights should initialize to 0.1")
 
-expected_mix_count = radial_func_count * k_max
+gate_body_order = int_value("two_layer_gate_body_order_max")
+expected_mix_count = radial_func_count * (gate_body_order - 1)
 if mix_weight_count != expected_mix_count:
     raise SystemExit(
         f"expected mu/body mix weight count {expected_mix_count}, got {mix_weight_count}"

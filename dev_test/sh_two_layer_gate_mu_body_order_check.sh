@@ -13,7 +13,7 @@ train="$tmp_dir/one.cfg"
 rm -f "$model" "$old_opt_model" "$low_body_model" "$train"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
 
-if ./bin/mlp-sus2 init-sh "$old_opt_model" \
+./bin/mlp-sus2 init-sh "$old_opt_model" \
   --species-count=2 \
   --l-max=2 \
   --k-max=4 \
@@ -22,23 +22,21 @@ if ./bin/mlp-sus2 init-sh "$old_opt_model" \
   --radial-basis-size=4 \
   --cutoff=5.0 \
   --two-layer-gate \
-  --two-layer-gate-body-order=3 >/dev/null 2>&1; then
-  echo "--two-layer-gate-body-order should be rejected in mu-body-order gate mode" >&2
-  exit 1
-fi
+  --two-layer-gate-body-order=3 >/dev/null
 
-if ./bin/mlp-sus2 init-sh "$low_body_model" \
+grep -q "two_layer_gate_body_order_max = 3" "$old_opt_model"
+
+./bin/mlp-sus2 init-sh "$low_body_model" \
   --species-count=2 \
   --l-max=2 \
   --k-max=4 \
   --body-order=4 \
-  --body-l-max=2,2,2 \
+  --body-l-max=2,2,2,2 \
   --radial-basis-size=4 \
   --cutoff=5.0 \
-  --two-layer-gate >/dev/null 2>&1; then
-  echo "--two-layer-gate should require --body-order >= --k-max + 1" >&2
-  exit 1
-fi
+  --two-layer-gate >/dev/null
+
+grep -q "two_layer_gate_body_order_max = 4" "$low_body_model"
 
 ./bin/mlp-sus2 init-sh "$model" \
   --species-count=2 \
@@ -128,9 +126,12 @@ if int(count_match.group(1)) != expected_weight_count:
 mix_count_match = re.search(r"two_layer_gate_body_mix_weight_count = (\d+)", text)
 if not mix_count_match:
     raise SystemExit("missing two_layer_gate_body_mix_weight_count")
-expected_mix_count = int(radial_match.group(1)) * 4
+gate_body_order_match = re.search(r"two_layer_gate_body_order_max = (\d+)", text)
+if not gate_body_order_match:
+    raise SystemExit("missing two_layer_gate_body_order_max")
+expected_mix_count = int(radial_match.group(1)) * (int(gate_body_order_match.group(1)) - 1)
 if int(mix_count_match.group(1)) != expected_mix_count:
-    raise SystemExit("gate body mix weight count does not match radial_funcs_count * k_max")
+    raise SystemExit("gate body mix weight count does not match radial_funcs_count * gate_body_order_count")
 PY
 
 ./bin/mlp-sus2 check-two-layer-gate-mu-body-order-dev "$model" "$train" \

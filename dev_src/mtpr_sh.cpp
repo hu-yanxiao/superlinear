@@ -1865,10 +1865,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			if (prepare_moment_values_from_cache)
 				for (int moment_index : two_layer_gate_required_moment_indices_)
 					moment_vals[moment_index] = 0.0;
-			const double gate_center_type_coeff = prepare_moment_values_from_cache
-				? TwoLayerGateTypeCoeff(type_central)
-				: 0.0;
-		for (int j = 0; j < nbh.count; ++j) {
+			for (int j = 0; j < nbh.count; ++j) {
 			const size_t edge = two_layer_edge_offsets_cache_[ind]
 				+ static_cast<size_t>(j);
 			const Vector3& rvec = nbh.vecs[j];
@@ -2066,20 +2063,22 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						}
 					}
 				}
-			}
-					if (prepare_moment_values_from_cache) {
+				}
+						if (prepare_moment_values_from_cache) {
+						const double* gate_mu_values = use_gate_radial ? gate_mu_vals : mu_vals;
+						for (int bi = 0;
+						     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
+				     ++bi) {
+					const int basic_index = two_layer_gate_required_basic_indices_[bi];
+					const int mu = basic_mu_cache_[basic_index];
+					const double gate_center_type_coeff =
+						TwoLayerGateTypeCoeff(type_central, mu);
 					const double gate_outer_type_coeff =
-						TwoLayerGateTypeCoeff(type_outer);
+						TwoLayerGateTypeCoeff(type_outer, mu);
 					const double type_scale =
 						gate_center_type_coeff * gate_outer_type_coeff;
-					const double* gate_mu_values = use_gate_radial ? gate_mu_vals : mu_vals;
-					for (int bi = 0;
-					     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
-			     ++bi) {
-				const int basic_index = two_layer_gate_required_basic_indices_[bi];
-				const int mu = basic_mu_cache_[basic_index];
-				const int mu_index =
-					use_gate_radial
+					const int mu_index =
+						use_gate_radial
 						? two_layer_gate_required_basic_dense_mu_indices_[bi]
 						: mu;
 				const int sh_index = basic_sh_index_cache_[basic_index];
@@ -3496,7 +3495,6 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 	const bool use_edge_cache =
 		HasTwoLayerEdgePrimitiveCache(cache_atom_index, false);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
@@ -3559,15 +3557,18 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
-		for (int bi = 0;
-		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
-		     ++bi) {
-			const int basic_index = two_layer_gate_required_basic_indices_[bi];
-			const int mu = basic_mu_cache_[basic_index];
-			const int mu_index =
+			for (int bi = 0;
+			     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
+			     ++bi) {
+				const int basic_index = two_layer_gate_required_basic_indices_[bi];
+				const int mu = basic_mu_cache_[basic_index];
+				const double gate_center_type_coeff =
+					TwoLayerGateTypeCoeff(type_central, mu);
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer, mu);
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
+				const int mu_index =
 				(use_edge_cache && use_gate_radial)
 					? two_layer_gate_required_basic_dense_mu_indices_[bi]
 					: mu;
@@ -3819,9 +3820,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 		const int type_central = nbh.my_type;
 		if (type_central >= species_count)
 			throw MlipException("Too few species count in the MTP potential!");
-		const double gate_center_type_coeff =
-			TwoLayerGateTypeCoeff(type_central);
-		const double* atom_adjoints =
+			const double* atom_adjoints =
 			two_layer_gate_edge_l1_adjoints_.data()
 			+ static_cast<size_t>(ind) * source_count * 3;
 
@@ -3977,19 +3976,22 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 				}
 			}
 
-			const double gate_outer_type_coeff =
-				TwoLayerGateTypeCoeff(type_outer);
-			const double type_scale =
-				gate_center_type_coeff * gate_outer_type_coeff;
-			Vector3 edge_der(0.0, 0.0, 0.0);
-			for (int active_pos = 0;
-			     active_pos < static_cast<int>(active_basic_adjoints.size());
-			     ++active_pos) {
-				const double adjoint = active_basic_adjoints[active_pos];
-				const int mu_index =
-					(use_edge_der_cache && use_gate_radial)
-						? active_basic_dense_mu_indices[active_pos]
-						: active_basic_mu_indices[active_pos];
+				Vector3 edge_der(0.0, 0.0, 0.0);
+				for (int active_pos = 0;
+				     active_pos < static_cast<int>(active_basic_adjoints.size());
+				     ++active_pos) {
+					const double adjoint = active_basic_adjoints[active_pos];
+					const int mu = active_basic_mu_indices[active_pos];
+					const double gate_center_type_coeff =
+						TwoLayerGateTypeCoeff(type_central, mu);
+					const double gate_outer_type_coeff =
+						TwoLayerGateTypeCoeff(type_outer, mu);
+					const double type_scale =
+						gate_center_type_coeff * gate_outer_type_coeff;
+					const int mu_index =
+						(use_edge_der_cache && use_gate_radial)
+							? active_basic_dense_mu_indices[active_pos]
+							: mu;
 				const int sh_index = active_basic_sh_indices[active_pos];
 				const int sh_der_index = active_basic_sh_der_indices[active_pos];
 				const double radial_value = radial_values_use[mu_index];
@@ -4518,10 +4520,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		const int type_central = nbh.my_type;
 		if (type_central >= species_count)
 			throw MlipException("Too few species count in the MTP potential!");
-		const double gate_center_type_coeff =
-			TwoLayerGateTypeCoeff(type_central);
-
-		for (int j = 0; j < nbh.count; ++j) {
+			for (int j = 0; j < nbh.count; ++j) {
 			const int type_outer = nbh.types[j];
 			if (type_outer >= species_count)
 				throw MlipException("Too few species count in the MTP potential!");
@@ -4581,13 +4580,14 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				source_radial_ss_values[source] = radial_ss_value;
 			}
 
-			const double gate_outer_type_coeff =
-				TwoLayerGateTypeCoeff(type_outer);
-			const double type_scale =
-				gate_center_type_coeff * gate_outer_type_coeff;
 			std::vector<double> radial_accum(source_count, 0.0);
 			for (int source = 0; source < source_count; ++source) {
 				const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
+				const int mu = alpha_index_basic_.comp0[base];
+				const double gate_center_type_coeff =
+					TwoLayerGateTypeCoeff(type_central, mu);
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer, mu);
 				for (int m = 0; m < 3; ++m) {
 					const double adjoint = atom_adjoints[source * 3 + m];
 					if (adjoint == 0.0)
@@ -4597,9 +4597,9 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 					const double y = sh_values_use[sh_index];
 					const double radial_value = source_radial_values[source];
 					radial_accum[source] += adjoint * y;
-					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
+					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
 						adjoint * gate_outer_type_coeff * radial_value * y;
-					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
+					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer, mu)] +=
 						adjoint * gate_center_type_coeff * radial_value * y;
 				}
 			}
@@ -4610,6 +4610,12 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 					continue;
 				const int source_base = TwoLayerGateEdgeL1SourceMomentIndex(source);
 				const int mu = alpha_index_basic_.comp0[source_base];
+				const double gate_center_type_coeff =
+					TwoLayerGateTypeCoeff(type_central, mu);
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer, mu);
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
 				const int eval_block = mu_to_radial_eval_block_[mu];
 				const int radial_base = eval_block * R;
 				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
@@ -4662,7 +4668,6 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	std::vector<double>& radial_derivatives = grad_mu_contract_ders_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 
 	for (int j = 0; j < nbh.count; ++j) {
@@ -4712,13 +4717,16 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
 		double* moment_der = sh_gate_moment_ders_.data()
 			+ static_cast<size_t>(j) * coord_stride;
 		for (int basic_index : two_layer_gate_required_basic_indices_) {
 			const int mu = basic_mu_cache_[basic_index];
+			const double gate_center_type_coeff =
+				TwoLayerGateTypeCoeff(type_central, mu);
+			const double gate_outer_type_coeff =
+				TwoLayerGateTypeCoeff(type_outer, mu);
+			const double type_scale =
+				gate_center_type_coeff * gate_outer_type_coeff;
 			const int sh_index = basic_sh_index_cache_[basic_index];
 			const int sh_der_index = basic_sh_der_index_cache_[basic_index];
 			const double radial_value = radial_values[mu];
@@ -4851,7 +4859,6 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 	}
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -4940,9 +4947,6 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
 		Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -4952,6 +4956,12 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 			if (adjoint == 0.0)
 				continue;
 			const int mu = basic_mu_cache_[basic_index];
+			const double gate_center_type_coeff =
+				TwoLayerGateTypeCoeff(type_central, mu);
+			const double gate_outer_type_coeff =
+				TwoLayerGateTypeCoeff(type_outer, mu);
+			const double type_scale =
+				gate_center_type_coeff * gate_outer_type_coeff;
 			const int mu_index =
 				(use_edge_cache && use_gate_radial)
 					? two_layer_gate_required_basic_dense_mu_indices_[bi]
@@ -5071,7 +5081,6 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 	}
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -5160,9 +5169,6 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
 		Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
@@ -5181,6 +5187,9 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 			const double radial_value = radial_values_use[mu_index];
 			const double radial_der = radial_derivatives_use[mu_index];
 			const double y = sh_values_use[sh_index];
+			const double type_scale =
+				TwoLayerGateTypeCoeff(type_central, mu)
+				* TwoLayerGateTypeCoeff(type_outer, mu);
 			for (int a = 0; a < 3; ++a) {
 				const double dy = sh_ders_use[sh_der_index + a];
 				gate_der[a] += adjoint * type_scale
@@ -5299,9 +5308,6 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 		static_cast<int>(radial_eval_to_scaling_block_.size());
 	const int radial_val_stride = eval_block_count * R;
 	const int radial_der_stride = radial_val_stride * 5;
-	const double gate_center_type_coeff =
-		TwoLayerGateTypeCoeff(type_central);
-
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = radial_ders_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
@@ -5418,15 +5424,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 					}
 				}
 
-					const double gate_outer_type_coeff =
-						TwoLayerGateTypeCoeff(type_outer);
-					const double type_scale =
-						gate_center_type_coeff * gate_outer_type_coeff;
 					for (int bi = 0;
 					     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 					     ++bi) {
 						const int basic_index = two_layer_gate_required_basic_indices_[bi];
 						const int mu = basic_mu_cache_[basic_index];
+						const double type_scale =
+							TwoLayerGateTypeCoeff(type_central, mu)
+							* TwoLayerGateTypeCoeff(type_outer, mu);
 						const int mu_index =
 							(use_edge_cache && use_gate_radial)
 								? two_layer_gate_required_basic_dense_mu_indices_[bi]
@@ -5603,9 +5608,6 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-			const double type_scale =
-				gate_center_type_coeff * gate_outer_type_coeff;
 			double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
 			double* radial_coeff_coord_accum = grad_radial_coeff_coord_accum_.data();
 			for (int mu : two_layer_gate_required_mu_indices_) {
@@ -5642,22 +5644,28 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			const double dot_s = radial_s_derivatives_use[mu_index];
 			const double dot_coord_s = radial_coord_s_derivatives_use[mu_index];
 			const double dot_ss = radial_ss_derivatives_use[mu_index];
-			const double dot_coord_ss = radial_coord_ss_derivatives_use[mu_index];
-			const double base_direction = dot_der * wr * y + dot_val * wdy;
-			const double sigma_direction = dot_coord_s * wr * y + dot_s * wdy;
-			const double shift_direction = dot_coord_ss * wr * y + dot_ss * wdy;
-			radial_coeff_value_accum[mu] +=
-				value_weight * y + coord_weight * wdy;
-			radial_coeff_coord_accum[mu] += coord_weight * y;
+				const double dot_coord_ss = radial_coord_ss_derivatives_use[mu_index];
+				const double base_direction = dot_der * wr * y + dot_val * wdy;
+				const double sigma_direction = dot_coord_s * wr * y + dot_s * wdy;
+				const double shift_direction = dot_coord_ss * wr * y + dot_ss * wdy;
+				const double gate_center_type_coeff =
+					TwoLayerGateTypeCoeff(type_central, mu);
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer, mu);
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
+				radial_coeff_value_accum[mu] +=
+					value_weight * y + coord_weight * wdy;
+				radial_coeff_coord_accum[mu] += coord_weight * y;
 
-			const int sigma_coeff_offset =
-				C + 2 * C * C * scaling_block + type_central * C + type_outer;
-			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
-				value_weight * gate_outer_type_coeff * dot_val * y
-				+ coord_weight * gate_outer_type_coeff * base_direction;
-			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
-				value_weight * gate_center_type_coeff * dot_val * y
-				+ coord_weight * gate_center_type_coeff * base_direction;
+				const int sigma_coeff_offset =
+					C + 2 * C * C * scaling_block + type_central * C + type_outer;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
+					value_weight * gate_outer_type_coeff * dot_val * y
+					+ coord_weight * gate_outer_type_coeff * base_direction;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer, mu)] +=
+					value_weight * gate_center_type_coeff * dot_val * y
+					+ coord_weight * gate_center_type_coeff * base_direction;
 			out_grad_accumulator[sigma_coeff_offset] +=
 				value_weight * type_scale * dot_s * y
 				+ coord_weight * type_scale * sigma_direction;
@@ -5671,11 +5679,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			const double coord_accum = radial_coeff_coord_accum[mu];
 			if (value_accum == 0.0 && coord_accum == 0.0)
 				continue;
-			const int radial_base = mu_to_radial_eval_block_[mu] * R;
-			const int deriv_base = 5 * radial_base;
-			const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
-			for (int xi = 0; xi < R; ++xi)
-				out_grad_accumulator[radial_offset + xi] +=
+				const int radial_base = mu_to_radial_eval_block_[mu] * R;
+				const int deriv_base = 5 * radial_base;
+				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
+				const double type_scale =
+					TwoLayerGateTypeCoeff(type_central, mu)
+					* TwoLayerGateTypeCoeff(type_outer, mu);
+				for (int xi = 0; xi < R; ++xi)
+					out_grad_accumulator[radial_offset + xi] +=
 					type_scale * (
 						rb_vals_use[radial_base + xi] * value_accum
 						+ rb_ders_use[deriv_base + xi] * wr * coord_accum);
@@ -5831,9 +5842,6 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		static_cast<int>(radial_eval_to_scaling_block_.size());
 	const int radial_val_stride = eval_block_count * R;
 	const int radial_der_stride = radial_val_stride * 5;
-	const double gate_center_type_coeff =
-		TwoLayerGateTypeCoeff(type_central);
-
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = radial_ders_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
@@ -5949,18 +5957,17 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 					}
 				}
 
-				const double gate_outer_type_coeff =
-					TwoLayerGateTypeCoeff(type_outer);
-				const double type_scale =
-					gate_center_type_coeff * gate_outer_type_coeff;
-				for (int bi = 0;
-				     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
-				     ++bi) {
-					const int basic_index = two_layer_gate_required_basic_indices_[bi];
-					const int mu = basic_mu_cache_[basic_index];
-					const int mu_index =
-						(use_edge_cache && use_gate_radial)
-							? two_layer_gate_required_basic_dense_mu_indices_[bi]
+					for (int bi = 0;
+					     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
+					     ++bi) {
+						const int basic_index = two_layer_gate_required_basic_indices_[bi];
+						const int mu = basic_mu_cache_[basic_index];
+						const double type_scale =
+							TwoLayerGateTypeCoeff(type_central, mu)
+							* TwoLayerGateTypeCoeff(type_outer, mu);
+						const int mu_index =
+							(use_edge_cache && use_gate_radial)
+								? two_layer_gate_required_basic_dense_mu_indices_[bi]
 							: mu;
 					const int sh_index = basic_sh_index_cache_[basic_index];
 					const int sh_der_index = basic_sh_der_index_cache_[basic_index];
@@ -6134,12 +6141,9 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
-		double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
-		double* radial_coeff_coord_accum = grad_radial_coeff_coord_accum_.data();
-		for (int mu : two_layer_gate_required_mu_indices_) {
+			double* radial_coeff_value_accum = grad_radial_coeff_value_accum_.data();
+			double* radial_coeff_coord_accum = grad_radial_coeff_coord_accum_.data();
+			for (int mu : two_layer_gate_required_mu_indices_) {
 			radial_coeff_value_accum[mu] = 0.0;
 			radial_coeff_coord_accum[mu] = 0.0;
 		}
@@ -6173,22 +6177,28 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 			const double dot_s = radial_s_derivatives_use[mu_index];
 			const double dot_coord_s = radial_coord_s_derivatives_use[mu_index];
 			const double dot_ss = radial_ss_derivatives_use[mu_index];
-			const double dot_coord_ss = radial_coord_ss_derivatives_use[mu_index];
-			const double base_direction = dot_der * wr * y + dot_val * wdy;
-			const double sigma_direction = dot_coord_s * wr * y + dot_s * wdy;
-			const double shift_direction = dot_coord_ss * wr * y + dot_ss * wdy;
-			radial_coeff_value_accum[mu] +=
-				value_weight * y + coord_weight * wdy;
-			radial_coeff_coord_accum[mu] += coord_weight * y;
+				const double dot_coord_ss = radial_coord_ss_derivatives_use[mu_index];
+				const double base_direction = dot_der * wr * y + dot_val * wdy;
+				const double sigma_direction = dot_coord_s * wr * y + dot_s * wdy;
+				const double shift_direction = dot_coord_ss * wr * y + dot_ss * wdy;
+				const double gate_center_type_coeff =
+					TwoLayerGateTypeCoeff(type_central, mu);
+				const double gate_outer_type_coeff =
+					TwoLayerGateTypeCoeff(type_outer, mu);
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
+				radial_coeff_value_accum[mu] +=
+					value_weight * y + coord_weight * wdy;
+				radial_coeff_coord_accum[mu] += coord_weight * y;
 
-			const int sigma_coeff_offset =
-				C + 2 * C * C * scaling_block + type_central * C + type_outer;
-			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central)] +=
-				value_weight * gate_outer_type_coeff * dot_val * y
-				+ coord_weight * gate_outer_type_coeff * base_direction;
-			out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer)] +=
-				value_weight * gate_center_type_coeff * dot_val * y
-				+ coord_weight * gate_center_type_coeff * base_direction;
+				const int sigma_coeff_offset =
+					C + 2 * C * C * scaling_block + type_central * C + type_outer;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
+					value_weight * gate_outer_type_coeff * dot_val * y
+					+ coord_weight * gate_outer_type_coeff * base_direction;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer, mu)] +=
+					value_weight * gate_center_type_coeff * dot_val * y
+					+ coord_weight * gate_center_type_coeff * base_direction;
 			out_grad_accumulator[sigma_coeff_offset] +=
 				value_weight * type_scale * dot_s * y
 				+ coord_weight * type_scale * sigma_direction;
@@ -6202,11 +6212,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 			const double coord_accum = radial_coeff_coord_accum[mu];
 			if (value_accum == 0.0 && coord_accum == 0.0)
 				continue;
-			const int radial_base = mu_to_radial_eval_block_[mu] * R;
-			const int deriv_base = 5 * radial_base;
-			const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
-			for (int xi = 0; xi < R; ++xi)
-				out_grad_accumulator[radial_offset + xi] +=
+				const int radial_base = mu_to_radial_eval_block_[mu] * R;
+				const int deriv_base = 5 * radial_base;
+				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
+				const double type_scale =
+					TwoLayerGateTypeCoeff(type_central, mu)
+					* TwoLayerGateTypeCoeff(type_outer, mu);
+				for (int xi = 0; xi < R; ++xi)
+					out_grad_accumulator[radial_offset + xi] +=
 					type_scale * (
 						rb_vals_use[radial_base + xi] * value_accum
 						+ rb_ders_use[deriv_base + xi] * wr * coord_accum);
@@ -6500,7 +6513,6 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 		throw MlipException("Too few species count in the MTP potential!");
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	const double gate_center_type_coeff = TwoLayerGateTypeCoeff(type_central);
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
@@ -6586,15 +6598,15 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			}
 		}
 
-		const double gate_outer_type_coeff = TwoLayerGateTypeCoeff(type_outer);
-		const double type_scale =
-			gate_center_type_coeff * gate_outer_type_coeff;
 		const double inv_r = has_direction ? 1.0 / r : 0.0;
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 		     ++bi) {
 			const int basic_index = two_layer_gate_required_basic_indices_[bi];
 			const int mu = basic_mu_cache_[basic_index];
+			const double type_scale =
+				TwoLayerGateTypeCoeff(type_central, mu)
+				* TwoLayerGateTypeCoeff(type_outer, mu);
 			const int mu_index =
 				(use_edge_cache && use_gate_radial)
 					? two_layer_gate_required_basic_dense_mu_indices_[bi]

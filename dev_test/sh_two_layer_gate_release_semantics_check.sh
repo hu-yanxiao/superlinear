@@ -43,9 +43,10 @@ if additive_count != expected_additive:
     raise SystemExit(
         f"expected additive coeff count {expected_additive}, got {additive_count}"
     )
-if gate_type_count != species_count:
+expected_gate_type_count = species_count * mu_count
+if gate_type_count != expected_gate_type_count:
     raise SystemExit(
-        f"expected gate type coeff count {species_count}, got {gate_type_count}"
+        f"expected gate type/mu coeff count {expected_gate_type_count}, got {gate_type_count}"
     )
 if not re.search(r"^two_layer_gate_type_coeffs\s*=\s*\{", text, re.M):
     raise SystemExit("missing independent gate type coefficients")

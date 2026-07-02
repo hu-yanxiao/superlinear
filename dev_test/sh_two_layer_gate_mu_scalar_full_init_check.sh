@@ -76,8 +76,9 @@ if len(additive) != additive_count:
 expected_additive = 1.0 / 12.0
 if any(abs(x - expected_additive) > 1e-7 for x in additive):
     raise SystemExit("additive coefficients should initialize to 1/12")
-if type_count != species:
-    raise SystemExit(f"expected gate type coeff count {species}, got {type_count}")
+expected_type_count = species * radial_func_count
+if type_count != expected_type_count:
+    raise SystemExit(f"expected gate type/mu coeff count {expected_type_count}, got {type_count}")
 if len(type_coeffs) != type_count:
     raise SystemExit("gate type coeff list length mismatch")
 

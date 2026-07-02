@@ -47,6 +47,8 @@ text = open(base).read()
 
 species_count = int(re.search(r"species_count\s*=\s*(\d+)", text).group(1))
 alpha_scalar_count = int(re.search(r"alpha_scalar_moments\s*=\s*(\d+)", text).group(1))
+radial_func_count = int(re.search(r"radial_funcs_count\s*=\s*(\d+)", text).group(1))
+additive_coeff_count = int(re.search(r"two_layer_gate_additive_coeff_count\s*=\s*(\d+)", text).group(1))
 
 def number_list(line_body):
     return [float(x) for x in re.findall(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?", line_body)]
@@ -89,12 +91,17 @@ gate_radial = number_list(gate_radial_match.group(1))
 for i in range(len(gate_radial)):
     gate_radial[i] = 0.020 + 0.003 * ((i % 4) - 1.5) + 0.002 * (i // 4)
 
+expected_additive_count = species_count * radial_func_count
+if additive_coeff_count != expected_additive_count:
+    raise SystemExit(
+        f"unexpected two_layer_gate_additive_coeff_count: "
+        f"{additive_coeff_count} != {expected_additive_count}"
+    )
 additive = []
 for species in range(species_count):
-    if species == 0:
-        additive.append(0.35)
-    else:
-        additive.append(1.55)
+    for mu in range(radial_func_count):
+        base = 0.35 if species == 0 else 1.55
+        additive.append(base + 0.025 * mu)
 
 species_coeffs = [0.12, -0.08][:species_count]
 moment_coeffs = [0.0] * alpha_scalar_count

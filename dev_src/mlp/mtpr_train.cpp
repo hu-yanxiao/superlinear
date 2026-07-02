@@ -1247,8 +1247,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
 		if (requested_two_layer_residual)
 			ERROR("--two-layer-residual is not supported by mu-body-order gate models");
-		if (opts["two-layer-gate-body-order"] != "")
-			ERROR("--two-layer-gate-body-order is not used by mu-body-order gate models; use --body-order >= --k-max + 1.");
+		if (opts["two-layer-gate-body-order"] != "") {
+			plain_to_gate_body_order = stoi(opts["two-layer-gate-body-order"]);
+			if (plain_to_gate_body_order < 2)
+				ERROR("--two-layer-gate-body-order must be at least 2");
+		}
 		plain_to_gate_independent_radial = true;
 		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
 		                                  plain_to_gate_independent_radial,
@@ -1337,14 +1340,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
-			if (prank == 0 && plain_to_gate_upgrade) {
-				std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
-			          << "gate_mode="
-			          << (mtpr.TwoLayerGateUsesFullScalarWeights()
-			              ? "mu-scalar-full"
-			              : "mu-body-linear-combo")
-			          << " gate_body_order=k+1"
-			          << " independent_gate_radial_coeffs="
+		if (prank == 0 && plain_to_gate_upgrade) {
+			std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
+		          << "gate_mode="
+		          << (mtpr.TwoLayerGateUsesFullScalarWeights()
+		              ? "mu-scalar-full"
+		              : "mu-body-linear-combo")
+		          << " gate_body_order=" << (mtpr.TwoLayerGateBodyOrderCount() + 1)
+		          << " independent_gate_radial_coeffs="
 		          << (plain_to_gate_independent_radial ? "true" : "false")
 		          << " gate_weight_count=" << mtpr.TwoLayerGateWeightCount()
 		          << " gate_radial_coeff_count=" << mtpr.TwoLayerGateRadialCoeffCount()

@@ -672,8 +672,8 @@ public:
 		int TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
 		const double* TwoLayerGateAdditiveCoeffRowData(int type_outer) const;
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
-		int TwoLayerGateTypeCoeffIndex(int type_outer) const;
-		double TwoLayerGateTypeCoeff(int type_outer) const;
+		int TwoLayerGateTypeCoeffIndex(int type_outer, int mu) const;
+		double TwoLayerGateTypeCoeff(int type_outer, int mu) const;
 			int TwoLayerGateWeightIndex(int scalar_weight_index) const;
 			int TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const;
 			int TwoLayerGateBodyMixWeightIndex(int mu, int body_order) const;

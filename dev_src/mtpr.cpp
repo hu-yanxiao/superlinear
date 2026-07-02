@@ -917,34 +917,35 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
 	if (two_layer_gate_enabled_)
 		ERROR("SUS2-SH model is already initialized with two-layer gate metadata");
-	(void)gate_body_order;
-	const int required_gate_body_order = sh_k_max_ + 1;
-	if (sh_body_order_ < required_gate_body_order)
-		ERROR("--two-layer-gate requires SH body_order >= sh_k_max + 1 for mu-body-order scalar buckets");
 	if (p_RadialBasis == nullptr)
 		ERROR("SUS2-SH gate upgrade requires an initialized radial basis");
+	int selected_gate_body_order = gate_body_order;
+	if (selected_gate_body_order <= 0)
+		selected_gate_body_order = std::min(sh_body_order_, sh_k_max_ + 1);
+	if (selected_gate_body_order < 2 || selected_gate_body_order > sh_body_order_)
+		ERROR("--two-layer-gate-body-order must be in [2, sh_body_order]");
 
 	EnsureSHScalarInfoForGateUpgrade();
 
 	two_layer_gate_scalar_indices_.clear();
-	std::vector<int> gate_body_counts(required_gate_body_order + 1, 0);
+	std::vector<int> gate_body_counts(selected_gate_body_order + 1, 0);
 	for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
 		const int body_order = sh_scalar_info_[scalar].body_order;
-		if (body_order >= 2 && body_order <= required_gate_body_order) {
+		if (body_order >= 2 && body_order <= selected_gate_body_order) {
 			two_layer_gate_scalar_indices_.push_back(scalar);
 			++gate_body_counts[body_order];
 		}
 	}
 	if (two_layer_gate_scalar_indices_.empty())
 		ERROR("--two-layer-gate selected no SH scalar basis functions");
-	for (int bo = 2; bo <= required_gate_body_order; ++bo)
+	for (int bo = 2; bo <= selected_gate_body_order; ++bo)
 		if (gate_body_counts[bo] == 0)
 			ERROR("--two-layer-gate selected no SH scalar basis functions for one required mu body-order bucket");
 
 	two_layer_gate_enabled_ = true;
 	SetTwoLayerGateMode(gate_mode);
 	SetTwoLayerGateSiteMode(gate_site_mode);
-	two_layer_gate_body_order_max_ = required_gate_body_order;
+	two_layer_gate_body_order_max_ = selected_gate_body_order;
 	two_layer_gate_include_one_body_ = false;
 	two_layer_gate_shared_radial_ = independent_gate_radial_coeffs;
 	two_layer_residual_enabled_ = false;
@@ -1022,7 +1023,10 @@ int MLMTPR::TwoLayerGateMuBodyOrder(int mu) const
 	if (sh_l_max_ < 0)
 		ERROR("SUS2-SH two-layer gate has invalid sh_l_max");
 	const int k_internal = mu / (sh_l_max_ + 1);
-	return k_internal + 2;
+	const int raw_body_order = k_internal + 2;
+	if (two_layer_gate_body_order_max_ >= 2)
+		return std::min(raw_body_order, two_layer_gate_body_order_max_);
+	return raw_body_order;
 }
 
 int MLMTPR::TwoLayerGateWeightBodyOrder(int weight_index) const
@@ -1053,31 +1057,29 @@ void MLMTPR::BuildTwoLayerGateBodyOrderBuckets()
 	    && static_cast<int>(two_layer_gate_body_mix_weights_.size())
 	    != TwoLayerGateBodyMixWeightCount())
 		ERROR("SUS2-SH two-layer gate body mix metadata has inconsistent sizes");
-	const int required_gate_body_order = sh_k_max_ + 1;
-	if (sh_body_order_ < required_gate_body_order)
-		ERROR("SUS2-SH two-layer gate requires sh_body_order >= sh_k_max + 1");
-	if (two_layer_gate_body_order_max_ != required_gate_body_order)
-		ERROR("SUS2-SH mu-body-order gate has inconsistent two_layer_gate_body_order_max");
+	if (two_layer_gate_body_order_max_ < 2
+	    || two_layer_gate_body_order_max_ > sh_body_order_)
+		ERROR("SUS2-SH mu-body-order gate body order is out of range");
 
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
 	two_layer_gate_scalar_body_orders_.assign(gate_count, 0);
-	std::vector<int> counts(required_gate_body_order + 2, 0);
+	std::vector<int> counts(two_layer_gate_body_order_max_ + 2, 0);
 	for (int q = 0; q < gate_count; ++q) {
 		const int scalar_index = two_layer_gate_scalar_indices_[q];
 		if (scalar_index < 0 || scalar_index >= alpha_scalar_moments)
 			ERROR("SUS2-SH two-layer gate scalar index is out of range");
 		const int body_order = sh_scalar_info_[scalar_index].body_order;
-		if (body_order < 2 || body_order > required_gate_body_order)
+		if (body_order < 2 || body_order > two_layer_gate_body_order_max_)
 			ERROR("SUS2-SH mu-body-order gate scalar index has wrong body order");
 		two_layer_gate_scalar_body_orders_[q] = body_order;
 		++counts[body_order];
 	}
-	for (int bo = 2; bo <= required_gate_body_order; ++bo)
+	for (int bo = 2; bo <= two_layer_gate_body_order_max_; ++bo)
 		if (counts[bo] == 0)
 			ERROR("SUS2-SH mu-body-order gate is missing one scalar body-order bucket");
 
-	two_layer_gate_body_order_weight_offsets_.assign(required_gate_body_order + 2, 0);
-	for (int bo = 0; bo <= required_gate_body_order; ++bo)
+	two_layer_gate_body_order_weight_offsets_.assign(two_layer_gate_body_order_max_ + 2, 0);
+	for (int bo = 0; bo <= two_layer_gate_body_order_max_; ++bo)
 		two_layer_gate_body_order_weight_offsets_[bo + 1] =
 			two_layer_gate_body_order_weight_offsets_[bo] + counts[bo];
 	two_layer_gate_body_order_weight_indices_.assign(gate_count, 0);
@@ -1090,7 +1092,7 @@ void MLMTPR::BuildTwoLayerGateBodyOrderBuckets()
 	two_layer_gate_mu_body_orders_.assign(radial_func_count, 0);
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const int body_order = TwoLayerGateMuBodyOrder(mu);
-		if (body_order < 2 || body_order > required_gate_body_order)
+		if (body_order < 2 || body_order > two_layer_gate_body_order_max_)
 			ERROR("SUS2-SH mu-body-order gate has invalid mu body-order bucket");
 		two_layer_gate_mu_body_orders_[mu] = body_order;
 	}
@@ -1133,7 +1135,7 @@ int MLMTPR::TwoLayerGateAdditiveCoeffCount() const
 
 int MLMTPR::TwoLayerGateTypeCoeffCount() const
 {
-	return two_layer_gate_enabled_ ? species_count : 0;
+	return two_layer_gate_enabled_ ? species_count * radial_func_count : 0;
 }
 
 int MLMTPR::TwoLayerGateScalarCount() const
@@ -1319,27 +1321,33 @@ double MLMTPR::TwoLayerGateAdditiveCoeff(int type_outer, int mu) const
 	return 1.0;
 }
 
-int MLMTPR::TwoLayerGateTypeCoeffIndex(int type_outer) const
+int MLMTPR::TwoLayerGateTypeCoeffIndex(int type_outer, int mu) const
 {
 	if (!two_layer_gate_enabled_)
 		return -1;
 	if (type_outer < 0 || type_outer >= species_count)
 		ERROR("SUS2-SH two-layer gate type index is out of range");
-	return TwoLayerGateTypeCoeffOffset() + type_outer;
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("SUS2-SH two-layer gate type mu index is out of range");
+	return TwoLayerGateTypeCoeffOffset() + type_outer * radial_func_count + mu;
 }
 
-double MLMTPR::TwoLayerGateTypeCoeff(int type_outer) const
+double MLMTPR::TwoLayerGateTypeCoeff(int type_outer, int mu) const
 {
 	if (!two_layer_gate_enabled_)
 		return 0.0;
-	const int coeff_index = TwoLayerGateTypeCoeffIndex(type_outer);
+	const int coeff_index = TwoLayerGateTypeCoeffIndex(type_outer, mu);
 	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
+	const int local_index = type_outer * radial_func_count + mu;
+	if (local_index >= 0
+	    && local_index < static_cast<int>(two_layer_gate_type_coeffs_.size()))
+		return two_layer_gate_type_coeffs_[local_index];
 	if (type_outer >= 0
 	    && type_outer < static_cast<int>(two_layer_gate_type_coeffs_.size()))
 		return two_layer_gate_type_coeffs_[type_outer];
 	if (p_RadialBasis != nullptr) {
-		const int base_index = RadialCoeffOffset() + p_RadialBasis->rb_size + type_outer;
+		const int base_index = OuterTypeCoeffIndex(type_outer, mu);
 		if (base_index >= 0 && base_index < static_cast<int>(regression_coeffs.size()))
 			return regression_coeffs[base_index];
 	}
@@ -1772,11 +1780,13 @@ void MLMTPR::InitializeTwoLayerGateTypeCoeffsFromBase()
 	two_layer_gate_type_coeffs_.assign(gate_type_count, 1.0);
 	if (p_RadialBasis == nullptr)
 		return;
-	const int base_offset = RadialCoeffOffset() + p_RadialBasis->rb_size;
 	for (int type = 0; type < species_count; ++type) {
-		const int coeff_index = base_offset + type;
-		if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
-			two_layer_gate_type_coeffs_[type] = regression_coeffs[coeff_index];
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			const int local_index = type * radial_func_count + mu;
+			const int coeff_index = OuterTypeCoeffIndex(type, mu);
+			if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+				two_layer_gate_type_coeffs_[local_index] = regression_coeffs[coeff_index];
+		}
 	}
 }
 
@@ -2025,10 +2035,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		? new_species_count * radial_func_count
 		: 0;
 	const int old_gate_type_count = two_layer_gate_enabled_
-		? old_species_count
+		? old_species_count * radial_func_count
 		: 0;
 	const int new_gate_type_count = two_layer_gate_enabled_
-		? new_species_count
+		? new_species_count * radial_func_count
 		: 0;
 	const int gate_weight_count = two_layer_gate_enabled_
 		? TwoLayerGateWeightCount()
@@ -2106,8 +2116,9 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		for (int mu = 0; mu < radial_func_count; ++mu)
 			new_coeffs[new_gate_additive_offset + new_type * radial_func_count + mu] =
 				old_coeffs[old_gate_additive_offset + old_type * radial_func_count + mu];
-		new_coeffs[new_gate_type_offset + new_type] =
-			old_coeffs[old_gate_type_offset + old_type];
+		for (int mu = 0; mu < radial_func_count; ++mu)
+			new_coeffs[new_gate_type_offset + new_type * radial_func_count + mu] =
+				old_coeffs[old_gate_type_offset + old_type * radial_func_count + mu];
 	}
 
 	for (int i = 0; i < gate_weight_count; ++i)
@@ -2969,12 +2980,27 @@ void MLMTPR::Load(const string& filename)
 					ifs.ignore(2);
 					int gate_type_count = 0;
 					ifs >> gate_type_count;
-					if (gate_type_count != TwoLayerGateTypeCoeffCount())
+					const int expected_gate_type_count = TwoLayerGateTypeCoeffCount();
+					const int legacy_gate_type_count = species_count;
+					if (gate_type_count != expected_gate_type_count
+					    && gate_type_count != legacy_gate_type_count)
 						ERROR("SUS2-SH two-layer gate type coefficient count is inconsistent");
 					ifs >> tmpstr;
 					if (tmpstr != "two_layer_gate_type_coeffs")
 						ERROR("SUS2-SH two-layer gate is missing two_layer_gate_type_coeffs");
-					ReadDoubleList(ifs, two_layer_gate_type_coeffs_, gate_type_count);
+					std::vector<double> loaded_gate_type_coeffs;
+					ReadDoubleList(ifs, loaded_gate_type_coeffs, gate_type_count);
+					if (gate_type_count == expected_gate_type_count) {
+						two_layer_gate_type_coeffs_.swap(loaded_gate_type_coeffs);
+					} else {
+						two_layer_gate_type_coeffs_.assign(
+							expected_gate_type_count, 0.0);
+						for (int type = 0; type < species_count; ++type)
+							for (int mu = 0; mu < radial_func_count; ++mu)
+								two_layer_gate_type_coeffs_[
+									type * radial_func_count + mu] =
+									loaded_gate_type_coeffs[type];
+					}
 					ifs.ignore(1000, '\n');
 					ifs >> tmpstr;
 				} else {
@@ -3118,11 +3144,9 @@ void MLMTPR::Load(const string& filename)
 		}
 		if (two_layer_gate_include_one_body_)
 			ERROR("SUS2-SH two-layer gate currently requires two_layer_gate_include_one_body = false");
-		if (two_layer_gate_body_order_max_ != sh_k_max_ + 1)
-			ERROR("SUS2-SH mu-body-order gate body order should be sh_k_max + 1");
 			if (two_layer_gate_body_order_max_ < 2 || two_layer_gate_body_order_max_ > sh_body_order_)
 				ERROR("SUS2-SH mu-body-order gate body order is out of range");
-				BuildTwoLayerGateBodyOrderBuckets();
+			BuildTwoLayerGateBodyOrderBuckets();
 		if (tmpstr == "two_layer_residual_e0_coeff_count") {
 			ifs.ignore(2);
 			int e0_count = 0;
@@ -3672,7 +3696,9 @@ void MLMTPR::Save(const string& filename)
 		for (int i = 0; i < gate_type_count; ++i) {
 			if (i > 0)
 				ofs << ", ";
-			ofs << TwoLayerGateTypeCoeff(i);
+			const int type = i / radial_func_count;
+			const int mu = i % radial_func_count;
+			ofs << TwoLayerGateTypeCoeff(type, mu);
 		}
 		ofs << "}\n";
 		ofs << "two_layer_gate_weight_count = " << TwoLayerGateWeightCount() << '\n';
