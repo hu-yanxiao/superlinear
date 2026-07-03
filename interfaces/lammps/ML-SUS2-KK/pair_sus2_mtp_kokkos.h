@@ -347,6 +347,9 @@ namespace LAMMPS_NS {
   // Alphas indicies
   Kokkos::View<int **, DeviceType> d_alpha_index_basic;      // For constructing of basic alphas.
   Kokkos::View<int **, DeviceType> d_alpha_index_times;      // For combining alphas
+  Kokkos::View<int *, DeviceType> d_alpha_times_a0;
+  Kokkos::View<int *, DeviceType> d_alpha_times_a1;
+  Kokkos::View<int *, DeviceType> d_alpha_times_out;
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
   Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index;     // Real-SH flat index for SUS2-SH basic alphas.
   Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficient for SH products.

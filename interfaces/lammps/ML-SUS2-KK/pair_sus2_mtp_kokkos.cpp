@@ -538,6 +538,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
                         4);
   MemKK::realloc_kokkos(d_alpha_index_times, "sus2mtp/kk:alpha_index_times", alpha_index_times_count,
                         4);
+  MemKK::realloc_kokkos(d_alpha_times_a0, "sus2mtp/kk:alpha_times_a0",
+                        alpha_index_times_count);
+  MemKK::realloc_kokkos(d_alpha_times_a1, "sus2mtp/kk:alpha_times_a1",
+                        alpha_index_times_count);
+  MemKK::realloc_kokkos(d_alpha_times_out, "sus2mtp/kk:alpha_times_out",
+                        alpha_index_times_count);
   MemKK::realloc_kokkos(d_alpha_moment_mapping, "sus2mtp/kk:moment_mapping", alpha_scalar_count);
   MemKK::realloc_kokkos(d_alpha_basic_sh_index, "sus2mtp/kk:alpha_basic_sh_index",
                         alpha_index_basic_count);
@@ -691,6 +697,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   //Declare host arrays
   auto h_alpha_index_basic = Kokkos::create_mirror_view(d_alpha_index_basic);
   auto h_alpha_index_times = Kokkos::create_mirror_view(d_alpha_index_times);
+  auto h_alpha_times_a0 = Kokkos::create_mirror_view(d_alpha_times_a0);
+  auto h_alpha_times_a1 = Kokkos::create_mirror_view(d_alpha_times_a1);
+  auto h_alpha_times_out = Kokkos::create_mirror_view(d_alpha_times_out);
   auto h_alpha_moment_mapping = Kokkos::create_mirror_view(d_alpha_moment_mapping);
   auto h_alpha_basic_sh_index = Kokkos::create_mirror_view(d_alpha_basic_sh_index);
   auto h_alpha_times_coeff = Kokkos::create_mirror_view(d_alpha_times_coeff);
@@ -756,6 +765,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   for (int i = 0; i < alpha_index_times_count; i++)
     h_alpha_times_coeff(i) =
         alpha_times_coeff ? alpha_times_coeff[i] : static_cast<double>(alpha_index_times[i][2]);
+  for (int i = 0; i < alpha_index_times_count; i++) {
+    h_alpha_times_a0(i) = alpha_index_times[i][0];
+    h_alpha_times_a1(i) = alpha_index_times[i][1];
+    h_alpha_times_out(i) = alpha_index_times[i][3];
+  }
   for (int i = 0; i < species_count; i++) h_species_coeffs(i) = species_coeffs[i];
 
   // SUS2-MLIP: Copy from base class
@@ -913,6 +927,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   // Peform the copy from host to device
   Kokkos::deep_copy(d_alpha_index_basic, h_alpha_index_basic);
   Kokkos::deep_copy(d_alpha_index_times, h_alpha_index_times);
+  Kokkos::deep_copy(d_alpha_times_a0, h_alpha_times_a0);
+  Kokkos::deep_copy(d_alpha_times_a1, h_alpha_times_a1);
+  Kokkos::deep_copy(d_alpha_times_out, h_alpha_times_out);
   Kokkos::deep_copy(d_alpha_moment_mapping, h_alpha_moment_mapping);
   Kokkos::deep_copy(d_alpha_basic_sh_index, h_alpha_basic_sh_index);
   Kokkos::deep_copy(d_alpha_times_coeff, h_alpha_times_coeff);
@@ -2876,10 +2893,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 		    TagPairSUS2MTPComputeGateProducts, const int &ii) const
 		{
 		  for (int k = 0; k < two_layer_gate_product_limit; k++) {
-		    const int a0 = d_alpha_index_times(k, 0);
-	    const int a1 = d_alpha_index_times(k, 1);
+		    const int a0 = d_alpha_times_a0(k);
+	    const int a1 = d_alpha_times_a1(k);
 	    const F_FLOAT mult = d_alpha_times_coeff(k);
-	    const int out = d_alpha_index_times(k, 3);
+	    const int out = d_alpha_times_out(k);
 	    d_moment_tensor_vals(ii, out) +=
 		        mult * d_moment_tensor_vals(ii, a0) * d_moment_tensor_vals(ii, a1);
 		  }
@@ -2890,10 +2907,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 		    TagPairSUS2MTPComputeGateProductAdjoints, const int &ii) const
 		{
 		  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
-		    const int a0 = d_alpha_index_times(k, 0);
-		    const int a1 = d_alpha_index_times(k, 1);
+		    const int a0 = d_alpha_times_a0(k);
+		    const int a1 = d_alpha_times_a1(k);
 		    const F_FLOAT mult = d_alpha_times_coeff(k);
-		    const int out = d_alpha_index_times(k, 3);
+		    const int out = d_alpha_times_out(k);
 		    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
 		    d_nbh_energy_ders_wrt_moments(ii, a1) +=
 		        adj * mult * d_moment_tensor_vals(ii, a0);
@@ -2910,10 +2927,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  const int i = d_ilist[ilist_index];
 
 	  for (int k = 0; k < two_layer_gate_product_limit; k++) {
-	    const int a0 = d_alpha_index_times(k, 0);
-	    const int a1 = d_alpha_index_times(k, 1);
+	    const int a0 = d_alpha_times_a0(k);
+	    const int a1 = d_alpha_times_a1(k);
 	    const F_FLOAT mult = d_alpha_times_coeff(k);
-	    const int out = d_alpha_index_times(k, 3);
+	    const int out = d_alpha_times_out(k);
 	    d_moment_tensor_vals(ii, out) +=
 	        mult * d_moment_tensor_vals(ii, a0) * d_moment_tensor_vals(ii, a1);
 	  }
@@ -2987,10 +3004,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  }
 
 	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
-	    const int a0 = d_alpha_index_times(k, 0);
-	    const int a1 = d_alpha_index_times(k, 1);
+	    const int a0 = d_alpha_times_a0(k);
+	    const int a1 = d_alpha_times_a1(k);
 	    const F_FLOAT mult = d_alpha_times_coeff(k);
-	    const int out = d_alpha_index_times(k, 3);
+	    const int out = d_alpha_times_out(k);
 	    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
 	    d_nbh_energy_ders_wrt_moments(ii, a1) +=
 	        adj * mult * d_moment_tensor_vals(ii, a0);
@@ -3033,10 +3050,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  }
 
 	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
-	    const int a0 = d_alpha_index_times(k, 0);
-	    const int a1 = d_alpha_index_times(k, 1);
+	    const int a0 = d_alpha_times_a0(k);
+	    const int a1 = d_alpha_times_a1(k);
 	    const F_FLOAT mult = d_alpha_times_coeff(k);
-	    const int out = d_alpha_index_times(k, 3);
+	    const int out = d_alpha_times_out(k);
 	    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
 	    d_nbh_energy_ders_wrt_moments(ii, a1) +=
 	        adj * mult * d_moment_tensor_vals(ii, a0);
@@ -3079,10 +3096,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	  }
 
 	  for (int k = two_layer_gate_product_limit - 1; k >= 0; k--) {
-	    const int a0 = d_alpha_index_times(k, 0);
-	    const int a1 = d_alpha_index_times(k, 1);
+	    const int a0 = d_alpha_times_a0(k);
+	    const int a1 = d_alpha_times_a1(k);
 	    const F_FLOAT mult = d_alpha_times_coeff(k);
-	    const int out = d_alpha_index_times(k, 3);
+	    const int out = d_alpha_times_out(k);
 	    const F_FLOAT adj = d_nbh_energy_ders_wrt_moments(ii, out);
 	    d_nbh_energy_ders_wrt_moments(ii, a1) +=
 	        adj * mult * d_moment_tensor_vals(ii, a0);
@@ -3667,10 +3684,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
 {
   // Traverse all edges in the alpha times compute graph
   for (int k = 0; k < alpha_index_times_count; k++) {
-    int a0 = d_alpha_index_times(k, 0);
-    int a1 = d_alpha_index_times(k, 1);
+    int a0 = d_alpha_times_a0(k);
+    int a1 = d_alpha_times_a1(k);
     F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_index_times(k, 3);
+    int a3 = d_alpha_times_out(k);
 
     F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
     F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
@@ -3703,10 +3720,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
   }
 
   for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-    int a0 = d_alpha_index_times(k, 0);
-    int a1 = d_alpha_index_times(k, 1);
+    int a0 = d_alpha_times_a0(k);
+    int a1 = d_alpha_times_a1(k);
     F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_index_times(k, 3);
+    int a3 = d_alpha_times_out(k);
 
     F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
     F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
