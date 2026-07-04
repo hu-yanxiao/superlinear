@@ -47,13 +47,14 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPComputeGateFirstLayer {};
 	  struct TagPairSUS2MTPComputeGateProducts {};
 	  struct TagPairSUS2MTPComputeGateProductAdjoints {};
-	  struct TagPairSUS2MTPComputeGateFirstFinalize {};
-	  struct TagPairSUS2MTPComputeGateFullForward {};
-	  struct TagPairSUS2MTPComputeGateSignalDers {};
+		  struct TagPairSUS2MTPComputeGateFirstFinalize {};
+		  struct TagPairSUS2MTPComputeGateFullForward {};
+		  struct TagPairSUS2MTPComputeGateSignalDers {};
 	  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
-	  struct TagPairSUS2MTPComputeGateAdjointDers {};
-	  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
-	  struct TagPairSUS2MTPComputeGateEdgeL1WeightedValues {};
+		  struct TagPairSUS2MTPComputeGateAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
+		  struct TagPairSUS2MTPComputeGateFullScalarAdjointsTeam {};
+		  struct TagPairSUS2MTPComputeGateEdgeL1WeightedValues {};
 	  struct TagPairSUS2MTPComputeGateEdgeL1SeedAdjoints {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivs {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivsTeam {};
@@ -119,12 +120,15 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION void eval_radial_value_basic_mu_group(
 	      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
 	      F_FLOAT &val) const;
-	  KOKKOS_INLINE_FUNCTION void eval_gate_radial_basic_mu_group(
-	      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
-	      F_FLOAT &val, F_FLOAT &der) const;
-	  KOKKOS_INLINE_FUNCTION void eval_gate_radial_value_basic_mu_group(
-	      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
-	      F_FLOAT &val) const;
+		  KOKKOS_INLINE_FUNCTION void eval_gate_radial_basic_mu_group(
+		      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
+		      F_FLOAT &val, F_FLOAT &der) const;
+		  KOKKOS_INLINE_FUNCTION void eval_gate_radial_packed_basic_mu_group(
+		      const int table_index, const int r_list, const int r_next, const F_FLOAT ddr,
+		      const int mu_group, F_FLOAT &val, F_FLOAT &der) const;
+		  KOKKOS_INLINE_FUNCTION void eval_gate_radial_value_basic_mu_group(
+		      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
+		      F_FLOAT &val) const;
 	  KOKKOS_INLINE_FUNCTION void eval_main_gate_radial_value_basic_mu_group(
 	      const int itype, const int jtype, const F_FLOAT dist, const int mu_group,
 	      const int gate_atom_index, F_FLOAT &val) const;
@@ -191,8 +195,8 @@ namespace LAMMPS_NS {
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const;
 
-			  KOKKOS_INLINE_FUNCTION
-			  void operator()(TagPairSUS2MTPComputeGateFullForward, const int &idx) const;
+				  KOKKOS_INLINE_FUNCTION
+				  void operator()(TagPairSUS2MTPComputeGateFullForward, const int &idx) const;
 
 		  KOKKOS_INLINE_FUNCTION
 		  void operator()(TagPairSUS2MTPComputeGateSignalDers, const int &ii) const;
@@ -203,8 +207,14 @@ namespace LAMMPS_NS {
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const;
 
-		  KOKKOS_INLINE_FUNCTION
-		  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void
+			  operator()(TagPairSUS2MTPComputeGateFullScalarAdjointsTeam,
+			             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFullScalarAdjointsTeam>::member_type
+			                 &team) const;
 
 		  KOKKOS_INLINE_FUNCTION
 		  void operator()(TagPairSUS2MTPComputeGateEdgeL1WeightedValues, const int &idx) const;
@@ -393,9 +403,12 @@ namespace LAMMPS_NS {
 	  Kokkos::View<radial_table_value_type***, DeviceType,
 	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 	      d_two_layer_gate_radial_list;                           // Values: [species_pairs][grid_size][basic_mu_group_count]
-	  Kokkos::View<radial_table_value_type***, DeviceType,
-	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
-	      d_two_layer_gate_radial_der_list;                       // Derivatives: [species_pairs][grid_size][basic_mu_group_count]
+		  Kokkos::View<radial_table_value_type***, DeviceType,
+		               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
+		      d_two_layer_gate_radial_der_list;                       // Derivatives: [species_pairs][grid_size][basic_mu_group_count]
+		  Kokkos::View<radial_table_value_type *, DeviceType,
+		               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
+		      d_two_layer_gate_radial_vd_list;                        // Interleaved [value,derivative] for gate force kernels
 	  Kokkos::View<radial_table_value_type***, DeviceType,
 	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 	      d_env_gate_radial_list;                                 // Values: [species_pairs][grid_size][6]
@@ -468,10 +481,10 @@ namespace LAMMPS_NS {
 	  int two_layer_gate_kk_edge_l1_active = 0;
 	  int two_layer_gate_kk_edge_l1_stride = 0;
 	  int two_layer_gate_kk_edge_l1_source_count = 0;
-	  int two_layer_gate_kk_deriv_signal = 0;
-	  int two_layer_gate_kk_compact_body_signal = 0;
-	  int two_layer_gate_kk_full_identity_signal = 0;
-	  int first;
+		  int two_layer_gate_kk_deriv_signal = 0;
+		  int two_layer_gate_kk_compact_body_signal = 0;
+		  int two_layer_gate_kk_full_identity_signal = 0;
+		  int first;
 	  int need_dup;
 
   // ---------- Define the forces, per-atom energy, and virials----------
