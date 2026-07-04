@@ -47,11 +47,13 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPComputeGateFirstLayer {};
 	  struct TagPairSUS2MTPComputeGateProducts {};
 	  struct TagPairSUS2MTPComputeGateProductAdjoints {};
+	  struct TagPairSUS2MTPComputeGateProductAdjointsCached {};
 		  struct TagPairSUS2MTPComputeGateFirstFinalize {};
 		  struct TagPairSUS2MTPComputeGateFullForward {};
 		  struct TagPairSUS2MTPComputeGateSignalDers {};
 	  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
 		  struct TagPairSUS2MTPComputeGateAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateAdjointDersCached {};
 		  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
 		  struct TagPairSUS2MTPComputeGateFullScalarAdjointsTeam {};
 		  struct TagPairSUS2MTPComputeGateEdgeL1WeightedValues {};
@@ -193,6 +195,10 @@ namespace LAMMPS_NS {
 			  void operator()(TagPairSUS2MTPComputeGateProductAdjoints, const int &ii) const;
 
 			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateProductAdjointsCached,
+			                  const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateFirstFinalize, const int &ii) const;
 
 				  KOKKOS_INLINE_FUNCTION
@@ -206,6 +212,10 @@ namespace LAMMPS_NS {
 
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(TagPairSUS2MTPComputeGateAdjointDersCached,
+			                  const int &ii) const;
 
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateFullScalarAdjoints, const int &idx) const;
