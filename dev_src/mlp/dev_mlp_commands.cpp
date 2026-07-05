@@ -363,7 +363,7 @@ void ConfigureDevGuardCompressionProbe(
 	probe.guard_compression_floor_margin = ParseDevDoubleOption(
 		opts, "guard-compression-floor-margin", 0.0);
 	probe.guard_compression_monotonic_margin = ParseDevDoubleOption(
-		opts, "guard-compression-monotonic-margin", 0.0);
+		opts, "guard-compression-monotonic-margin", 0.2);
 	probe.guard_compression_curvature_margin = ParseDevDoubleOption(
 		opts, "guard-compression-curvature-margin", 0.0);
 	probe.guard_compression_smooth = ParseDevDoubleOption(

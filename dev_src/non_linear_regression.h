@@ -122,7 +122,7 @@ public:
 	double guard_compression_monotonic_weight = 0.0;
 	double guard_compression_curvature_weight = 0.0;
 	double guard_compression_floor_margin = 0.0;
-	double guard_compression_monotonic_margin = 0.0;
+	double guard_compression_monotonic_margin = 0.2;
 	double guard_compression_curvature_margin = 0.0;
 	double guard_compression_smooth = 0.02;
 	ForceLossKind force_loss_kind = ForceLossKind::L2;
