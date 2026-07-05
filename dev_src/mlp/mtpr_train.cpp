@@ -720,8 +720,10 @@ struct GuardCompressionOptions {
 	std::vector<double> scales = {0.95, 0.90, 0.85, 0.80};
 	double floor_weight = 1.0;
 	double monotonic_weight = 1.0;
+	double curvature_weight = 1.0;
 	double floor_margin = 0.0;
 	double monotonic_margin = 0.0;
+	double curvature_margin = 0.0;
 	double smooth = 0.02;
 	bool enabled = false;
 };
@@ -729,9 +731,11 @@ struct GuardCompressionOptions {
 struct GuardCompressionBuildResult {
 	std::vector<NonLinearRegression::GuardCompressionSample> samples;
 	std::vector<NonLinearRegression::GuardCompressionPair> pairs;
+	std::vector<NonLinearRegression::GuardCompressionTriplet> triplets;
 	std::vector<Neighborhoods> neighborhoods;
 	long long global_sample_count = 0;
 	long long global_pair_count = 0;
+	long long global_triplet_count = 0;
 	long long global_group_count = 0;
 };
 
@@ -798,12 +802,18 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 	if (!get_opt("guard-compression-monotonic-weight").empty())
 		options.monotonic_weight = ParseStrictDoubleOption(get_opt("guard-compression-monotonic-weight"),
 		                                                   "--guard-compression-monotonic-weight");
+	if (!get_opt("guard-compression-curvature-weight").empty())
+		options.curvature_weight = ParseStrictDoubleOption(get_opt("guard-compression-curvature-weight"),
+		                                                   "--guard-compression-curvature-weight");
 	if (!get_opt("guard-compression-floor-margin").empty())
 		options.floor_margin = ParseStrictDoubleOption(get_opt("guard-compression-floor-margin"),
 		                                               "--guard-compression-floor-margin");
 	if (!get_opt("guard-compression-monotonic-margin").empty())
 		options.monotonic_margin = ParseStrictDoubleOption(get_opt("guard-compression-monotonic-margin"),
 		                                                   "--guard-compression-monotonic-margin");
+	if (!get_opt("guard-compression-curvature-margin").empty())
+		options.curvature_margin = ParseStrictDoubleOption(get_opt("guard-compression-curvature-margin"),
+		                                                   "--guard-compression-curvature-margin");
 	if (!get_opt("guard-compression-smooth").empty())
 		options.smooth = ParseStrictDoubleOption(get_opt("guard-compression-smooth"),
 		                                         "--guard-compression-smooth");
@@ -811,14 +821,21 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 		ERROR("--guard-compression-floor-weight should be finite and non-negative");
 	if (!std::isfinite(options.monotonic_weight) || options.monotonic_weight < 0.0)
 		ERROR("--guard-compression-monotonic-weight should be finite and non-negative");
+	if (!std::isfinite(options.curvature_weight) || options.curvature_weight < 0.0)
+		ERROR("--guard-compression-curvature-weight should be finite and non-negative");
 	if (!std::isfinite(options.floor_margin))
 		ERROR("--guard-compression-floor-margin should be finite");
 	if (!std::isfinite(options.monotonic_margin))
 		ERROR("--guard-compression-monotonic-margin should be finite");
+	if (!std::isfinite(options.curvature_margin))
+		ERROR("--guard-compression-curvature-margin should be finite");
 	if (!std::isfinite(options.smooth) || options.smooth < 0.0)
 		ERROR("--guard-compression-smooth should be finite and non-negative");
-	if (options.enabled && options.floor_weight == 0.0 && options.monotonic_weight == 0.0)
-		ERROR("guard compression is enabled but both floor and monotonic weights are zero");
+	if (options.enabled
+	    && options.floor_weight == 0.0
+	    && options.monotonic_weight == 0.0
+	    && options.curvature_weight == 0.0)
+		ERROR("guard compression is enabled but floor, monotonic, and curvature weights are all zero");
 	return options;
 }
 
@@ -867,6 +884,13 @@ Configuration UniformlyScaledConfiguration(const Configuration& anchor, double s
 	return cfg;
 }
 
+double GuardCompressionCoordinate(double scale)
+{
+	if (!std::isfinite(scale) || scale <= 0.0)
+		ERROR("guard-compression scale should be finite and positive");
+	return -3.0 * std::log(scale);
+}
+
 void StoreGuardFeatures(Configuration& cfg,
                         int group_index,
                         double scale,
@@ -909,11 +933,14 @@ NonLinearRegression::GuardCompressionSample GuardSampleFromConfig(Configuration 
 void LoadGuardSamplesFromFile(
 	const std::string& filename,
 	std::vector<NonLinearRegression::GuardCompressionSample>& samples,
-	std::vector<NonLinearRegression::GuardCompressionPair>& pairs)
+	std::vector<NonLinearRegression::GuardCompressionPair>& pairs,
+	std::vector<NonLinearRegression::GuardCompressionTriplet>& triplets)
 {
 	samples.clear();
 	pairs.clear();
+	triplets.clear();
 	std::map<int, int> previous_by_group;
+	std::map<int, int> second_previous_by_group;
 	Configuration cfg;
 	std::ifstream ifs(filename, std::ios::binary);
 	for (; cfg.Load(ifs); ) {
@@ -928,6 +955,18 @@ void LoadGuardSamplesFromFile(
 			pair.more_compressed = current_index;
 			pairs.push_back(pair);
 		}
+		std::map<int, int>::iterator second_prev_it =
+			second_previous_by_group.find(sample.group_index);
+		if (second_prev_it != second_previous_by_group.end()
+		    && prev_it != previous_by_group.end()) {
+			NonLinearRegression::GuardCompressionTriplet triplet;
+			triplet.less_compressed = second_prev_it->second;
+			triplet.middle_compressed = prev_it->second;
+			triplet.more_compressed = current_index;
+			triplets.push_back(triplet);
+		}
+		if (prev_it != previous_by_group.end())
+			second_previous_by_group[sample.group_index] = prev_it->second;
 		previous_by_group[sample.group_index] = current_index;
 		samples.push_back(std::move(sample));
 	}
@@ -1041,6 +1080,9 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 			if (options.scales.size() >= 2)
 				result.global_pair_count +=
 					static_cast<long long>(options.scales.size() - 1);
+			if (options.scales.size() >= 3)
+				result.global_triplet_count +=
+					static_cast<long long>(options.scales.size() - 2);
 			result.global_group_count += 1;
 			shard_costs[owner] += std::max<long long>(1, group_atoms);
 			group_index++;
@@ -1074,11 +1116,12 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 #ifdef MLIP_MPI
 	MPI_Bcast(&result.global_sample_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&result.global_pair_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&result.global_triplet_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&result.global_group_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
 #endif
 
 	const std::string local_shard = shard_dir + "/rank_" + std::to_string(proc_rank) + ".bin";
-	LoadGuardSamplesFromFile(local_shard, result.samples, result.pairs);
+	LoadGuardSamplesFromFile(local_shard, result.samples, result.pairs, result.triplets);
 
 #ifdef MLIP_MPI
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -1121,6 +1164,7 @@ void ReportGuardCompressionStatus(
 	const std::vector<NonLinearRegression::GuardCompressionSample>& samples,
 	const std::vector<Neighborhoods>& neighborhoods,
 	const std::vector<NonLinearRegression::GuardCompressionPair>& pairs,
+	const std::vector<NonLinearRegression::GuardCompressionTriplet>& triplets,
 	const GuardCompressionOptions& options,
 	const std::string& label,
 	int proc_rank)
@@ -1130,8 +1174,10 @@ void ReportGuardCompressionStatus(
 	std::vector<double> epa(samples.size(), 0.0);
 	double local_worst_floor = 0.0;
 	double local_worst_mono = 0.0;
+	double local_worst_curv = 0.0;
 	long long local_floor_active = 0;
 	long long local_mono_active = 0;
+	long long local_curv_active = 0;
 	for (std::size_t i = 0; i < samples.size(); ++i) {
 		Configuration cfg = samples[i].cfg;
 		if (neighborhoods.empty())
@@ -1156,27 +1202,59 @@ void ReportGuardCompressionStatus(
 			local_worst_mono = std::max(local_worst_mono, violation);
 		}
 	}
+	for (const auto& triplet : triplets) {
+		const double x_less = GuardCompressionCoordinate(
+			samples[triplet.less_compressed].scale);
+		const double x_middle = GuardCompressionCoordinate(
+			samples[triplet.middle_compressed].scale);
+		const double x_more = GuardCompressionCoordinate(
+			samples[triplet.more_compressed].scale);
+		const double dx_left = x_middle - x_less;
+		const double dx_right = x_more - x_middle;
+		if (!(dx_left > 0.0 && dx_right > 0.0))
+			ERROR("guard-compression curvature triplet has non-increasing compression coordinate");
+		const double slope_left =
+			(epa[triplet.middle_compressed] - epa[triplet.less_compressed]) / dx_left;
+		const double slope_right =
+			(epa[triplet.more_compressed] - epa[triplet.middle_compressed]) / dx_right;
+		const double violation =
+			slope_left + options.curvature_margin - slope_right;
+		if (violation > 0.0) {
+			local_curv_active++;
+			local_worst_curv = std::max(local_worst_curv, violation);
+		}
+	}
 
 	double global_worst_floor = local_worst_floor;
 	double global_worst_mono = local_worst_mono;
+	double global_worst_curv = local_worst_curv;
 	long long global_floor_active = local_floor_active;
 	long long global_mono_active = local_mono_active;
+	long long global_curv_active = local_curv_active;
 	long long local_samples = static_cast<long long>(samples.size());
 	long long local_pairs = static_cast<long long>(pairs.size());
+	long long local_triplets = static_cast<long long>(triplets.size());
 	long long global_samples = local_samples;
 	long long global_pairs = local_pairs;
+	long long global_triplets = local_triplets;
 #ifdef MLIP_MPI
 	MPI_Reduce(&local_worst_floor, &global_worst_floor, 1, MPI_DOUBLE,
 	           MPI_MAX, 0, MPI_COMM_WORLD);
 	MPI_Reduce(&local_worst_mono, &global_worst_mono, 1, MPI_DOUBLE,
 	           MPI_MAX, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_worst_curv, &global_worst_curv, 1, MPI_DOUBLE,
+	           MPI_MAX, 0, MPI_COMM_WORLD);
 	MPI_Reduce(&local_floor_active, &global_floor_active, 1, MPI_LONG_LONG_INT,
 	           MPI_SUM, 0, MPI_COMM_WORLD);
 	MPI_Reduce(&local_mono_active, &global_mono_active, 1, MPI_LONG_LONG_INT,
 	           MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_curv_active, &global_curv_active, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
 	MPI_Reduce(&local_samples, &global_samples, 1, MPI_LONG_LONG_INT,
 	           MPI_SUM, 0, MPI_COMM_WORLD);
 	MPI_Reduce(&local_pairs, &global_pairs, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_triplets, &global_triplets, 1, MPI_LONG_LONG_INT,
 	           MPI_SUM, 0, MPI_COMM_WORLD);
 #endif
 	if (proc_rank == 0) {
@@ -1184,10 +1262,13 @@ void ReportGuardCompressionStatus(
 		          << " stage=" << label
 		          << " samples=" << global_samples
 		          << " pairs=" << global_pairs
+		          << " triplets=" << global_triplets
 		          << " floor_active=" << global_floor_active
 		          << " worst_floor_violation_eV_atom=" << global_worst_floor
 		          << " monotonic_active=" << global_mono_active
 		          << " worst_monotonic_violation_eV_atom=" << global_worst_mono
+		          << " curvature_active=" << global_curv_active
+		          << " worst_curvature_violation_eV_atom=" << global_worst_curv
 		          << std::endl;
 	}
 }
@@ -1810,10 +1891,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.guard_compression_floor_weight = guard_compression_options.floor_weight;
 	trainer.guard_compression_monotonic_weight =
 		guard_compression_options.monotonic_weight;
+	trainer.guard_compression_curvature_weight =
+		guard_compression_options.curvature_weight;
 	trainer.guard_compression_floor_margin =
 		guard_compression_options.floor_margin;
 	trainer.guard_compression_monotonic_margin =
 		guard_compression_options.monotonic_margin;
+	trainer.guard_compression_curvature_margin =
+		guard_compression_options.curvature_margin;
 	trainer.guard_compression_smooth = guard_compression_options.smooth;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
@@ -1884,8 +1969,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			}
 			std::cout << " floor_weight=" << guard_compression_options.floor_weight
 			          << " monotonic_weight=" << guard_compression_options.monotonic_weight
+			          << " curvature_weight=" << guard_compression_options.curvature_weight
 			          << " floor_margin=" << guard_compression_options.floor_margin
 			          << " monotonic_margin=" << guard_compression_options.monotonic_margin
+			          << " curvature_margin=" << guard_compression_options.curvature_margin
 			          << " smooth=" << guard_compression_options.smooth
 			          << std::endl;
 		}
@@ -1969,8 +2056,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << " groups=" << guard_compression.global_group_count
 			          << " samples=" << guard_compression.global_sample_count
 			          << " pairs=" << guard_compression.global_pair_count
+			          << " triplets=" << guard_compression.global_triplet_count
 			          << std::endl;
-		}
+	}
 	}
 #ifdef MLIP_MPI
 	trainer.ConfigureTrainComm(!training_set.empty()
@@ -2060,6 +2148,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                             guard_compression.samples,
 		                             guard_compression.neighborhoods,
 		                             guard_compression.pairs,
+		                             guard_compression.triplets,
 		                             guard_compression_options,
 		                             "initial",
 		                             prank);
@@ -2067,8 +2156,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			guard_compression.samples,
 			guard_compression.neighborhoods,
 			guard_compression.pairs,
+			guard_compression.triplets,
 			guard_compression.global_sample_count,
 			guard_compression.global_pair_count,
+			guard_compression.global_triplet_count,
 			static_cast<double>(std::max<long long>(1, train_cfg_total)));
 	}
 
@@ -2327,6 +2418,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				                             guard_compression.samples,
 				                             guard_compression.neighborhoods,
 				                             guard_compression.pairs,
+				                             guard_compression.triplets,
 				                             guard_compression_options,
 				                             "final",
 				                             prank);

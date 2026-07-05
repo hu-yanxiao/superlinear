@@ -63,6 +63,13 @@ inline double PositiveHuberGrad(double z, double eps)
 		return 1.0;
 	return z / eps;
 }
+
+inline double GuardCompressionCoordinate(double scale)
+{
+	if (!std::isfinite(scale) || scale <= 0.0)
+		ERROR("guard-compression scale should be finite and positive");
+	return -3.0 * std::log(scale);
+}
 }
 
 void NonLinearRegression::PrepareTypeScratch(const Configuration& cfg)
@@ -117,13 +124,15 @@ void NonLinearRegression::SetGuardCompressionSamples(
 	std::vector<GuardCompressionSample> samples,
 	std::vector<Neighborhoods> neighborhoods,
 	std::vector<GuardCompressionPair> pairs,
+	std::vector<GuardCompressionTriplet> triplets,
 	long long global_sample_count,
 	long long global_pair_count,
+	long long global_triplet_count,
 	double objective_multiplier)
 {
 	if (!neighborhoods.empty() && neighborhoods.size() != samples.size())
 		ERROR("guard-compression neighborhood cache size mismatch");
-	if (global_sample_count < 0 || global_pair_count < 0)
+	if (global_sample_count < 0 || global_pair_count < 0 || global_triplet_count < 0)
 		ERROR("guard-compression global counts should be non-negative");
 	if (!std::isfinite(objective_multiplier) || objective_multiplier < 0.0)
 		ERROR("guard-compression objective multiplier should be finite and non-negative");
@@ -133,12 +142,31 @@ void NonLinearRegression::SetGuardCompressionSamples(
 		    || pair.more_compressed >= static_cast<int>(samples.size()))
 			ERROR("guard-compression pair index is out of range");
 	}
+	for (const GuardCompressionTriplet& triplet : triplets) {
+		if (triplet.less_compressed < 0
+		    || triplet.middle_compressed < 0
+		    || triplet.more_compressed < 0
+		    || triplet.less_compressed >= static_cast<int>(samples.size())
+		    || triplet.middle_compressed >= static_cast<int>(samples.size())
+		    || triplet.more_compressed >= static_cast<int>(samples.size()))
+			ERROR("guard-compression triplet index is out of range");
+		const double x0 = GuardCompressionCoordinate(
+			samples[triplet.less_compressed].scale);
+		const double x1 = GuardCompressionCoordinate(
+			samples[triplet.middle_compressed].scale);
+		const double x2 = GuardCompressionCoordinate(
+			samples[triplet.more_compressed].scale);
+		if (!(x0 < x1 && x1 < x2))
+			ERROR("guard-compression triplet scales should be ordered from less to more compressed");
+	}
 
 	guard_compression_samples_ = std::move(samples);
 	guard_compression_neighborhoods_ = std::move(neighborhoods);
 	guard_compression_pairs_ = std::move(pairs);
+	guard_compression_triplets_ = std::move(triplets);
 	guard_compression_global_sample_count_ = global_sample_count;
 	guard_compression_global_pair_count_ = global_pair_count;
+	guard_compression_global_triplet_count_ = global_triplet_count;
 	guard_compression_objective_multiplier_ = objective_multiplier;
 	guard_compression_prediction_cache_.clear();
 	guard_compression_prediction_cache_valid_ = false;
@@ -149,10 +177,12 @@ void NonLinearRegression::ClearGuardCompressionSamples()
 	guard_compression_samples_.clear();
 	guard_compression_neighborhoods_.clear();
 	guard_compression_pairs_.clear();
+	guard_compression_triplets_.clear();
 	guard_compression_prediction_cache_.clear();
 	guard_compression_prediction_cache_valid_ = false;
 	guard_compression_global_sample_count_ = 0;
 	guard_compression_global_pair_count_ = 0;
+	guard_compression_global_triplet_count_ = 0;
 	guard_compression_objective_multiplier_ = 0.0;
 }
 
@@ -163,7 +193,9 @@ bool NonLinearRegression::GuardCompressionEnabled() const
 		&& ((guard_compression_floor_weight > 0.0
 		     && guard_compression_global_sample_count_ > 0)
 		    || (guard_compression_monotonic_weight > 0.0
-		        && guard_compression_global_pair_count_ > 0));
+		        && guard_compression_global_pair_count_ > 0)
+		    || (guard_compression_curvature_weight > 0.0
+		        && guard_compression_global_triplet_count_ > 0));
 }
 
 void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array1D* grad_accumulator)
@@ -286,10 +318,15 @@ void NonLinearRegression::AddGuardCompressionLoss(
 	if (!std::isfinite(guard_compression_monotonic_weight)
 	    || guard_compression_monotonic_weight < 0.0)
 		ERROR("--guard-compression-monotonic-weight should be finite and non-negative");
+	if (!std::isfinite(guard_compression_curvature_weight)
+	    || guard_compression_curvature_weight < 0.0)
+		ERROR("--guard-compression-curvature-weight should be finite and non-negative");
 	if (!std::isfinite(guard_compression_floor_margin))
 		ERROR("--guard-compression-floor-margin should be finite");
 	if (!std::isfinite(guard_compression_monotonic_margin))
 		ERROR("--guard-compression-monotonic-margin should be finite");
+	if (!std::isfinite(guard_compression_curvature_margin))
+		ERROR("--guard-compression-curvature-margin should be finite");
 	if (!std::isfinite(guard_compression_smooth)
 	    || guard_compression_smooth < 0.0)
 		ERROR("--guard-compression-smooth should be finite and non-negative");
@@ -376,6 +413,50 @@ void NonLinearRegression::AddGuardCompressionLoss(
 				scale * pair_atoms * derivative / less_pred.size();
 			sample_grad_scale[pair.more_compressed] -=
 				scale * pair_atoms * derivative / more_pred.size();
+		}
+	}
+
+	if (guard_compression_curvature_weight > 0.0
+	    && guard_compression_global_triplet_count_ > 0) {
+		const double scale = guard_compression_objective_multiplier_
+			* guard_compression_curvature_weight
+			/ static_cast<double>(guard_compression_global_triplet_count_);
+		for (const GuardCompressionTriplet& triplet : guard_compression_triplets_) {
+			Configuration& less_pred = (*predictions)[triplet.less_compressed];
+			Configuration& middle_pred = (*predictions)[triplet.middle_compressed];
+			Configuration& more_pred = (*predictions)[triplet.more_compressed];
+			if (less_pred.size() == 0 || middle_pred.size() == 0 || more_pred.size() == 0)
+				continue;
+			const double x_less = GuardCompressionCoordinate(
+				guard_compression_samples_[triplet.less_compressed].scale);
+			const double x_middle = GuardCompressionCoordinate(
+				guard_compression_samples_[triplet.middle_compressed].scale);
+			const double x_more = GuardCompressionCoordinate(
+				guard_compression_samples_[triplet.more_compressed].scale);
+			const double dx_left = x_middle - x_less;
+			const double dx_right = x_more - x_middle;
+			if (!(dx_left > 0.0 && dx_right > 0.0))
+				ERROR("guard-compression curvature triplet has non-increasing compression coordinate");
+			const double slope_left =
+				(sample_energy_per_atom[triplet.middle_compressed]
+				 - sample_energy_per_atom[triplet.less_compressed]) / dx_left;
+			const double slope_right =
+				(sample_energy_per_atom[triplet.more_compressed]
+				 - sample_energy_per_atom[triplet.middle_compressed]) / dx_right;
+			const double violation =
+				slope_left + guard_compression_curvature_margin - slope_right;
+			const double value = PositiveHuberValue(violation, guard_compression_smooth);
+			const double derivative = PositiveHuberGrad(violation, guard_compression_smooth);
+			const double triplet_atoms = static_cast<double>(
+				std::min(less_pred.size(), std::min(middle_pred.size(), more_pred.size())));
+			loss_ += scale * triplet_atoms * value;
+			sample_grad_scale[triplet.less_compressed] -=
+				scale * triplet_atoms * derivative / (dx_left * less_pred.size());
+			sample_grad_scale[triplet.middle_compressed] +=
+				scale * triplet_atoms * derivative
+				* (1.0 / dx_left + 1.0 / dx_right) / middle_pred.size();
+			sample_grad_scale[triplet.more_compressed] -=
+				scale * triplet_atoms * derivative / (dx_right * more_pred.size());
 		}
 	}
 

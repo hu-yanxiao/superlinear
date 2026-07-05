@@ -358,15 +358,20 @@ void ConfigureDevGuardCompressionProbe(
 		opts, "guard-compression-floor-weight", 1.0);
 	probe.guard_compression_monotonic_weight = ParseDevDoubleOption(
 		opts, "guard-compression-monotonic-weight", 1.0);
+	probe.guard_compression_curvature_weight = ParseDevDoubleOption(
+		opts, "guard-compression-curvature-weight", 1.0);
 	probe.guard_compression_floor_margin = ParseDevDoubleOption(
 		opts, "guard-compression-floor-margin", 0.0);
 	probe.guard_compression_monotonic_margin = ParseDevDoubleOption(
 		opts, "guard-compression-monotonic-margin", 0.0);
+	probe.guard_compression_curvature_margin = ParseDevDoubleOption(
+		opts, "guard-compression-curvature-margin", 0.0);
 	probe.guard_compression_smooth = ParseDevDoubleOption(
 		opts, "guard-compression-smooth", 0.02);
 
 	std::vector<NonLinearRegression::GuardCompressionSample> samples;
 	std::vector<NonLinearRegression::GuardCompressionPair> pairs;
+	std::vector<NonLinearRegression::GuardCompressionTriplet> triplets;
 	const double floor_energy_per_atom = anchor_cfg->energy / anchor_cfg->size();
 	for (double scale : scales) {
 		Configuration fake = *anchor_cfg;
@@ -392,13 +397,22 @@ void ConfigureDevGuardCompressionProbe(
 			pair.more_compressed = static_cast<int>(samples.size());
 			pairs.push_back(pair);
 		}
+		if (samples.size() >= 2) {
+			NonLinearRegression::GuardCompressionTriplet triplet;
+			triplet.less_compressed = static_cast<int>(samples.size() - 2);
+			triplet.middle_compressed = static_cast<int>(samples.size() - 1);
+			triplet.more_compressed = static_cast<int>(samples.size());
+			triplets.push_back(triplet);
+		}
 		samples.push_back(std::move(sample));
 	}
 	probe.SetGuardCompressionSamples(samples,
 	                                 {},
 	                                 pairs,
+	                                 triplets,
 	                                 static_cast<long long>(samples.size()),
 	                                 static_cast<long long>(pairs.size()),
+	                                 static_cast<long long>(triplets.size()),
 	                                 static_cast<double>(std::max<std::size_t>(1, configs.size())));
 }
 

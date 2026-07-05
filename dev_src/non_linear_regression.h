@@ -25,6 +25,11 @@ public:
 		int less_compressed = -1;
 		int more_compressed = -1;
 	};
+	struct GuardCompressionTriplet {
+		int less_compressed = -1;
+		int middle_compressed = -1;
+		int more_compressed = -1;
+	};
 
 protected:
 	std::vector<Vector3> dLdF;
@@ -83,10 +88,12 @@ protected:
 	std::vector<GuardCompressionSample> guard_compression_samples_;
 	std::vector<Neighborhoods> guard_compression_neighborhoods_;
 	std::vector<GuardCompressionPair> guard_compression_pairs_;
+	std::vector<GuardCompressionTriplet> guard_compression_triplets_;
 	std::vector<Configuration> guard_compression_prediction_cache_;
 	bool guard_compression_prediction_cache_valid_ = false;
 	long long guard_compression_global_sample_count_ = 0;
 	long long guard_compression_global_pair_count_ = 0;
+	long long guard_compression_global_triplet_count_ = 0;
 	double guard_compression_objective_multiplier_ = 0.0;
 
 public:
@@ -104,8 +111,10 @@ public:
 		double gate_x_l2_regularization = 1.0e-4;
 	double guard_compression_floor_weight = 0.0;
 	double guard_compression_monotonic_weight = 0.0;
+	double guard_compression_curvature_weight = 0.0;
 	double guard_compression_floor_margin = 0.0;
 	double guard_compression_monotonic_margin = 0.0;
+	double guard_compression_curvature_margin = 0.0;
 	double guard_compression_smooth = 0.02;
 	ForceLossKind force_loss_kind = ForceLossKind::L2;
 	double force_log_cosh_scale = 2.0;
@@ -141,15 +150,19 @@ public:
 	void SetGuardCompressionSamples(std::vector<GuardCompressionSample> samples,
 	                                std::vector<Neighborhoods> neighborhoods,
 	                                std::vector<GuardCompressionPair> pairs,
+	                                std::vector<GuardCompressionTriplet> triplets,
 	                                long long global_sample_count,
 	                                long long global_pair_count,
+	                                long long global_triplet_count,
 	                                double objective_multiplier);
 	void ClearGuardCompressionSamples();
 	bool GuardCompressionEnabled() const;
 	int GuardCompressionLocalSampleCount() const { return static_cast<int>(guard_compression_samples_.size()); }
 	int GuardCompressionLocalPairCount() const { return static_cast<int>(guard_compression_pairs_.size()); }
+	int GuardCompressionLocalTripletCount() const { return static_cast<int>(guard_compression_triplets_.size()); }
 	long long GuardCompressionGlobalSampleCount() const { return guard_compression_global_sample_count_; }
 	long long GuardCompressionGlobalPairCount() const { return guard_compression_global_pair_count_; }
+	long long GuardCompressionGlobalTripletCount() const { return guard_compression_global_triplet_count_; }
 
 	virtual void Train(std::vector<Configuration>& train_set) override;
 
