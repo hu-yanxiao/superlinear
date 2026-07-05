@@ -78,6 +78,16 @@ bool sh_profile_enabled_kk()
   return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
+int kk_env_positive_int(const char *name, int fallback)
+{
+  const char *value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') return fallback;
+  char *end = nullptr;
+  const long parsed = std::strtol(value, &end, 10);
+  if (end == value || parsed <= 0 || parsed > 1024) return fallback;
+  return static_cast<int>(parsed);
+}
+
 KOKKOS_INLINE_FUNCTION int sh_flat_index_kk(int l, int m)
 {
   return l * l + (m + l);
@@ -1828,8 +1838,24 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
   int team_size_default = 1;
   int vector_length_default = 1;
   if (!host_flag) team_size_default = 32;
+  team_size_default = kk_env_positive_int("SUS2_SH_KK_TEAM_SIZE", team_size_default);
   int alpha_basic_team_size = team_size_default;
   if (!host_flag) alpha_basic_team_size = 16;
+  alpha_basic_team_size =
+      kk_env_positive_int("SUS2_SH_KK_ALPHA_TEAM_SIZE", alpha_basic_team_size);
+  int chain_team_size_base = team_size_default;
+  int full_adjoint_team_size_base = team_size_default;
+  if (!host_flag) {
+    chain_team_size_base = 384;
+    full_adjoint_team_size_base = 64;
+  }
+  const int force_team_size_default =
+      kk_env_positive_int("SUS2_SH_KK_FORCE_TEAM_SIZE", team_size_default);
+  const int chain_team_size_default =
+      kk_env_positive_int("SUS2_SH_KK_CHAIN_TEAM_SIZE", chain_team_size_base);
+  const int full_adjoint_team_size_default =
+      kk_env_positive_int("SUS2_SH_KK_FULL_ADJ_TEAM_SIZE",
+                          full_adjoint_team_size_base);
   int alpha_basic_vector_length = vector_length_default;
   const bool trace_first_site =
       is_sh_model && trace_first_site_enabled_kk() && comm->me == 0;
@@ -2249,7 +2275,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	            two_layer_gate_body_linear_combo &&
 	            two_layer_gate_kk_signal_stride <= kMaxGateSignalStrideKK;
 	        if (neighflag == HALF) {
-		          int force_team_size = team_size_default;
+		          int force_team_size = force_team_size_default;
 		          const int force_vector_length = 1;
 	          if (use_local_gate_force) {
 	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF, 1>>(
@@ -2273,7 +2299,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	            Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
 	          }
 	        } else if (neighflag == HALFTHREAD) {
-		          int force_team_size = team_size_default;
+		          int force_team_size = force_team_size_default;
 		          const int force_vector_length = 1;
 	          if (use_local_gate_force) {
 	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 1>>(
@@ -2362,7 +2388,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		                                 policy_gate_signal_adjoint_ders, *this);
 
 		            if (neighflag == HALF) {
-		              int chain_team_size = team_size_default;
+		              int chain_team_size = chain_team_size_default;
 		              const int chain_vector_length = 1;
 		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>(
 		                  chunk_size, chain_team_size, chain_vector_length);
@@ -2375,7 +2401,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
 		                                   policy_chain, *this);
 		            } else if (neighflag == HALFTHREAD) {
-		              int chain_team_size = team_size_default;
+		              int chain_team_size = chain_team_size_default;
 		              const int chain_vector_length = 1;
 		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>(
 		                  chunk_size, chain_team_size, chain_vector_length);
@@ -2392,7 +2418,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		        } else {
 			          if (!two_layer_gate_body_linear_combo) {
 					          detail_t0 = profile_detail_begin();
-					          int full_adjoint_team_size = team_size_default;
+				          int full_adjoint_team_size = full_adjoint_team_size_default;
 				          const int full_adjoint_vector_length = 1;
 				          check_team_size_for<TagPairSUS2MTPComputeGateFullScalarAdjointsTeam>(
 				              chunk_size, full_adjoint_team_size,
@@ -2467,7 +2493,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 			              vflag_global || vflag_atom || cvflag_atom;
 			          detail_t0 = profile_detail_begin();
 			          if (neighflag == HALF) {
-		            int chain_team_size = team_size_default;
+		            int chain_team_size = chain_team_size_default;
 		            const int chain_vector_length = 1;
 		            if (need_chain_tally)
 		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 1>>(
@@ -2495,7 +2521,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		                                   policy_chain, *this);
 		            }
 		          } else if (neighflag == HALFTHREAD) {
-		            int chain_team_size = team_size_default;
+		            int chain_team_size = chain_team_size_default;
 		            const int chain_vector_length = 1;
 		            if (need_chain_tally)
 		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 1>>(
@@ -2541,7 +2567,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      ev += ev_tmp;
 	    } else {
 	      if (neighflag == HALF) {
-	        int chain_team_size = team_size_default;
+	        int chain_team_size = chain_team_size_default;
 	        const int chain_vector_length = 1;
 	        check_team_size_for<TagPairSUS2MTPComputeGateChainForceTeam<HALF>>(
 	            inum, chain_team_size, chain_vector_length);
@@ -2549,7 +2575,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	            policy_chain(inum, chain_team_size, chain_vector_length);
 	        Kokkos::parallel_for("ComputeGateChainForceTeam", policy_chain, *this);
 	      } else if (neighflag == HALFTHREAD) {
-	        int chain_team_size = team_size_default;
+	        int chain_team_size = chain_team_size_default;
 	        const int chain_vector_length = 1;
 	        check_team_size_for<TagPairSUS2MTPComputeGateChainForceTeam<HALFTHREAD>>(
 	            inum, chain_team_size, chain_vector_length);
