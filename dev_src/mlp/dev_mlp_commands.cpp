@@ -24,6 +24,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -50,6 +51,32 @@ int ParseDevIntOption(const std::map<std::string, std::string>& opts,
 	if (it == opts.end() || it->second.empty())
 		return default_value;
 	return std::stoi(it->second);
+}
+
+std::vector<double> ParseDevDoubleListOption(const std::string& value,
+                                             const std::string& name)
+{
+	std::vector<double> values;
+	std::size_t begin = 0;
+	while (begin <= value.size()) {
+		const std::size_t comma = value.find(',', begin);
+		const std::size_t end = comma == std::string::npos ? value.size() : comma;
+		const std::string token = value.substr(begin, end - begin);
+		if (token.empty())
+			ERROR(name + " should be a comma-separated list of doubles");
+		values.push_back(std::stod(token));
+		if (comma == std::string::npos)
+			break;
+		begin = comma + 1;
+	}
+	return values;
+}
+
+std::string DevOptionValue(const std::map<std::string, std::string>& opts,
+                           const std::string& name)
+{
+	const auto it = opts.find(name);
+	return (it == opts.end()) ? std::string() : it->second;
 }
 
 int ParseDevResidualStageOption(const std::map<std::string, std::string>& opts)
@@ -293,6 +320,87 @@ public:
 		return result;
 	}
 };
+
+void ConfigureDevGuardCompressionProbe(
+	DevLossGradientProbe& probe,
+	const std::vector<Configuration>& configs,
+	const std::map<std::string, std::string>& opts)
+{
+	std::string anchor = DevOptionValue(opts, "guard-compression-anchor");
+	if (anchor.empty())
+		anchor = DevOptionValue(opts, "guard-compression");
+	if (anchor.empty() || anchor == "off" || anchor == "false")
+		return;
+	if (configs.empty())
+		ERROR("guard-compression gradient check requires at least one configuration");
+	const Configuration* anchor_cfg = nullptr;
+	for (const Configuration& cfg : configs) {
+		if (cfg.size() > 0 && cfg.has_energy()) {
+			anchor_cfg = &cfg;
+			break;
+		}
+	}
+	if (anchor_cfg == nullptr)
+		ERROR("guard-compression gradient check requires an energy-labeled configuration");
+
+	std::vector<double> scales = {0.95, 0.90, 0.85, 0.80};
+	const std::string scales_opt = DevOptionValue(opts, "guard-compression-scales");
+	if (!scales_opt.empty())
+		scales = ParseDevDoubleListOption(scales_opt, "--guard-compression-scales");
+	std::sort(scales.begin(), scales.end(), std::greater<double>());
+	scales.erase(std::unique(scales.begin(), scales.end()), scales.end());
+	for (double scale : scales) {
+		if (!std::isfinite(scale) || scale <= 0.0 || scale >= 1.0)
+			ERROR("--guard-compression-scales values should be finite and between 0 and 1");
+	}
+
+	probe.guard_compression_floor_weight = ParseDevDoubleOption(
+		opts, "guard-compression-floor-weight", 1.0);
+	probe.guard_compression_monotonic_weight = ParseDevDoubleOption(
+		opts, "guard-compression-monotonic-weight", 1.0);
+	probe.guard_compression_floor_margin = ParseDevDoubleOption(
+		opts, "guard-compression-floor-margin", 0.0);
+	probe.guard_compression_monotonic_margin = ParseDevDoubleOption(
+		opts, "guard-compression-monotonic-margin", 0.0);
+	probe.guard_compression_smooth = ParseDevDoubleOption(
+		opts, "guard-compression-smooth", 0.02);
+
+	std::vector<NonLinearRegression::GuardCompressionSample> samples;
+	std::vector<NonLinearRegression::GuardCompressionPair> pairs;
+	const double floor_energy_per_atom = anchor_cfg->energy / anchor_cfg->size();
+	for (double scale : scales) {
+		Configuration fake = *anchor_cfg;
+		fake.lattice *= scale;
+		for (int i = 0; i < fake.size(); ++i)
+			fake.pos(i) *= scale;
+		fake.has_energy(false);
+		fake.has_forces(false);
+		fake.has_stresses(false);
+		fake.has_site_energies(false);
+		fake.has_charges(false);
+		fake.cal_se.clear();
+		fake.cal_se0.clear();
+		fake.type_mean.clear();
+		NonLinearRegression::GuardCompressionSample sample;
+		sample.cfg = fake;
+		sample.floor_energy_per_atom = floor_energy_per_atom;
+		sample.scale = scale;
+		sample.group_index = 0;
+		if (!samples.empty()) {
+			NonLinearRegression::GuardCompressionPair pair;
+			pair.less_compressed = static_cast<int>(samples.size() - 1);
+			pair.more_compressed = static_cast<int>(samples.size());
+			pairs.push_back(pair);
+		}
+		samples.push_back(std::move(sample));
+	}
+	probe.SetGuardCompressionSamples(samples,
+	                                 {},
+	                                 pairs,
+	                                 static_cast<long long>(samples.size()),
+	                                 static_cast<long long>(pairs.size()),
+	                                 static_cast<double>(std::max<std::size_t>(1, configs.size())));
+}
 
 struct DevEFSFDResult {
 	int force_components = 0;
@@ -1243,6 +1351,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		probe.gate_mix_l2_regularization = gate_mix_l2;
 		probe.gate_full_l2_regularization = gate_full_l2;
 		probe.gate_x_l2_regularization = gate_x_l2;
+		ConfigureDevGuardCompressionProbe(probe, configs, opts);
 		probe.residual_stage = residual_stage;
 		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::Result result =
@@ -1331,6 +1440,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		probe.gate_mix_l2_regularization = gate_mix_l2;
 		probe.gate_full_l2_regularization = gate_full_l2;
 		probe.gate_x_l2_regularization = gate_x_l2;
+		ConfigureDevGuardCompressionProbe(probe, configs, opts);
 		probe.residual_stage = residual_stage;
 		probe.stage_active_only = stage_active_only;
 		DevLossGradientProbe::DirectionalResult result =

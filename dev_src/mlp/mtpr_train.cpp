@@ -10,7 +10,10 @@
 #include <cstring>
 #include <cstdio>
 #include <ctime>
+#include <functional>
+#include <iomanip>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -712,6 +715,483 @@ DatasetStats LoadConfigsViaRank0Shards(const std::string& cfgfnm,
 	return stats;
 }
 
+struct GuardCompressionOptions {
+	std::string anchor = "off";
+	std::vector<double> scales = {0.95, 0.90, 0.85, 0.80};
+	double floor_weight = 1.0;
+	double monotonic_weight = 1.0;
+	double floor_margin = 0.0;
+	double monotonic_margin = 0.0;
+	double smooth = 0.02;
+	bool enabled = false;
+};
+
+struct GuardCompressionBuildResult {
+	std::vector<NonLinearRegression::GuardCompressionSample> samples;
+	std::vector<NonLinearRegression::GuardCompressionPair> pairs;
+	std::vector<Neighborhoods> neighborhoods;
+	long long global_sample_count = 0;
+	long long global_pair_count = 0;
+	long long global_group_count = 0;
+};
+
+struct GuardAnchorCandidate {
+	Configuration cfg;
+	double energy_per_atom = 0.0;
+	double volume_per_atom = 0.0;
+	bool valid = false;
+};
+
+struct GuardCompositionAnchors {
+	GuardAnchorCandidate highest_energy;
+	GuardAnchorCandidate highest_density;
+};
+
+std::string FormatGuardDouble(double value)
+{
+	std::ostringstream oss;
+	oss << std::setprecision(17) << value;
+	return oss.str();
+}
+
+GuardCompressionOptions ParseGuardCompressionOptions(
+	const std::map<std::string, std::string>& opts)
+{
+	GuardCompressionOptions options;
+	auto get_opt = [&](const std::string& key) -> std::string {
+		std::map<std::string, std::string>::const_iterator it = opts.find(key);
+		return it == opts.end() ? std::string() : it->second;
+	};
+
+	if (!get_opt("guard-compression-anchor").empty())
+		options.anchor = get_opt("guard-compression-anchor");
+	if (!get_opt("guard-compression").empty())
+		options.anchor = get_opt("guard-compression");
+	if (options.anchor == "true")
+		options.anchor = "highest-density";
+	if (options.anchor == "false")
+		options.anchor = "off";
+	if (options.anchor != "off"
+	    && options.anchor != "highest-density"
+	    && options.anchor != "highest-energy"
+	    && options.anchor != "both"
+	    && options.anchor != "auto")
+		ERROR("--guard-compression-anchor should be off, highest-density, highest-energy, both, or auto");
+	options.enabled = options.anchor != "off";
+
+	if (!get_opt("guard-compression-scales").empty())
+		options.scales = ParseDoubleListOption(get_opt("guard-compression-scales"),
+		                                       "--guard-compression-scales");
+	for (double scale : options.scales) {
+		if (!std::isfinite(scale) || scale <= 0.0 || scale >= 1.0)
+			ERROR("--guard-compression-scales values should be finite and between 0 and 1");
+	}
+	std::sort(options.scales.begin(), options.scales.end(), std::greater<double>());
+	options.scales.erase(std::unique(options.scales.begin(), options.scales.end()),
+	                     options.scales.end());
+	if (options.enabled && options.scales.empty())
+		ERROR("--guard-compression-scales should contain at least one scale when guard compression is enabled");
+
+	if (!get_opt("guard-compression-floor-weight").empty())
+		options.floor_weight = ParseStrictDoubleOption(get_opt("guard-compression-floor-weight"),
+		                                               "--guard-compression-floor-weight");
+	if (!get_opt("guard-compression-monotonic-weight").empty())
+		options.monotonic_weight = ParseStrictDoubleOption(get_opt("guard-compression-monotonic-weight"),
+		                                                   "--guard-compression-monotonic-weight");
+	if (!get_opt("guard-compression-floor-margin").empty())
+		options.floor_margin = ParseStrictDoubleOption(get_opt("guard-compression-floor-margin"),
+		                                               "--guard-compression-floor-margin");
+	if (!get_opt("guard-compression-monotonic-margin").empty())
+		options.monotonic_margin = ParseStrictDoubleOption(get_opt("guard-compression-monotonic-margin"),
+		                                                   "--guard-compression-monotonic-margin");
+	if (!get_opt("guard-compression-smooth").empty())
+		options.smooth = ParseStrictDoubleOption(get_opt("guard-compression-smooth"),
+		                                         "--guard-compression-smooth");
+	if (!std::isfinite(options.floor_weight) || options.floor_weight < 0.0)
+		ERROR("--guard-compression-floor-weight should be finite and non-negative");
+	if (!std::isfinite(options.monotonic_weight) || options.monotonic_weight < 0.0)
+		ERROR("--guard-compression-monotonic-weight should be finite and non-negative");
+	if (!std::isfinite(options.floor_margin))
+		ERROR("--guard-compression-floor-margin should be finite");
+	if (!std::isfinite(options.monotonic_margin))
+		ERROR("--guard-compression-monotonic-margin should be finite");
+	if (!std::isfinite(options.smooth) || options.smooth < 0.0)
+		ERROR("--guard-compression-smooth should be finite and non-negative");
+	if (options.enabled && options.floor_weight == 0.0 && options.monotonic_weight == 0.0)
+		ERROR("guard compression is enabled but both floor and monotonic weights are zero");
+	return options;
+}
+
+std::string CompositionKey(const Configuration& cfg)
+{
+	std::map<int, int> counts;
+	for (int type : cfg.types_)
+		counts[type]++;
+	std::ostringstream oss;
+	bool first = true;
+	for (const auto& kv : counts) {
+		if (!first)
+			oss << ';';
+		first = false;
+		oss << kv.first << ':' << kv.second;
+	}
+	return oss.str();
+}
+
+bool PeriodicVolumePerAtom(const Configuration& cfg, double& volume_per_atom)
+{
+	if (cfg.size() == 0)
+		return false;
+	const double volume = std::abs(cfg.lattice.det());
+	if (!std::isfinite(volume) || volume <= 1.0e-12)
+		return false;
+	volume_per_atom = volume / cfg.size();
+	return true;
+}
+
+Configuration UniformlyScaledConfiguration(const Configuration& anchor, double scale)
+{
+	Configuration cfg = anchor;
+	cfg.lattice *= scale;
+	for (int i = 0; i < cfg.size(); ++i)
+		cfg.pos(i) *= scale;
+	cfg.has_energy(false);
+	cfg.has_forces(false);
+	cfg.has_stresses(false);
+	cfg.has_site_energies(false);
+	cfg.has_charges(false);
+	cfg.cal_se.clear();
+	cfg.cal_se0.clear();
+	cfg.type_mean.clear();
+	cfg.features.clear();
+	return cfg;
+}
+
+void StoreGuardFeatures(Configuration& cfg,
+                        int group_index,
+                        double scale,
+                        double floor_energy_per_atom,
+                        const std::string& anchor_kind,
+                        const std::string& composition_key)
+{
+	cfg.features["guard_compression_group"] = std::to_string(group_index);
+	cfg.features["guard_compression_scale"] = FormatGuardDouble(scale);
+	cfg.features["guard_compression_floor_energy_per_atom"] =
+		FormatGuardDouble(floor_energy_per_atom);
+	cfg.features["guard_compression_anchor"] = anchor_kind;
+	cfg.features["guard_compression_composition"] = composition_key;
+}
+
+NonLinearRegression::GuardCompressionSample GuardSampleFromConfig(Configuration cfg)
+{
+	NonLinearRegression::GuardCompressionSample sample;
+	const auto floor_it = cfg.features.find("guard_compression_floor_energy_per_atom");
+	const auto group_it = cfg.features.find("guard_compression_group");
+	const auto scale_it = cfg.features.find("guard_compression_scale");
+	if (floor_it == cfg.features.end()
+	    || group_it == cfg.features.end()
+	    || scale_it == cfg.features.end())
+		ERROR("guard-compression sample is missing cached metadata");
+	sample.floor_energy_per_atom = ParseStrictDoubleOption(
+		floor_it->second, "guard_compression_floor_energy_per_atom");
+	sample.group_index = std::stoi(group_it->second);
+	sample.scale = ParseStrictDoubleOption(scale_it->second,
+	                                       "guard_compression_scale");
+	cfg.has_energy(false);
+	cfg.has_forces(false);
+	cfg.has_stresses(false);
+	cfg.has_site_energies(false);
+	cfg.has_charges(false);
+	sample.cfg = std::move(cfg);
+	return sample;
+}
+
+void LoadGuardSamplesFromFile(
+	const std::string& filename,
+	std::vector<NonLinearRegression::GuardCompressionSample>& samples,
+	std::vector<NonLinearRegression::GuardCompressionPair>& pairs)
+{
+	samples.clear();
+	pairs.clear();
+	std::map<int, int> previous_by_group;
+	Configuration cfg;
+	std::ifstream ifs(filename, std::ios::binary);
+	for (; cfg.Load(ifs); ) {
+		NonLinearRegression::GuardCompressionSample sample =
+			GuardSampleFromConfig(cfg);
+		const int current_index = static_cast<int>(samples.size());
+		std::map<int, int>::iterator prev_it =
+			previous_by_group.find(sample.group_index);
+		if (prev_it != previous_by_group.end()) {
+			NonLinearRegression::GuardCompressionPair pair;
+			pair.less_compressed = prev_it->second;
+			pair.more_compressed = current_index;
+			pairs.push_back(pair);
+		}
+		previous_by_group[sample.group_index] = current_index;
+		samples.push_back(std::move(sample));
+	}
+}
+
+void ApplyZBLResidualToGuardSamples(
+	std::vector<NonLinearRegression::GuardCompressionSample>& samples,
+	const ZBLPotential& zbl,
+	const std::vector<Neighborhoods>* neighborhoods)
+{
+	if (neighborhoods != nullptr && neighborhoods->size() != samples.size())
+		ERROR("guard-compression ZBL neighborhood cache size mismatch");
+	for (std::size_t i = 0; i < samples.size(); ++i) {
+		if (samples[i].cfg.size() == 0)
+			continue;
+		const ZBLEFS zbl_efs = neighborhoods == nullptr
+			? zbl.Compute(samples[i].cfg)
+			: zbl.Compute(samples[i].cfg, (*neighborhoods)[i]);
+		samples[i].floor_energy_per_atom -=
+			zbl_efs.energy / samples[i].cfg.size();
+	}
+}
+
+std::vector<Configuration> GuardSampleConfigurations(
+	const std::vector<NonLinearRegression::GuardCompressionSample>& samples)
+{
+	std::vector<Configuration> configs;
+	configs.reserve(samples.size());
+	for (const auto& sample : samples)
+		configs.push_back(sample.cfg);
+	return configs;
+}
+
+GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
+	const std::string& cfgfnm,
+	const GuardCompressionOptions& options,
+	int proc_rank,
+	int proc_size,
+	double cutoff)
+{
+	GuardCompressionBuildResult result;
+	if (!options.enabled)
+		return result;
+
+	std::string shard_dir;
+	if (proc_rank == 0) {
+		shard_dir = MakeShardDir(cfgfnm, "guard");
+		if (mkdir(shard_dir.c_str(), 0777) != 0)
+			ERROR("Unable to create guard shard directory " + shard_dir);
+
+		std::map<std::string, GuardCompositionAnchors> anchors;
+		Configuration cfg;
+		std::ifstream ifs(cfgfnm, std::ios::binary);
+		for (; cfg.Load(ifs); ) {
+			if (cfg.size() == 0 || !cfg.has_energy())
+				continue;
+			const std::string key = CompositionKey(cfg);
+			GuardCompositionAnchors& entry = anchors[key];
+			const double epa = cfg.energy / cfg.size();
+			if (!entry.highest_energy.valid
+			    || epa > entry.highest_energy.energy_per_atom) {
+				entry.highest_energy.cfg = cfg;
+				entry.highest_energy.energy_per_atom = epa;
+				entry.highest_energy.valid = true;
+			}
+			double vpa = 0.0;
+			if (PeriodicVolumePerAtom(cfg, vpa)
+			    && (!entry.highest_density.valid
+			        || vpa < entry.highest_density.volume_per_atom)) {
+				entry.highest_density.cfg = cfg;
+				entry.highest_density.energy_per_atom = epa;
+				entry.highest_density.volume_per_atom = vpa;
+				entry.highest_density.valid = true;
+			}
+		}
+
+		std::vector<std::ofstream> shard_streams(proc_size);
+		std::vector<long long> shard_cfg_counts(proc_size, 0);
+		std::vector<long long> shard_atom_counts(proc_size, 0);
+		std::vector<long long> shard_costs(proc_size, 0);
+		for (int rank = 0; rank < proc_size; rank++) {
+			const std::string shard_path = shard_dir + "/rank_" + std::to_string(rank) + ".bin";
+			shard_streams[rank].open(shard_path, std::ios::binary | std::ios::trunc);
+			if (!shard_streams[rank].is_open())
+				ERROR("Unable to open guard shard file " + shard_path);
+		}
+
+		int group_index = 0;
+		auto write_group = [&](const std::string& key,
+		                       const GuardAnchorCandidate& candidate,
+		                       const std::string& anchor_kind) {
+			if (!candidate.valid)
+				return;
+			const int owner = static_cast<int>(
+				std::min_element(shard_costs.begin(), shard_costs.end()) - shard_costs.begin());
+			long long group_atoms = 0;
+			for (double scale : options.scales) {
+				Configuration fake = UniformlyScaledConfiguration(candidate.cfg, scale);
+				StoreGuardFeatures(fake,
+				                   group_index,
+				                   scale,
+				                   candidate.energy_per_atom,
+				                   anchor_kind,
+				                   key);
+				fake.SaveBin(shard_streams[owner]);
+				shard_cfg_counts[owner] += 1;
+				shard_atom_counts[owner] += fake.size();
+				group_atoms += fake.size();
+				result.global_sample_count += 1;
+			}
+			if (options.scales.size() >= 2)
+				result.global_pair_count +=
+					static_cast<long long>(options.scales.size() - 1);
+			result.global_group_count += 1;
+			shard_costs[owner] += std::max<long long>(1, group_atoms);
+			group_index++;
+		};
+
+		for (const auto& kv : anchors) {
+			const GuardCompositionAnchors& entry = kv.second;
+			if (options.anchor == "highest-density") {
+				write_group(kv.first, entry.highest_density, "highest-density");
+			} else if (options.anchor == "highest-energy") {
+				write_group(kv.first, entry.highest_energy, "highest-energy");
+			} else if (options.anchor == "auto") {
+				if (entry.highest_density.valid)
+					write_group(kv.first, entry.highest_density, "highest-density");
+				else
+					write_group(kv.first, entry.highest_energy, "highest-energy");
+			} else if (options.anchor == "both") {
+				write_group(kv.first, entry.highest_density, "highest-density");
+				if (!entry.highest_density.valid
+				    || !entry.highest_energy.valid
+				    || entry.highest_energy.cfg.id() != entry.highest_density.cfg.id())
+					write_group(kv.first, entry.highest_energy, "highest-energy");
+			}
+		}
+		for (std::ofstream& ofs : shard_streams)
+			ofs.close();
+		LogShardBalance("guard-compression", shard_cfg_counts, shard_atom_counts, shard_costs);
+	}
+
+	BroadcastString(shard_dir);
+#ifdef MLIP_MPI
+	MPI_Bcast(&result.global_sample_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&result.global_pair_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&result.global_group_count, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+#endif
+
+	const std::string local_shard = shard_dir + "/rank_" + std::to_string(proc_rank) + ".bin";
+	LoadGuardSamplesFromFile(local_shard, result.samples, result.pairs);
+
+#ifdef MLIP_MPI
+	MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
+	if (proc_rank == 0) {
+		for (int rank = 0; rank < proc_size; rank++) {
+			const std::string shard_path = shard_dir + "/rank_" + std::to_string(rank) + ".bin";
+			std::remove(shard_path.c_str());
+		}
+		rmdir(shard_dir.c_str());
+	}
+
+#ifdef MLIP_MPI
+	MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
+	std::vector<Configuration> guard_cfgs = GuardSampleConfigurations(result.samples);
+	if (!guard_cfgs.empty()) {
+		std::size_t estimated_guard_cache_bytes = 0;
+		const bool cache_guard_neighborhoods =
+			ShouldCacheNeighborhoods(guard_cfgs, cutoff, &estimated_guard_cache_bytes);
+		if (cache_guard_neighborhoods) {
+			if (prank == 0)
+				std::cout << "[" << CurrentTimestamp() << "] Building guard-compression neighborhoods..."
+				          << " local_samples=" << result.samples.size()
+				          << " estimated_bytes=" << estimated_guard_cache_bytes
+				          << std::endl;
+			const bool built_ok = TryBuildNeighborhoods(guard_cfgs, cutoff, result.neighborhoods);
+			if (!built_ok && prank == 0)
+				std::cout << "[" << CurrentTimestamp() << "] Guard-compression neighborhood cache fallback"
+				          << " reason=bad_alloc" << std::endl;
+		}
+	}
+	return result;
+}
+
+void ReportGuardCompressionStatus(
+	MLMTPR& mtpr,
+	const std::vector<NonLinearRegression::GuardCompressionSample>& samples,
+	const std::vector<Neighborhoods>& neighborhoods,
+	const std::vector<NonLinearRegression::GuardCompressionPair>& pairs,
+	const GuardCompressionOptions& options,
+	const std::string& label,
+	int proc_rank)
+{
+	if (!options.enabled)
+		return;
+	std::vector<double> epa(samples.size(), 0.0);
+	double local_worst_floor = 0.0;
+	double local_worst_mono = 0.0;
+	long long local_floor_active = 0;
+	long long local_mono_active = 0;
+	for (std::size_t i = 0; i < samples.size(); ++i) {
+		Configuration cfg = samples[i].cfg;
+		if (neighborhoods.empty())
+			mtpr.CalcEnergyAndSiteEnergies(cfg);
+		else
+			mtpr.CalcEnergyAndSiteEnergies(cfg, neighborhoods[i]);
+		if (cfg.size() == 0)
+			continue;
+		epa[i] = cfg.energy / cfg.size();
+		const double violation = samples[i].floor_energy_per_atom
+			+ options.floor_margin - epa[i];
+		if (violation > 0.0) {
+			local_floor_active++;
+			local_worst_floor = std::max(local_worst_floor, violation);
+		}
+	}
+	for (const auto& pair : pairs) {
+		const double violation = epa[pair.less_compressed]
+			+ options.monotonic_margin - epa[pair.more_compressed];
+		if (violation > 0.0) {
+			local_mono_active++;
+			local_worst_mono = std::max(local_worst_mono, violation);
+		}
+	}
+
+	double global_worst_floor = local_worst_floor;
+	double global_worst_mono = local_worst_mono;
+	long long global_floor_active = local_floor_active;
+	long long global_mono_active = local_mono_active;
+	long long local_samples = static_cast<long long>(samples.size());
+	long long local_pairs = static_cast<long long>(pairs.size());
+	long long global_samples = local_samples;
+	long long global_pairs = local_pairs;
+#ifdef MLIP_MPI
+	MPI_Reduce(&local_worst_floor, &global_worst_floor, 1, MPI_DOUBLE,
+	           MPI_MAX, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_worst_mono, &global_worst_mono, 1, MPI_DOUBLE,
+	           MPI_MAX, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_floor_active, &global_floor_active, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_mono_active, &global_mono_active, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_samples, &global_samples, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&local_pairs, &global_pairs, 1, MPI_LONG_LONG_INT,
+	           MPI_SUM, 0, MPI_COMM_WORLD);
+#endif
+	if (proc_rank == 0) {
+		std::cout << "[" << CurrentTimestamp() << "] guard-compression report"
+		          << " stage=" << label
+		          << " samples=" << global_samples
+		          << " pairs=" << global_pairs
+		          << " floor_active=" << global_floor_active
+		          << " worst_floor_violation_eV_atom=" << global_worst_floor
+		          << " monotonic_active=" << global_mono_active
+		          << " worst_monotonic_violation_eV_atom=" << global_worst_mono
+		          << std::endl;
+	}
+}
+
 } // namespace
 
 DatasetStats AddConfigs(const string cfgfnm, NonLinearRegression& dtr, int proc_rank, int proc_size)
@@ -1151,6 +1631,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--gate-full-l2 should be a finite non-negative value");
 		if (!std::isfinite(gate_x_l2) || gate_x_l2 < 0.0)
 			ERROR("--gate-x-l2 should be a finite non-negative value");
+	const GuardCompressionOptions guard_compression_options =
+		ParseGuardCompressionOptions(opts);
 
 	if (opts["two-layer-gate-tanh-amplitude"] != "") {
 		ERROR("--two-layer-gate-tanh-amplitude is obsolete in the release additive-node gate.");
@@ -1325,6 +1807,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.gate_mix_l2_regularization = gate_mix_l2;
 	trainer.gate_full_l2_regularization = gate_full_l2;
 	trainer.gate_x_l2_regularization = gate_x_l2;
+	trainer.guard_compression_floor_weight = guard_compression_options.floor_weight;
+	trainer.guard_compression_monotonic_weight =
+		guard_compression_options.monotonic_weight;
+	trainer.guard_compression_floor_margin =
+		guard_compression_options.floor_margin;
+	trainer.guard_compression_monotonic_margin =
+		guard_compression_options.monotonic_margin;
+	trainer.guard_compression_smooth = guard_compression_options.smooth;
 	trainer.fixed_atomic_energies = fixed_atomic_energies;
 	trainer.fixed_atomic_energy_weight = fixed_atomic_energy_weight;
 	trainer.force_loss_kind = force_loss_kind;
@@ -1383,6 +1873,22 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << " gate_full=" << gate_full_l2
 			          << std::endl;
 		}
+		if (prank == 0 && guard_compression_options.enabled) {
+			std::cout << "guard-compression enabled:"
+			          << " anchor=" << guard_compression_options.anchor
+			          << " scales=";
+			for (std::size_t i = 0; i < guard_compression_options.scales.size(); ++i) {
+				if (i != 0)
+					std::cout << ",";
+				std::cout << guard_compression_options.scales[i];
+			}
+			std::cout << " floor_weight=" << guard_compression_options.floor_weight
+			          << " monotonic_weight=" << guard_compression_options.monotonic_weight
+			          << " floor_margin=" << guard_compression_options.floor_margin
+			          << " monotonic_margin=" << guard_compression_options.monotonic_margin
+			          << " smooth=" << guard_compression_options.smooth
+			          << std::endl;
+		}
 		if (prank == 0 && !fixed_atomic_energies.empty()) {
 			std::cout << "fixed atomic energies enabled:";
 			for (double value : fixed_atomic_energies)
@@ -1432,10 +1938,6 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			end = 10;
 		}
 	}
-#ifdef MLIP_MPI
-	trainer.ConfigureTrainComm(!training_set.empty(), prank, psize);
-#endif
-
 	long long train_cfg_total = train_stats_local.cfg_count;
 	long long train_atom_total = train_stats_local.atom_count;
 	long long valid_cfg_total = valid_stats_local.cfg_count;
@@ -1449,6 +1951,32 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	MPI_Allreduce(&train_atom_local, &train_atom_total, 1, MPI_LONG_LONG_INT, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(&valid_cfg_local, &valid_cfg_total, 1, MPI_LONG_LONG_INT, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(&valid_atom_local, &valid_atom_total, 1, MPI_LONG_LONG_INT, MPI_SUM, MPI_COMM_WORLD);
+#endif
+	GuardCompressionBuildResult guard_compression =
+		BuildGuardCompressionSamplesFromFile(args[1],
+		                                     guard_compression_options,
+		                                     prank,
+		                                     psize,
+		                                     mtpr.CutOff());
+	if (prank == 0 && guard_compression_options.enabled) {
+		if (guard_compression.global_sample_count == 0) {
+			std::cout << "[" << CurrentTimestamp() << "] guard-compression warning:"
+			          << " no eligible anchor configurations were found"
+			          << " for anchor=" << guard_compression_options.anchor
+			          << std::endl;
+		} else {
+			std::cout << "[" << CurrentTimestamp() << "] guard-compression samples ready:"
+			          << " groups=" << guard_compression.global_group_count
+			          << " samples=" << guard_compression.global_sample_count
+			          << " pairs=" << guard_compression.global_pair_count
+			          << std::endl;
+		}
+	}
+#ifdef MLIP_MPI
+	trainer.ConfigureTrainComm(!training_set.empty()
+	                           || !guard_compression.samples.empty(),
+	                           prank,
+	                           psize);
 #endif
 	std::size_t estimated_cache_bytes = 0;
 	const bool cache_linear_neighborhoods = ShouldCacheNeighborhoods(training_set, mtpr.CutOff(), &estimated_cache_bytes);
@@ -1513,6 +2041,35 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Training-set ZBL residuals ready; "
 			          << "live ZBL evaluation disabled inside optimizer" << std::endl;
+	}
+
+	if (zbl_training_residualized && !guard_compression.samples.empty()) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] Applying ZBL residual convention to guard-compression floors"
+			          << std::endl;
+		ApplyZBLResidualToGuardSamples(
+			guard_compression.samples,
+			mtpr.ZBL(),
+			guard_compression.neighborhoods.empty()
+				? nullptr
+				: &guard_compression.neighborhoods);
+	}
+	if (guard_compression_options.enabled
+	    && guard_compression.global_sample_count > 0) {
+		ReportGuardCompressionStatus(mtpr,
+		                             guard_compression.samples,
+		                             guard_compression.neighborhoods,
+		                             guard_compression.pairs,
+		                             guard_compression_options,
+		                             "initial",
+		                             prank);
+		trainer.SetGuardCompressionSamples(
+			guard_compression.samples,
+			guard_compression.neighborhoods,
+			guard_compression.pairs,
+			guard_compression.global_sample_count,
+			guard_compression.global_pair_count,
+			static_cast<double>(std::max<long long>(1, train_cfg_total)));
 	}
 
 	int radial_first_coeff_repairs = 0;
@@ -1759,12 +2316,22 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			                   stage_c_steps, "residual stage C BFGS refine", false);
 			trainer.two_layer_residual_stage = MTPR_trainer::kResidualStageFull;
 			trainer.max_step_count = maxits;
-		} else {
-			if (trainer.TrainRankActive())
-				trainer.Train(training_set);
-			trainer.BroadcastCoeffsWorld();
-		}
-		//string train_name = "pp.mtp";
+			} else {
+				if (trainer.TrainRankActive())
+					trainer.Train(training_set);
+				trainer.BroadcastCoeffsWorld();
+			}
+			if (guard_compression_options.enabled
+			    && guard_compression.global_sample_count > 0) {
+				ReportGuardCompressionStatus(mtpr,
+				                             guard_compression.samples,
+				                             guard_compression.neighborhoods,
+				                             guard_compression.pairs,
+				                             guard_compression_options,
+				                             "final",
+				                             prank);
+			}
+			//string train_name = "pp.mtp";
 //		if (prank == 0)
 //			mtpr.Save("loop_1.mtp");
 //		if (prank == 0) {std::cout << "loop_2 start:" << std::endl;}

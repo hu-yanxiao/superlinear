@@ -14,6 +14,18 @@
 
 class NonLinearRegression : public AnyTrainer//, protected LogWriting 
 {
+public:
+	struct GuardCompressionSample {
+		Configuration cfg;
+		double floor_energy_per_atom = 0.0;
+		double scale = 1.0;
+		int group_index = -1;
+	};
+	struct GuardCompressionPair {
+		int less_compressed = -1;
+		int more_compressed = -1;
+	};
+
 protected:
 	std::vector<Vector3> dLdF;
 	std::vector<double> dLdE_i_;
@@ -44,6 +56,13 @@ protected:
 	void AddGateXRegularization(Configuration& cfg,
 	                            const Neighborhoods* neighborhoods,
 	                            Array1D* grad_accumulator);
+	void AddGuardCompressionLoss(Array1D* grad_accumulator,
+	                             bool use_cached_predictions,
+	                             bool fill_prediction_cache);
+	void AccumulateGuardCompressionEnergyGrad(Configuration& cfg,
+	                                          const Neighborhoods* neighborhoods,
+	                                          double dloss_denergy,
+	                                          Array1D& grad_accumulator);
 	void EvaluateTrainingConfiguration(const Configuration& orig,
 	                                   Configuration& cfg,
 	                                   const Neighborhoods* neighborhoods,
@@ -58,9 +77,17 @@ protected:
 	double mean_1;
         double mean_2;
 	double mean_3;
-        std::vector<double> loss_grad_;							// result of AddLossGrad
+	std::vector<double> loss_grad_;							// result of AddLossGrad
 	std::vector<Configuration> objective_prediction_cache_;
 	bool objective_prediction_cache_valid_ = false;
+	std::vector<GuardCompressionSample> guard_compression_samples_;
+	std::vector<Neighborhoods> guard_compression_neighborhoods_;
+	std::vector<GuardCompressionPair> guard_compression_pairs_;
+	std::vector<Configuration> guard_compression_prediction_cache_;
+	bool guard_compression_prediction_cache_valid_ = false;
+	long long guard_compression_global_sample_count_ = 0;
+	long long guard_compression_global_pair_count_ = 0;
+	double guard_compression_objective_multiplier_ = 0.0;
 
 public:
 	int norm_by_forces = 0;									// whether to scale weight of E&F in configurations depending on the abs(F)
@@ -75,6 +102,11 @@ public:
 		double gate_mix_l2_regularization = 0.0;
 		double gate_full_l2_regularization = 0.0;
 		double gate_x_l2_regularization = 1.0e-4;
+	double guard_compression_floor_weight = 0.0;
+	double guard_compression_monotonic_weight = 0.0;
+	double guard_compression_floor_margin = 0.0;
+	double guard_compression_monotonic_margin = 0.0;
+	double guard_compression_smooth = 0.02;
 	ForceLossKind force_loss_kind = ForceLossKind::L2;
 	double force_log_cosh_scale = 2.0;
 
@@ -106,6 +138,18 @@ public:
 	double EFSLoss(double total_loss, double std_term, double stdd_term) const;
 	void SetCollectErrorMetrics(bool enabled) { collect_error_metrics_ = enabled; }
 	bool CollectErrorMetrics() const { return collect_error_metrics_; }
+	void SetGuardCompressionSamples(std::vector<GuardCompressionSample> samples,
+	                                std::vector<Neighborhoods> neighborhoods,
+	                                std::vector<GuardCompressionPair> pairs,
+	                                long long global_sample_count,
+	                                long long global_pair_count,
+	                                double objective_multiplier);
+	void ClearGuardCompressionSamples();
+	bool GuardCompressionEnabled() const;
+	int GuardCompressionLocalSampleCount() const { return static_cast<int>(guard_compression_samples_.size()); }
+	int GuardCompressionLocalPairCount() const { return static_cast<int>(guard_compression_pairs_.size()); }
+	long long GuardCompressionGlobalSampleCount() const { return guard_compression_global_sample_count_; }
+	long long GuardCompressionGlobalPairCount() const { return guard_compression_global_pair_count_; }
 
 	virtual void Train(std::vector<Configuration>& train_set) override;
 

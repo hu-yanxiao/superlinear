@@ -18,6 +18,8 @@
 #include <set>
 #include <iostream>
 #include <algorithm>
+#include <cmath>
+#include <utility>
 
 #include "non_linear_regression.h"
 #include "mtpr.h"
@@ -42,6 +44,24 @@ inline void AccumulateStressErrorMetrics(const Matrix3& lhs,
 			+ std::abs(d3) + std::abs(d4) + std::abs(d5);
 	sq_sum += d0 * d0 + d1 * d1 + d2 * d2
 		   + d3 * d3 + d4 * d4 + d5 * d5;
+}
+
+inline double PositiveHuberValue(double z, double eps)
+{
+	if (z <= 0.0)
+		return 0.0;
+	if (eps <= 0.0 || z >= eps)
+		return z - 0.5 * std::max(0.0, eps);
+	return 0.5 * z * z / eps;
+}
+
+inline double PositiveHuberGrad(double z, double eps)
+{
+	if (z <= 0.0)
+		return 0.0;
+	if (eps <= 0.0 || z >= eps)
+		return 1.0;
+	return z / eps;
 }
 }
 
@@ -91,6 +111,59 @@ void NonLinearRegression::ResetObjectiveAccumulators()
 	metric_energy_atom_count_ = 0;
 	metric_force_component_count_ = 0;
 	metric_stress_component_count_ = 0;
+}
+
+void NonLinearRegression::SetGuardCompressionSamples(
+	std::vector<GuardCompressionSample> samples,
+	std::vector<Neighborhoods> neighborhoods,
+	std::vector<GuardCompressionPair> pairs,
+	long long global_sample_count,
+	long long global_pair_count,
+	double objective_multiplier)
+{
+	if (!neighborhoods.empty() && neighborhoods.size() != samples.size())
+		ERROR("guard-compression neighborhood cache size mismatch");
+	if (global_sample_count < 0 || global_pair_count < 0)
+		ERROR("guard-compression global counts should be non-negative");
+	if (!std::isfinite(objective_multiplier) || objective_multiplier < 0.0)
+		ERROR("guard-compression objective multiplier should be finite and non-negative");
+	for (const GuardCompressionPair& pair : pairs) {
+		if (pair.less_compressed < 0 || pair.more_compressed < 0
+		    || pair.less_compressed >= static_cast<int>(samples.size())
+		    || pair.more_compressed >= static_cast<int>(samples.size()))
+			ERROR("guard-compression pair index is out of range");
+	}
+
+	guard_compression_samples_ = std::move(samples);
+	guard_compression_neighborhoods_ = std::move(neighborhoods);
+	guard_compression_pairs_ = std::move(pairs);
+	guard_compression_global_sample_count_ = global_sample_count;
+	guard_compression_global_pair_count_ = global_pair_count;
+	guard_compression_objective_multiplier_ = objective_multiplier;
+	guard_compression_prediction_cache_.clear();
+	guard_compression_prediction_cache_valid_ = false;
+}
+
+void NonLinearRegression::ClearGuardCompressionSamples()
+{
+	guard_compression_samples_.clear();
+	guard_compression_neighborhoods_.clear();
+	guard_compression_pairs_.clear();
+	guard_compression_prediction_cache_.clear();
+	guard_compression_prediction_cache_valid_ = false;
+	guard_compression_global_sample_count_ = 0;
+	guard_compression_global_pair_count_ = 0;
+	guard_compression_objective_multiplier_ = 0.0;
+}
+
+bool NonLinearRegression::GuardCompressionEnabled() const
+{
+	return !guard_compression_samples_.empty()
+		&& guard_compression_objective_multiplier_ > 0.0
+		&& ((guard_compression_floor_weight > 0.0
+		     && guard_compression_global_sample_count_ > 0)
+		    || (guard_compression_monotonic_weight > 0.0
+		        && guard_compression_global_pair_count_ > 0));
 }
 
 void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array1D* grad_accumulator)
@@ -181,6 +254,145 @@ void NonLinearRegression::AddGateXRegularization(
 	mtpr->AddTwoLayerGateX2Penalty(
 		cfg, local_neighborhoods, gate_x_l2_regularization,
 		loss_, grad_accumulator);
+}
+
+void NonLinearRegression::AccumulateGuardCompressionEnergyGrad(
+	Configuration& cfg,
+	const Neighborhoods* neighborhoods,
+	double dloss_denergy,
+	Array1D& grad_accumulator)
+{
+	if (cfg.size() == 0 || dloss_denergy == 0.0)
+		return;
+	if (dLdE_i_.size() != cfg.size())
+		dLdE_i_.resize(cfg.size());
+	std::fill(dLdE_i_.begin(), dLdE_i_.end(), dloss_denergy);
+	if (neighborhoods != nullptr)
+		p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, grad_accumulator, *neighborhoods);
+	else
+		p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, grad_accumulator);
+}
+
+void NonLinearRegression::AddGuardCompressionLoss(
+	Array1D* grad_accumulator,
+	bool use_cached_predictions,
+	bool fill_prediction_cache)
+{
+	if (!GuardCompressionEnabled())
+		return;
+	if (!std::isfinite(guard_compression_floor_weight)
+	    || guard_compression_floor_weight < 0.0)
+		ERROR("--guard-compression-floor-weight should be finite and non-negative");
+	if (!std::isfinite(guard_compression_monotonic_weight)
+	    || guard_compression_monotonic_weight < 0.0)
+		ERROR("--guard-compression-monotonic-weight should be finite and non-negative");
+	if (!std::isfinite(guard_compression_floor_margin))
+		ERROR("--guard-compression-floor-margin should be finite");
+	if (!std::isfinite(guard_compression_monotonic_margin))
+		ERROR("--guard-compression-monotonic-margin should be finite");
+	if (!std::isfinite(guard_compression_smooth)
+	    || guard_compression_smooth < 0.0)
+		ERROR("--guard-compression-smooth should be finite and non-negative");
+
+	const std::size_t sample_count = guard_compression_samples_.size();
+	std::vector<Configuration> local_predictions;
+	std::vector<Configuration>* predictions = nullptr;
+	if (use_cached_predictions
+	    && guard_compression_prediction_cache_valid_
+	    && guard_compression_prediction_cache_.size() == sample_count) {
+		predictions = &guard_compression_prediction_cache_;
+	} else {
+		if (fill_prediction_cache) {
+			guard_compression_prediction_cache_.clear();
+			guard_compression_prediction_cache_.resize(sample_count);
+			predictions = &guard_compression_prediction_cache_;
+		} else {
+			local_predictions.resize(sample_count);
+			predictions = &local_predictions;
+		}
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			(*predictions)[idx] = guard_compression_samples_[idx].cfg;
+			const Neighborhoods* neighborhoods =
+				guard_compression_neighborhoods_.empty()
+					? nullptr
+					: &guard_compression_neighborhoods_[idx];
+			if (neighborhoods != nullptr)
+				p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx], *neighborhoods);
+			else
+				p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx]);
+		}
+		guard_compression_prediction_cache_valid_ = fill_prediction_cache;
+	}
+
+	std::vector<double> sample_energy_per_atom(sample_count, 0.0);
+	std::vector<double> sample_grad_scale(sample_count, 0.0);
+	for (std::size_t idx = 0; idx < sample_count; ++idx) {
+		const Configuration& pred = (*predictions)[idx];
+		if (pred.size() == 0)
+			continue;
+		sample_energy_per_atom[idx] = pred.energy / pred.size();
+	}
+
+	if (guard_compression_floor_weight > 0.0
+	    && guard_compression_global_sample_count_ > 0) {
+		const double scale = guard_compression_objective_multiplier_
+			* guard_compression_floor_weight
+			/ static_cast<double>(guard_compression_global_sample_count_);
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			const GuardCompressionSample& sample = guard_compression_samples_[idx];
+			const Configuration& pred = (*predictions)[idx];
+			if (pred.size() == 0)
+				continue;
+			const double violation = sample.floor_energy_per_atom
+				+ guard_compression_floor_margin
+				- sample_energy_per_atom[idx];
+			const double value = PositiveHuberValue(violation, guard_compression_smooth);
+			const double derivative = PositiveHuberGrad(violation, guard_compression_smooth);
+			loss_ += scale * pred.size() * value;
+			sample_grad_scale[idx] -= scale * derivative;
+		}
+	}
+
+	if (guard_compression_monotonic_weight > 0.0
+	    && guard_compression_global_pair_count_ > 0) {
+		const double scale = guard_compression_objective_multiplier_
+			* guard_compression_monotonic_weight
+			/ static_cast<double>(guard_compression_global_pair_count_);
+		for (const GuardCompressionPair& pair : guard_compression_pairs_) {
+			Configuration& less_pred = (*predictions)[pair.less_compressed];
+			Configuration& more_pred = (*predictions)[pair.more_compressed];
+			if (less_pred.size() == 0 || more_pred.size() == 0)
+				continue;
+			const double violation =
+				sample_energy_per_atom[pair.less_compressed]
+				+ guard_compression_monotonic_margin
+				- sample_energy_per_atom[pair.more_compressed];
+			const double value = PositiveHuberValue(violation, guard_compression_smooth);
+			const double derivative = PositiveHuberGrad(violation, guard_compression_smooth);
+			const double pair_atoms = static_cast<double>(
+				std::min(less_pred.size(), more_pred.size()));
+			loss_ += scale * pair_atoms * value;
+			sample_grad_scale[pair.less_compressed] +=
+				scale * pair_atoms * derivative / less_pred.size();
+			sample_grad_scale[pair.more_compressed] -=
+				scale * pair_atoms * derivative / more_pred.size();
+		}
+	}
+
+	if (grad_accumulator == nullptr)
+		return;
+	for (std::size_t idx = 0; idx < sample_count; ++idx) {
+		if (sample_grad_scale[idx] == 0.0)
+			continue;
+		const Neighborhoods* neighborhoods =
+			guard_compression_neighborhoods_.empty()
+				? nullptr
+				: &guard_compression_neighborhoods_[idx];
+		AccumulateGuardCompressionEnergyGrad((*predictions)[idx],
+		                                     neighborhoods,
+		                                     sample_grad_scale[idx],
+		                                     *grad_accumulator);
+	}
 }
 
 void NonLinearRegression::EvaluateTrainingConfiguration(
@@ -528,10 +740,12 @@ double NonLinearRegression::ObjectiveFunction(vector<Configuration>& training_se
 double NonLinearRegression::ObjectiveFunction(vector<Configuration>& training_set, const std::vector<Neighborhoods>* neighborhoods)
 {
 	objective_prediction_cache_valid_ = false;
+	guard_compression_prediction_cache_valid_ = false;
 	ResetObjectiveAccumulators();
 	for (size_t i = 0; i < training_set.size(); ++i)
 		AddLoss(training_set[i], neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), nullptr);
+	AddGuardCompressionLoss(nullptr, false, false);
 	return loss_;
 }
 
@@ -547,6 +761,7 @@ double NonLinearRegression::ObjectiveFunctionAndCachePredictions(
 		        neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i],
 		        &objective_prediction_cache_[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), nullptr);
+	AddGuardCompressionLoss(nullptr, false, true);
 	objective_prediction_cache_valid_ =
 		objective_prediction_cache_.size() == training_set.size();
 	return loss_;
@@ -561,6 +776,7 @@ void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& train
 void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& training_set, const std::vector<Neighborhoods>* neighborhoods)
 {
 	objective_prediction_cache_valid_ = false;
+	guard_compression_prediction_cache_valid_ = false;
 	ResetObjectiveAccumulators();
 	loss_grad_.resize(p_mlip->CoeffCount());
 	FillWithZero(loss_grad_);
@@ -568,6 +784,7 @@ void NonLinearRegression::CalcObjectiveFunctionGrad(vector<Configuration>& train
 	for (size_t i = 0; i < training_set.size(); ++i) 
 		AddLossGrad(training_set[i], neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), &loss_grad_);
+	AddGuardCompressionLoss(&loss_grad_, false, false);
 }
 
 void NonLinearRegression::CalcObjectiveFunctionGradFromCachedPredictions(
@@ -589,7 +806,9 @@ void NonLinearRegression::CalcObjectiveFunctionGradFromCachedPredictions(
 		            neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i],
 		            &objective_prediction_cache_[i]);
 	AddGlobalRegularization(static_cast<double>(training_set.size()), &loss_grad_);
+	AddGuardCompressionLoss(&loss_grad_, true, false);
 	objective_prediction_cache_valid_ = false;
+	guard_compression_prediction_cache_valid_ = false;
 }
 
 double NonLinearRegression::EnergyMAE_meVPerAtom() const
