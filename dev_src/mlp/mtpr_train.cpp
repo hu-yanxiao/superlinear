@@ -730,7 +730,9 @@ struct GuardCompressionOptions {
 
 struct GuardCompressionBuildResult {
 	std::vector<NonLinearRegression::GuardCompressionSample> samples;
+	std::vector<NonLinearRegression::GuardCompressionAnchorPair> anchor_pairs;
 	std::vector<NonLinearRegression::GuardCompressionPair> pairs;
+	std::vector<NonLinearRegression::GuardCompressionAnchorTriplet> anchor_triplets;
 	std::vector<NonLinearRegression::GuardCompressionTriplet> triplets;
 	std::vector<Neighborhoods> neighborhoods;
 	long long global_sample_count = 0;
@@ -933,11 +935,15 @@ NonLinearRegression::GuardCompressionSample GuardSampleFromConfig(Configuration 
 void LoadGuardSamplesFromFile(
 	const std::string& filename,
 	std::vector<NonLinearRegression::GuardCompressionSample>& samples,
+	std::vector<NonLinearRegression::GuardCompressionAnchorPair>& anchor_pairs,
 	std::vector<NonLinearRegression::GuardCompressionPair>& pairs,
+	std::vector<NonLinearRegression::GuardCompressionAnchorTriplet>& anchor_triplets,
 	std::vector<NonLinearRegression::GuardCompressionTriplet>& triplets)
 {
 	samples.clear();
+	anchor_pairs.clear();
 	pairs.clear();
+	anchor_triplets.clear();
 	triplets.clear();
 	std::map<int, int> previous_by_group;
 	std::map<int, int> second_previous_by_group;
@@ -949,6 +955,11 @@ void LoadGuardSamplesFromFile(
 		const int current_index = static_cast<int>(samples.size());
 		std::map<int, int>::iterator prev_it =
 			previous_by_group.find(sample.group_index);
+		if (prev_it == previous_by_group.end()) {
+			NonLinearRegression::GuardCompressionAnchorPair pair;
+			pair.more_compressed = current_index;
+			anchor_pairs.push_back(pair);
+		}
 		if (prev_it != previous_by_group.end()) {
 			NonLinearRegression::GuardCompressionPair pair;
 			pair.less_compressed = prev_it->second;
@@ -957,6 +968,13 @@ void LoadGuardSamplesFromFile(
 		}
 		std::map<int, int>::iterator second_prev_it =
 			second_previous_by_group.find(sample.group_index);
+		if (prev_it != previous_by_group.end()
+		    && second_prev_it == second_previous_by_group.end()) {
+			NonLinearRegression::GuardCompressionAnchorTriplet triplet;
+			triplet.first_compressed = prev_it->second;
+			triplet.second_compressed = current_index;
+			anchor_triplets.push_back(triplet);
+		}
 		if (second_prev_it != second_previous_by_group.end()
 		    && prev_it != previous_by_group.end()) {
 			NonLinearRegression::GuardCompressionTriplet triplet;
@@ -1077,12 +1095,11 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 				group_atoms += fake.size();
 				result.global_sample_count += 1;
 			}
+			result.global_pair_count +=
+				static_cast<long long>(options.scales.size());
 			if (options.scales.size() >= 2)
-				result.global_pair_count +=
-					static_cast<long long>(options.scales.size() - 1);
-			if (options.scales.size() >= 3)
 				result.global_triplet_count +=
-					static_cast<long long>(options.scales.size() - 2);
+					static_cast<long long>(options.scales.size() - 1);
 			result.global_group_count += 1;
 			shard_costs[owner] += std::max<long long>(1, group_atoms);
 			group_index++;
@@ -1121,7 +1138,12 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 #endif
 
 	const std::string local_shard = shard_dir + "/rank_" + std::to_string(proc_rank) + ".bin";
-	LoadGuardSamplesFromFile(local_shard, result.samples, result.pairs, result.triplets);
+	LoadGuardSamplesFromFile(local_shard,
+	                         result.samples,
+	                         result.anchor_pairs,
+	                         result.pairs,
+	                         result.anchor_triplets,
+	                         result.triplets);
 
 #ifdef MLIP_MPI
 	MPI_Barrier(MPI_COMM_WORLD);
@@ -1163,7 +1185,9 @@ void ReportGuardCompressionStatus(
 	MLMTPR& mtpr,
 	const std::vector<NonLinearRegression::GuardCompressionSample>& samples,
 	const std::vector<Neighborhoods>& neighborhoods,
+	const std::vector<NonLinearRegression::GuardCompressionAnchorPair>& anchor_pairs,
 	const std::vector<NonLinearRegression::GuardCompressionPair>& pairs,
+	const std::vector<NonLinearRegression::GuardCompressionAnchorTriplet>& anchor_triplets,
 	const std::vector<NonLinearRegression::GuardCompressionTriplet>& triplets,
 	const GuardCompressionOptions& options,
 	const std::string& label,
@@ -1194,12 +1218,42 @@ void ReportGuardCompressionStatus(
 			local_worst_floor = std::max(local_worst_floor, violation);
 		}
 	}
+	for (const auto& pair : anchor_pairs) {
+		const double violation = samples[pair.more_compressed].floor_energy_per_atom
+			+ options.monotonic_margin - epa[pair.more_compressed];
+		if (violation > 0.0) {
+			local_mono_active++;
+			local_worst_mono = std::max(local_worst_mono, violation);
+		}
+	}
 	for (const auto& pair : pairs) {
 		const double violation = epa[pair.less_compressed]
 			+ options.monotonic_margin - epa[pair.more_compressed];
 		if (violation > 0.0) {
 			local_mono_active++;
 			local_worst_mono = std::max(local_worst_mono, violation);
+		}
+	}
+	for (const auto& triplet : anchor_triplets) {
+		const double x_anchor = 0.0;
+		const double x_first = GuardCompressionCoordinate(
+			samples[triplet.first_compressed].scale);
+		const double x_second = GuardCompressionCoordinate(
+			samples[triplet.second_compressed].scale);
+		const double dx_left = x_first - x_anchor;
+		const double dx_right = x_second - x_first;
+		if (!(dx_left > 0.0 && dx_right > 0.0))
+			ERROR("guard-compression anchor-curvature triplet has non-increasing compression coordinate");
+		const double slope_left =
+			(epa[triplet.first_compressed]
+			 - samples[triplet.first_compressed].floor_energy_per_atom) / dx_left;
+		const double slope_right =
+			(epa[triplet.second_compressed] - epa[triplet.first_compressed]) / dx_right;
+		const double violation =
+			slope_left + options.curvature_margin - slope_right;
+		if (violation > 0.0) {
+			local_curv_active++;
+			local_worst_curv = std::max(local_worst_curv, violation);
 		}
 	}
 	for (const auto& triplet : triplets) {
@@ -1232,8 +1286,10 @@ void ReportGuardCompressionStatus(
 	long long global_mono_active = local_mono_active;
 	long long global_curv_active = local_curv_active;
 	long long local_samples = static_cast<long long>(samples.size());
-	long long local_pairs = static_cast<long long>(pairs.size());
-	long long local_triplets = static_cast<long long>(triplets.size());
+	long long local_pairs =
+		static_cast<long long>(anchor_pairs.size() + pairs.size());
+	long long local_triplets =
+		static_cast<long long>(anchor_triplets.size() + triplets.size());
 	long long global_samples = local_samples;
 	long long global_pairs = local_pairs;
 	long long global_triplets = local_triplets;
@@ -2147,7 +2203,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ReportGuardCompressionStatus(mtpr,
 		                             guard_compression.samples,
 		                             guard_compression.neighborhoods,
+		                             guard_compression.anchor_pairs,
 		                             guard_compression.pairs,
+		                             guard_compression.anchor_triplets,
 		                             guard_compression.triplets,
 		                             guard_compression_options,
 		                             "initial",
@@ -2155,7 +2213,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		trainer.SetGuardCompressionSamples(
 			guard_compression.samples,
 			guard_compression.neighborhoods,
+			guard_compression.anchor_pairs,
 			guard_compression.pairs,
+			guard_compression.anchor_triplets,
 			guard_compression.triplets,
 			guard_compression.global_sample_count,
 			guard_compression.global_pair_count,
@@ -2417,7 +2477,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				ReportGuardCompressionStatus(mtpr,
 				                             guard_compression.samples,
 				                             guard_compression.neighborhoods,
+				                             guard_compression.anchor_pairs,
 				                             guard_compression.pairs,
+				                             guard_compression.anchor_triplets,
 				                             guard_compression.triplets,
 				                             guard_compression_options,
 				                             "final",

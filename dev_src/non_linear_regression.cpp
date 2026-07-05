@@ -123,7 +123,9 @@ void NonLinearRegression::ResetObjectiveAccumulators()
 void NonLinearRegression::SetGuardCompressionSamples(
 	std::vector<GuardCompressionSample> samples,
 	std::vector<Neighborhoods> neighborhoods,
+	std::vector<GuardCompressionAnchorPair> anchor_pairs,
 	std::vector<GuardCompressionPair> pairs,
+	std::vector<GuardCompressionAnchorTriplet> anchor_triplets,
 	std::vector<GuardCompressionTriplet> triplets,
 	long long global_sample_count,
 	long long global_pair_count,
@@ -136,11 +138,30 @@ void NonLinearRegression::SetGuardCompressionSamples(
 		ERROR("guard-compression global counts should be non-negative");
 	if (!std::isfinite(objective_multiplier) || objective_multiplier < 0.0)
 		ERROR("guard-compression objective multiplier should be finite and non-negative");
+	for (const GuardCompressionAnchorPair& pair : anchor_pairs) {
+		if (pair.more_compressed < 0
+		    || pair.more_compressed >= static_cast<int>(samples.size()))
+			ERROR("guard-compression anchor-pair index is out of range");
+	}
 	for (const GuardCompressionPair& pair : pairs) {
 		if (pair.less_compressed < 0 || pair.more_compressed < 0
 		    || pair.less_compressed >= static_cast<int>(samples.size())
 		    || pair.more_compressed >= static_cast<int>(samples.size()))
 			ERROR("guard-compression pair index is out of range");
+	}
+	for (const GuardCompressionAnchorTriplet& triplet : anchor_triplets) {
+		if (triplet.first_compressed < 0
+		    || triplet.second_compressed < 0
+		    || triplet.first_compressed >= static_cast<int>(samples.size())
+		    || triplet.second_compressed >= static_cast<int>(samples.size()))
+			ERROR("guard-compression anchor-triplet index is out of range");
+		const double x0 = 0.0;
+		const double x1 = GuardCompressionCoordinate(
+			samples[triplet.first_compressed].scale);
+		const double x2 = GuardCompressionCoordinate(
+			samples[triplet.second_compressed].scale);
+		if (!(x0 < x1 && x1 < x2))
+			ERROR("guard-compression anchor-triplet scales should be ordered from anchor to more compressed");
 	}
 	for (const GuardCompressionTriplet& triplet : triplets) {
 		if (triplet.less_compressed < 0
@@ -162,7 +183,9 @@ void NonLinearRegression::SetGuardCompressionSamples(
 
 	guard_compression_samples_ = std::move(samples);
 	guard_compression_neighborhoods_ = std::move(neighborhoods);
+	guard_compression_anchor_pairs_ = std::move(anchor_pairs);
 	guard_compression_pairs_ = std::move(pairs);
+	guard_compression_anchor_triplets_ = std::move(anchor_triplets);
 	guard_compression_triplets_ = std::move(triplets);
 	guard_compression_global_sample_count_ = global_sample_count;
 	guard_compression_global_pair_count_ = global_pair_count;
@@ -176,7 +199,9 @@ void NonLinearRegression::ClearGuardCompressionSamples()
 {
 	guard_compression_samples_.clear();
 	guard_compression_neighborhoods_.clear();
+	guard_compression_anchor_pairs_.clear();
 	guard_compression_pairs_.clear();
+	guard_compression_anchor_triplets_.clear();
 	guard_compression_triplets_.clear();
 	guard_compression_prediction_cache_.clear();
 	guard_compression_prediction_cache_valid_ = false;
@@ -395,6 +420,21 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		const double scale = guard_compression_objective_multiplier_
 			* guard_compression_monotonic_weight
 			/ static_cast<double>(guard_compression_global_pair_count_);
+		for (const GuardCompressionAnchorPair& pair : guard_compression_anchor_pairs_) {
+			const GuardCompressionSample& sample =
+				guard_compression_samples_[pair.more_compressed];
+			Configuration& more_pred = (*predictions)[pair.more_compressed];
+			if (more_pred.size() == 0)
+				continue;
+			const double violation =
+				sample.floor_energy_per_atom
+				+ guard_compression_monotonic_margin
+				- sample_energy_per_atom[pair.more_compressed];
+			const double value = PositiveHuberValue(violation, guard_compression_smooth);
+			const double derivative = PositiveHuberGrad(violation, guard_compression_smooth);
+			loss_ += scale * more_pred.size() * value;
+			sample_grad_scale[pair.more_compressed] -= scale * derivative;
+		}
 		for (const GuardCompressionPair& pair : guard_compression_pairs_) {
 			Configuration& less_pred = (*predictions)[pair.less_compressed];
 			Configuration& more_pred = (*predictions)[pair.more_compressed];
@@ -421,6 +461,40 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		const double scale = guard_compression_objective_multiplier_
 			* guard_compression_curvature_weight
 			/ static_cast<double>(guard_compression_global_triplet_count_);
+		for (const GuardCompressionAnchorTriplet& triplet : guard_compression_anchor_triplets_) {
+			const GuardCompressionSample& first_sample =
+				guard_compression_samples_[triplet.first_compressed];
+			Configuration& first_pred = (*predictions)[triplet.first_compressed];
+			Configuration& second_pred = (*predictions)[triplet.second_compressed];
+			if (first_pred.size() == 0 || second_pred.size() == 0)
+				continue;
+			const double x_anchor = 0.0;
+			const double x_first = GuardCompressionCoordinate(first_sample.scale);
+			const double x_second = GuardCompressionCoordinate(
+				guard_compression_samples_[triplet.second_compressed].scale);
+			const double dx_left = x_first - x_anchor;
+			const double dx_right = x_second - x_first;
+			if (!(dx_left > 0.0 && dx_right > 0.0))
+				ERROR("guard-compression anchor-curvature triplet has non-increasing compression coordinate");
+			const double slope_left =
+				(sample_energy_per_atom[triplet.first_compressed]
+				 - first_sample.floor_energy_per_atom) / dx_left;
+			const double slope_right =
+				(sample_energy_per_atom[triplet.second_compressed]
+				 - sample_energy_per_atom[triplet.first_compressed]) / dx_right;
+			const double violation =
+				slope_left + guard_compression_curvature_margin - slope_right;
+			const double value = PositiveHuberValue(violation, guard_compression_smooth);
+			const double derivative = PositiveHuberGrad(violation, guard_compression_smooth);
+			const double triplet_atoms = static_cast<double>(
+				std::min(first_pred.size(), second_pred.size()));
+			loss_ += scale * triplet_atoms * value;
+			sample_grad_scale[triplet.first_compressed] +=
+				scale * triplet_atoms * derivative
+				* (1.0 / dx_left + 1.0 / dx_right) / first_pred.size();
+			sample_grad_scale[triplet.second_compressed] -=
+				scale * triplet_atoms * derivative / (dx_right * second_pred.size());
+		}
 		for (const GuardCompressionTriplet& triplet : guard_compression_triplets_) {
 			Configuration& less_pred = (*predictions)[triplet.less_compressed];
 			Configuration& middle_pred = (*predictions)[triplet.middle_compressed];

@@ -577,6 +577,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"        generate cached uniformly compressed guard structures per composition. Default=off.\n"
 			"    --guard-compression-scales=<s1,s2,...>: compression scales for guard structures.\n"
 			"        Default=0.95,0.90,0.85,0.80\n"
+			"        Monotonic and convex guards include the anchor as the s=1 point.\n"
 			"    --guard-compression-floor-weight=<double>: energy-only lower-bound guard weight. Default=1\n"
 			"    --guard-compression-monotonic-weight=<double>: energy-only monotonic compression guard weight. Default=1\n"
 			"    --guard-compression-curvature-weight=<double>: energy-only convex compression guard weight. Default=1\n"

@@ -25,10 +25,17 @@ public:
 		int less_compressed = -1;
 		int more_compressed = -1;
 	};
+	struct GuardCompressionAnchorPair {
+		int more_compressed = -1;
+	};
 	struct GuardCompressionTriplet {
 		int less_compressed = -1;
 		int middle_compressed = -1;
 		int more_compressed = -1;
+	};
+	struct GuardCompressionAnchorTriplet {
+		int first_compressed = -1;
+		int second_compressed = -1;
 	};
 
 protected:
@@ -87,7 +94,9 @@ protected:
 	bool objective_prediction_cache_valid_ = false;
 	std::vector<GuardCompressionSample> guard_compression_samples_;
 	std::vector<Neighborhoods> guard_compression_neighborhoods_;
+	std::vector<GuardCompressionAnchorPair> guard_compression_anchor_pairs_;
 	std::vector<GuardCompressionPair> guard_compression_pairs_;
+	std::vector<GuardCompressionAnchorTriplet> guard_compression_anchor_triplets_;
 	std::vector<GuardCompressionTriplet> guard_compression_triplets_;
 	std::vector<Configuration> guard_compression_prediction_cache_;
 	bool guard_compression_prediction_cache_valid_ = false;
@@ -149,7 +158,9 @@ public:
 	bool CollectErrorMetrics() const { return collect_error_metrics_; }
 	void SetGuardCompressionSamples(std::vector<GuardCompressionSample> samples,
 	                                std::vector<Neighborhoods> neighborhoods,
+	                                std::vector<GuardCompressionAnchorPair> anchor_pairs,
 	                                std::vector<GuardCompressionPair> pairs,
+	                                std::vector<GuardCompressionAnchorTriplet> anchor_triplets,
 	                                std::vector<GuardCompressionTriplet> triplets,
 	                                long long global_sample_count,
 	                                long long global_pair_count,
