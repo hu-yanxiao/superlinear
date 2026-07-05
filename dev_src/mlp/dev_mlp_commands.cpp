@@ -361,7 +361,7 @@ void ConfigureDevGuardCompressionProbe(
 	probe.guard_compression_curvature_weight = ParseDevDoubleOption(
 		opts, "guard-compression-curvature-weight", 1.0);
 	probe.guard_compression_block_monotonic_weight = ParseDevDoubleOption(
-		opts, "guard-compression-block-monotonic-weight", 0.0);
+		opts, "guard-compression-block-monotonic-weight", 0.1);
 	probe.guard_compression_floor_margin = ParseDevDoubleOption(
 		opts, "guard-compression-floor-margin", 0.0);
 	probe.guard_compression_monotonic_margin = ParseDevDoubleOption(

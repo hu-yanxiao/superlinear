@@ -721,7 +721,7 @@ struct GuardCompressionOptions {
 	double floor_weight = 1.0;
 	double monotonic_weight = 1.0;
 	double curvature_weight = 1.0;
-	double block_monotonic_weight = 0.0;
+	double block_monotonic_weight = 0.1;
 	double floor_margin = 0.0;
 	double monotonic_margin = 0.2;
 	double curvature_margin = 0.0;

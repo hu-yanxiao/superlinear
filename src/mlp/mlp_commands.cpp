@@ -582,7 +582,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --guard-compression-monotonic-weight=<double>: energy-only monotonic compression guard weight. Default=1\n"
 			"    --guard-compression-curvature-weight=<double>: energy-only convex compression guard weight. Default=1\n"
 			"    --guard-compression-block-monotonic-weight=<double>: optional body-order block monotonic guard weight.\n"
-			"        Applies to scalar contribution blocks with body order >=2. Default=0\n"
+			"        Applies to scalar contribution blocks with body order >=2. Default=0.1\n"
 			"    --guard-compression-floor-margin=<double>: lower-bound margin in eV/atom. Default=0\n"
 			"    --guard-compression-monotonic-margin=<double>: monotonic margin in eV/atom. Default=0.2\n"
 			"    --guard-compression-curvature-margin=<double>: convex slope margin in eV/atom per log-density strain. Default=0\n"
