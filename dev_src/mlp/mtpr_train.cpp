@@ -721,6 +721,7 @@ struct GuardCompressionOptions {
 	double floor_weight = 1.0;
 	double monotonic_weight = 1.0;
 	double curvature_weight = 1.0;
+	double block_monotonic_weight = 0.0;
 	double floor_margin = 0.0;
 	double monotonic_margin = 0.2;
 	double curvature_margin = 0.0;
@@ -807,6 +808,9 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 	if (!get_opt("guard-compression-curvature-weight").empty())
 		options.curvature_weight = ParseStrictDoubleOption(get_opt("guard-compression-curvature-weight"),
 		                                                   "--guard-compression-curvature-weight");
+	if (!get_opt("guard-compression-block-monotonic-weight").empty())
+		options.block_monotonic_weight = ParseStrictDoubleOption(get_opt("guard-compression-block-monotonic-weight"),
+		                                                         "--guard-compression-block-monotonic-weight");
 	if (!get_opt("guard-compression-floor-margin").empty())
 		options.floor_margin = ParseStrictDoubleOption(get_opt("guard-compression-floor-margin"),
 		                                               "--guard-compression-floor-margin");
@@ -825,6 +829,8 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 		ERROR("--guard-compression-monotonic-weight should be finite and non-negative");
 	if (!std::isfinite(options.curvature_weight) || options.curvature_weight < 0.0)
 		ERROR("--guard-compression-curvature-weight should be finite and non-negative");
+	if (!std::isfinite(options.block_monotonic_weight) || options.block_monotonic_weight < 0.0)
+		ERROR("--guard-compression-block-monotonic-weight should be finite and non-negative");
 	if (!std::isfinite(options.floor_margin))
 		ERROR("--guard-compression-floor-margin should be finite");
 	if (!std::isfinite(options.monotonic_margin))
@@ -836,8 +842,9 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 	if (options.enabled
 	    && options.floor_weight == 0.0
 	    && options.monotonic_weight == 0.0
-	    && options.curvature_weight == 0.0)
-		ERROR("guard compression is enabled but floor, monotonic, and curvature weights are all zero");
+	    && options.curvature_weight == 0.0
+	    && options.block_monotonic_weight == 0.0)
+		ERROR("guard compression is enabled but floor, monotonic, curvature, and block monotonic weights are all zero");
 	return options;
 }
 
@@ -898,7 +905,8 @@ void StoreGuardFeatures(Configuration& cfg,
                         double scale,
                         double floor_energy_per_atom,
                         const std::string& anchor_kind,
-                        const std::string& composition_key)
+                        const std::string& composition_key,
+                        bool is_anchor = false)
 {
 	cfg.features["guard_compression_group"] = std::to_string(group_index);
 	cfg.features["guard_compression_scale"] = FormatGuardDouble(scale);
@@ -906,6 +914,7 @@ void StoreGuardFeatures(Configuration& cfg,
 		FormatGuardDouble(floor_energy_per_atom);
 	cfg.features["guard_compression_anchor"] = anchor_kind;
 	cfg.features["guard_compression_composition"] = composition_key;
+	cfg.features["guard_compression_is_anchor"] = is_anchor ? "1" : "0";
 }
 
 NonLinearRegression::GuardCompressionSample GuardSampleFromConfig(Configuration cfg)
@@ -923,6 +932,11 @@ NonLinearRegression::GuardCompressionSample GuardSampleFromConfig(Configuration 
 	sample.group_index = std::stoi(group_it->second);
 	sample.scale = ParseStrictDoubleOption(scale_it->second,
 	                                       "guard_compression_scale");
+	const auto anchor_flag_it = cfg.features.find("guard_compression_is_anchor");
+	sample.is_anchor = anchor_flag_it != cfg.features.end()
+		&& (anchor_flag_it->second == "1"
+		    || anchor_flag_it->second == "true"
+		    || anchor_flag_it->second == "True");
 	cfg.has_energy(false);
 	cfg.has_forces(false);
 	cfg.has_stresses(false);
@@ -945,47 +959,57 @@ void LoadGuardSamplesFromFile(
 	pairs.clear();
 	anchor_triplets.clear();
 	triplets.clear();
-	std::map<int, int> previous_by_group;
-	std::map<int, int> second_previous_by_group;
+	std::map<int, int> anchor_by_group;
+	std::map<int, int> previous_fake_by_group;
+	std::map<int, int> second_previous_fake_by_group;
 	Configuration cfg;
 	std::ifstream ifs(filename, std::ios::binary);
 	for (; cfg.Load(ifs); ) {
 		NonLinearRegression::GuardCompressionSample sample =
 			GuardSampleFromConfig(cfg);
 		const int current_index = static_cast<int>(samples.size());
+		if (sample.is_anchor) {
+			anchor_by_group[sample.group_index] = current_index;
+			samples.push_back(std::move(sample));
+			continue;
+		}
 		std::map<int, int>::iterator prev_it =
-			previous_by_group.find(sample.group_index);
-		if (prev_it == previous_by_group.end()) {
+			previous_fake_by_group.find(sample.group_index);
+		if (prev_it == previous_fake_by_group.end()) {
 			NonLinearRegression::GuardCompressionAnchorPair pair;
+			const std::map<int, int>::iterator anchor_it =
+				anchor_by_group.find(sample.group_index);
+			if (anchor_it != anchor_by_group.end())
+				pair.anchor = anchor_it->second;
 			pair.more_compressed = current_index;
 			anchor_pairs.push_back(pair);
 		}
-		if (prev_it != previous_by_group.end()) {
+		if (prev_it != previous_fake_by_group.end()) {
 			NonLinearRegression::GuardCompressionPair pair;
 			pair.less_compressed = prev_it->second;
 			pair.more_compressed = current_index;
 			pairs.push_back(pair);
 		}
 		std::map<int, int>::iterator second_prev_it =
-			second_previous_by_group.find(sample.group_index);
-		if (prev_it != previous_by_group.end()
-		    && second_prev_it == second_previous_by_group.end()) {
+			second_previous_fake_by_group.find(sample.group_index);
+		if (prev_it != previous_fake_by_group.end()
+		    && second_prev_it == second_previous_fake_by_group.end()) {
 			NonLinearRegression::GuardCompressionAnchorTriplet triplet;
 			triplet.first_compressed = prev_it->second;
 			triplet.second_compressed = current_index;
 			anchor_triplets.push_back(triplet);
 		}
-		if (second_prev_it != second_previous_by_group.end()
-		    && prev_it != previous_by_group.end()) {
+		if (second_prev_it != second_previous_fake_by_group.end()
+		    && prev_it != previous_fake_by_group.end()) {
 			NonLinearRegression::GuardCompressionTriplet triplet;
 			triplet.less_compressed = second_prev_it->second;
 			triplet.middle_compressed = prev_it->second;
 			triplet.more_compressed = current_index;
 			triplets.push_back(triplet);
 		}
-		if (prev_it != previous_by_group.end())
-			second_previous_by_group[sample.group_index] = prev_it->second;
-		previous_by_group[sample.group_index] = current_index;
+		if (prev_it != previous_fake_by_group.end())
+			second_previous_fake_by_group[sample.group_index] = prev_it->second;
+		previous_fake_by_group[sample.group_index] = current_index;
 		samples.push_back(std::move(sample));
 	}
 }
@@ -1081,6 +1105,20 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 			const int owner = static_cast<int>(
 				std::min_element(shard_costs.begin(), shard_costs.end()) - shard_costs.begin());
 			long long group_atoms = 0;
+			if (options.block_monotonic_weight > 0.0) {
+				Configuration anchor_cfg = candidate.cfg;
+				StoreGuardFeatures(anchor_cfg,
+				                   group_index,
+				                   1.0,
+				                   candidate.energy_per_atom,
+				                   anchor_kind,
+				                   key,
+				                   true);
+				anchor_cfg.SaveBin(shard_streams[owner]);
+				shard_cfg_counts[owner] += 1;
+				shard_atom_counts[owner] += anchor_cfg.size();
+				group_atoms += anchor_cfg.size();
+			}
 			for (double scale : options.scales) {
 				Configuration fake = UniformlyScaledConfiguration(candidate.cfg, scale);
 				StoreGuardFeatures(fake,
@@ -1088,7 +1126,8 @@ GuardCompressionBuildResult BuildGuardCompressionSamplesFromFile(
 				                   scale,
 				                   candidate.energy_per_atom,
 				                   anchor_kind,
-				                   key);
+				                   key,
+				                   false);
 				fake.SaveBin(shard_streams[owner]);
 				shard_cfg_counts[owner] += 1;
 				shard_atom_counts[owner] += fake.size();
@@ -1211,6 +1250,8 @@ void ReportGuardCompressionStatus(
 		if (cfg.size() == 0)
 			continue;
 		epa[i] = cfg.energy / cfg.size();
+		if (samples[i].is_anchor)
+			continue;
 		const double violation = samples[i].floor_energy_per_atom
 			+ options.floor_margin - epa[i];
 		if (violation > 0.0) {
@@ -1285,7 +1326,10 @@ void ReportGuardCompressionStatus(
 	long long global_floor_active = local_floor_active;
 	long long global_mono_active = local_mono_active;
 	long long global_curv_active = local_curv_active;
-	long long local_samples = static_cast<long long>(samples.size());
+	long long local_samples = 0;
+	for (const auto& sample : samples)
+		if (!sample.is_anchor)
+			local_samples++;
 	long long local_pairs =
 		static_cast<long long>(anchor_pairs.size() + pairs.size());
 	long long local_triplets =
@@ -1949,6 +1993,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		guard_compression_options.monotonic_weight;
 	trainer.guard_compression_curvature_weight =
 		guard_compression_options.curvature_weight;
+	trainer.guard_compression_block_monotonic_weight =
+		guard_compression_options.block_monotonic_weight;
 	trainer.guard_compression_floor_margin =
 		guard_compression_options.floor_margin;
 	trainer.guard_compression_monotonic_margin =
@@ -2026,6 +2072,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << " floor_weight=" << guard_compression_options.floor_weight
 			          << " monotonic_weight=" << guard_compression_options.monotonic_weight
 			          << " curvature_weight=" << guard_compression_options.curvature_weight
+			          << " block_monotonic_weight=" << guard_compression_options.block_monotonic_weight
 			          << " floor_margin=" << guard_compression_options.floor_margin
 			          << " monotonic_margin=" << guard_compression_options.monotonic_margin
 			          << " curvature_margin=" << guard_compression_options.curvature_margin

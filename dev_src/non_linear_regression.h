@@ -20,12 +20,14 @@ public:
 		double floor_energy_per_atom = 0.0;
 		double scale = 1.0;
 		int group_index = -1;
+		bool is_anchor = false;
 	};
 	struct GuardCompressionPair {
 		int less_compressed = -1;
 		int more_compressed = -1;
 	};
 	struct GuardCompressionAnchorPair {
+		int anchor = -1;
 		int more_compressed = -1;
 	};
 	struct GuardCompressionTriplet {
@@ -75,6 +77,10 @@ protected:
 	                                          const Neighborhoods* neighborhoods,
 	                                          double dloss_denergy,
 	                                          Array1D& grad_accumulator);
+	void AccumulateGuardCompressionBodyOrderGrad(Configuration& cfg,
+	                                             const Neighborhoods* neighborhoods,
+	                                             const std::vector<double>& body_order_weights,
+	                                             Array1D& grad_accumulator);
 	void EvaluateTrainingConfiguration(const Configuration& orig,
 	                                   Configuration& cfg,
 	                                   const Neighborhoods* neighborhoods,
@@ -121,6 +127,7 @@ public:
 	double guard_compression_floor_weight = 0.0;
 	double guard_compression_monotonic_weight = 0.0;
 	double guard_compression_curvature_weight = 0.0;
+	double guard_compression_block_monotonic_weight = 0.0;
 	double guard_compression_floor_margin = 0.0;
 	double guard_compression_monotonic_margin = 0.2;
 	double guard_compression_curvature_margin = 0.0;

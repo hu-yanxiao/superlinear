@@ -6005,6 +6005,132 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 	active_two_layer_gate_adjoints_ = saved_gate_adjoints;
 }
 
+int MLMTPR::SHBodyOrderMax() const
+{
+	return sh_body_order_;
+}
+
+bool MLMTPR::HasSHBodyOrderBlocks() const
+{
+	return is_sh_potential_ && has_sh_scalar_info_
+		&& static_cast<int>(sh_scalar_info_.size()) == alpha_scalar_moments
+		&& sh_body_order_ >= 2
+		&& !TwoLayerResidualEnabled();
+}
+
+void MLMTPR::CalcSHBodyOrderEnergyContributions(
+	Configuration& cfg,
+	const Neighborhoods& neighborhoods,
+	std::vector<double>& out_energy_by_body_order)
+{
+	if (!HasSHBodyOrderBlocks())
+		ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
+	if (neighborhoods.size() != cfg.size())
+		ERROR("CalcSHBodyOrderEnergyContributions: neighborhood count mismatch");
+
+	PrepareEvalCaches();
+	out_energy_by_body_order.assign(sh_body_order_ + 1, 0.0);
+
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+	std::vector<double>* saved_gate_adjoints = active_two_layer_gate_adjoints_;
+	const int saved_edge_atom_index = active_two_layer_edge_cache_atom_index_;
+	if (use_two_layer_gate) {
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false);
+		PrepareTwoLayerGateValues(cfg, neighborhoods);
+		active_two_layer_gate_values_ = &two_layer_gate_values_;
+		active_two_layer_gate_adjoints_ = nullptr;
+	} else {
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_two_layer_edge_cache_atom_index_ = -1;
+	}
+
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const Neighborhood& nbh = neighborhoods[ind];
+		if (use_two_layer_gate)
+			active_two_layer_edge_cache_atom_index_ = ind;
+		CalcBasisFuncs(nbh, basis_vals);
+		const double center_linear = linear_coeffs[nbh.my_type];
+		for (int i = 0; i < alpha_scalar_moments; ++i) {
+			const int body_order = sh_scalar_info_[i].body_order;
+			if (body_order < 2 || body_order > sh_body_order_)
+				continue;
+			out_energy_by_body_order[body_order] +=
+				center_linear
+				* linear_coeffs[species_count + i]
+				* linear_mults[i]
+				* basis_vals[1 + i];
+		}
+	}
+
+	active_two_layer_edge_cache_atom_index_ = saved_edge_atom_index;
+	active_two_layer_gate_values_ = saved_gate_values;
+	active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+}
+
+void MLMTPR::AccumulateSHBodyOrderEnergyGrad(
+	Configuration& cfg,
+	const Neighborhoods& neighborhoods,
+	const std::vector<double>& body_order_weights,
+	Array1D& out_grads_accumulator)
+{
+	if (!HasSHBodyOrderBlocks())
+		ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
+	if (neighborhoods.size() != cfg.size())
+		ERROR("AccumulateSHBodyOrderEnergyGrad: neighborhood count mismatch");
+	if (static_cast<int>(body_order_weights.size()) <= sh_body_order_)
+		ERROR("AccumulateSHBodyOrderEnergyGrad: body-order weight array is too small");
+
+	out_grads_accumulator.resize(CoeffCount());
+	const int linear_offset = LinearCoeffOffset();
+	std::vector<int> type_counts(species_count, 0);
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const int type = cfg.type(ind);
+		if (type >= 0 && type < species_count)
+			type_counts[type]++;
+	}
+
+	const std::vector<double> saved_regression_coeffs = regression_coeffs;
+	std::vector<double> energy_weights(cfg.size(), 0.0);
+	std::vector<double> scalar_grad_before(alpha_scalar_moments, 0.0);
+
+	for (int body_order = 2; body_order <= sh_body_order_; ++body_order) {
+		const double block_weight = body_order_weights[body_order];
+		if (block_weight == 0.0)
+			continue;
+
+		std::fill(energy_weights.begin(), energy_weights.end(), block_weight);
+		regression_coeffs = saved_regression_coeffs;
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			if (sh_scalar_info_[i].body_order != body_order)
+				regression_coeffs[linear_offset + species_count + i] = 0.0;
+
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			scalar_grad_before[i] =
+				out_grads_accumulator[linear_offset + species_count + i];
+
+		AccumulateEnergyCombinationGrad(cfg,
+		                                energy_weights,
+		                                out_grads_accumulator,
+		                                neighborhoods);
+
+		for (int type = 0; type < species_count; ++type) {
+			const double one_body_grad = block_weight * type_counts[type];
+			out_grads_accumulator[linear_offset + type] -= one_body_grad;
+			if (shift_)
+				out_grads_accumulator[type] -= one_body_grad;
+		}
+		for (int i = 0; i < alpha_scalar_moments; ++i)
+			if (sh_scalar_info_[i].body_order != body_order)
+				out_grads_accumulator[linear_offset + species_count + i] =
+					scalar_grad_before[i];
+	}
+
+	regression_coeffs = saved_regression_coeffs;
+	LinCoeff();
+}
+
 
 
 

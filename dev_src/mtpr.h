@@ -498,10 +498,21 @@ public:
 		void AccumulateEnergyCombinationGrad(Configuration& cfg,
 		                                      std::vector<double>& ene_weight,
 		                                      Array1D& out_grads_accumulator) override;
-		void AccumulateEnergyCombinationGrad(Configuration& cfg,
+	void AccumulateEnergyCombinationGrad(Configuration& cfg,
 		                                      std::vector<double>& ene_weight,
 		                                      Array1D& out_grads_accumulator,
 		                                      const Neighborhoods& neighborhoods) override;
+	int SHBodyOrderMax() const;
+	bool HasSHBodyOrderBlocks() const;
+	void CalcSHBodyOrderEnergyContributions(
+		Configuration& cfg,
+		const Neighborhoods& neighborhoods,
+		std::vector<double>& out_energy_by_body_order);
+	void AccumulateSHBodyOrderEnergyGrad(
+		Configuration& cfg,
+		const Neighborhoods& neighborhoods,
+		const std::vector<double>& body_order_weights,
+		Array1D& out_grads_accumulator);
 	bool HasNonzeroTwoLayerGateWeights() const;
 	bool HasNonzeroTwoLayerGateEdgeL1Weights() const;
 	bool RequiresTwoLayerGateEvaluation() const;

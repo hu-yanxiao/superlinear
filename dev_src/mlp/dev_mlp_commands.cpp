@@ -360,6 +360,8 @@ void ConfigureDevGuardCompressionProbe(
 		opts, "guard-compression-monotonic-weight", 1.0);
 	probe.guard_compression_curvature_weight = ParseDevDoubleOption(
 		opts, "guard-compression-curvature-weight", 1.0);
+	probe.guard_compression_block_monotonic_weight = ParseDevDoubleOption(
+		opts, "guard-compression-block-monotonic-weight", 0.0);
 	probe.guard_compression_floor_margin = ParseDevDoubleOption(
 		opts, "guard-compression-floor-margin", 0.0);
 	probe.guard_compression_monotonic_margin = ParseDevDoubleOption(
@@ -375,6 +377,28 @@ void ConfigureDevGuardCompressionProbe(
 	std::vector<NonLinearRegression::GuardCompressionAnchorTriplet> anchor_triplets;
 	std::vector<NonLinearRegression::GuardCompressionTriplet> triplets;
 	const double floor_energy_per_atom = anchor_cfg->energy / anchor_cfg->size();
+	int anchor_sample_index = -1;
+	if (probe.guard_compression_block_monotonic_weight > 0.0) {
+		NonLinearRegression::GuardCompressionSample anchor_sample;
+		anchor_sample.cfg = *anchor_cfg;
+		anchor_sample.cfg.has_energy(false);
+		anchor_sample.cfg.has_forces(false);
+		anchor_sample.cfg.has_stresses(false);
+		anchor_sample.cfg.has_site_energies(false);
+		anchor_sample.cfg.has_charges(false);
+		anchor_sample.cfg.cal_se.clear();
+		anchor_sample.cfg.cal_se0.clear();
+		anchor_sample.cfg.type_mean.clear();
+		anchor_sample.floor_energy_per_atom = floor_energy_per_atom;
+		anchor_sample.scale = 1.0;
+		anchor_sample.group_index = 0;
+		anchor_sample.is_anchor = true;
+		anchor_sample_index = static_cast<int>(samples.size());
+		samples.push_back(std::move(anchor_sample));
+	}
+	int previous_fake_index = -1;
+	int second_previous_fake_index = -1;
+	int fake_count = 0;
 	for (double scale : scales) {
 		Configuration fake = *anchor_cfg;
 		fake.lattice *= scale;
@@ -393,31 +417,37 @@ void ConfigureDevGuardCompressionProbe(
 		sample.floor_energy_per_atom = floor_energy_per_atom;
 		sample.scale = scale;
 		sample.group_index = 0;
-		if (samples.empty()) {
+		sample.is_anchor = false;
+		const int current_index = static_cast<int>(samples.size());
+		if (previous_fake_index < 0) {
 			NonLinearRegression::GuardCompressionAnchorPair pair;
-			pair.more_compressed = static_cast<int>(samples.size());
+			pair.anchor = anchor_sample_index;
+			pair.more_compressed = current_index;
 			anchor_pairs.push_back(pair);
 		}
-		if (!samples.empty()) {
+		if (previous_fake_index >= 0) {
 			NonLinearRegression::GuardCompressionPair pair;
-			pair.less_compressed = static_cast<int>(samples.size() - 1);
-			pair.more_compressed = static_cast<int>(samples.size());
+			pair.less_compressed = previous_fake_index;
+			pair.more_compressed = current_index;
 			pairs.push_back(pair);
 		}
-		if (samples.size() == 1) {
+		if (fake_count == 1) {
 			NonLinearRegression::GuardCompressionAnchorTriplet triplet;
-			triplet.first_compressed = static_cast<int>(samples.size() - 1);
-			triplet.second_compressed = static_cast<int>(samples.size());
+			triplet.first_compressed = previous_fake_index;
+			triplet.second_compressed = current_index;
 			anchor_triplets.push_back(triplet);
 		}
-		if (samples.size() >= 2) {
+		if (fake_count >= 2) {
 			NonLinearRegression::GuardCompressionTriplet triplet;
-			triplet.less_compressed = static_cast<int>(samples.size() - 2);
-			triplet.middle_compressed = static_cast<int>(samples.size() - 1);
-			triplet.more_compressed = static_cast<int>(samples.size());
+			triplet.less_compressed = second_previous_fake_index;
+			triplet.middle_compressed = previous_fake_index;
+			triplet.more_compressed = current_index;
 			triplets.push_back(triplet);
 		}
 		samples.push_back(std::move(sample));
+		second_previous_fake_index = previous_fake_index;
+		previous_fake_index = current_index;
+		fake_count++;
 	}
 	probe.SetGuardCompressionSamples(samples,
 	                                 {},
@@ -425,7 +455,7 @@ void ConfigureDevGuardCompressionProbe(
 	                                 pairs,
 	                                 anchor_triplets,
 	                                 triplets,
-	                                 static_cast<long long>(samples.size()),
+	                                 static_cast<long long>(fake_count),
 	                                 static_cast<long long>(anchor_pairs.size() + pairs.size()),
 	                                 static_cast<long long>(anchor_triplets.size() + triplets.size()),
 	                                 static_cast<double>(std::max<std::size_t>(1, configs.size())));

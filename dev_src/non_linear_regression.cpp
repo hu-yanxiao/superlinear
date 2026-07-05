@@ -139,9 +139,12 @@ void NonLinearRegression::SetGuardCompressionSamples(
 	if (!std::isfinite(objective_multiplier) || objective_multiplier < 0.0)
 		ERROR("guard-compression objective multiplier should be finite and non-negative");
 	for (const GuardCompressionAnchorPair& pair : anchor_pairs) {
-		if (pair.more_compressed < 0
+		if (pair.anchor >= static_cast<int>(samples.size())
+		    || pair.more_compressed < 0
 		    || pair.more_compressed >= static_cast<int>(samples.size()))
 			ERROR("guard-compression anchor-pair index is out of range");
+		if (pair.anchor >= 0 && !samples[pair.anchor].is_anchor)
+			ERROR("guard-compression anchor-pair anchor index should point to an anchor sample");
 	}
 	for (const GuardCompressionPair& pair : pairs) {
 		if (pair.less_compressed < 0 || pair.more_compressed < 0
@@ -220,7 +223,9 @@ bool NonLinearRegression::GuardCompressionEnabled() const
 		    || (guard_compression_monotonic_weight > 0.0
 		        && guard_compression_global_pair_count_ > 0)
 		    || (guard_compression_curvature_weight > 0.0
-		        && guard_compression_global_triplet_count_ > 0));
+		        && guard_compression_global_triplet_count_ > 0)
+		    || (guard_compression_block_monotonic_weight > 0.0
+		        && guard_compression_global_pair_count_ > 0));
 }
 
 void NonLinearRegression::AddGlobalRegularization(double local_multiplier, Array1D* grad_accumulator)
@@ -330,6 +335,37 @@ void NonLinearRegression::AccumulateGuardCompressionEnergyGrad(
 		p_mlip->AccumulateEnergyCombinationGrad(cfg, dLdE_i_, grad_accumulator);
 }
 
+void NonLinearRegression::AccumulateGuardCompressionBodyOrderGrad(
+	Configuration& cfg,
+	const Neighborhoods* neighborhoods,
+	const std::vector<double>& body_order_weights,
+	Array1D& grad_accumulator)
+{
+	bool has_weight = false;
+	for (double weight : body_order_weights)
+		if (weight != 0.0) {
+			has_weight = true;
+			break;
+		}
+	if (!has_weight || cfg.size() == 0)
+		return;
+	MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+	if (mtpr == nullptr)
+		ERROR("guard-compression block monotonic loss requires an MLMTPR model");
+	if (neighborhoods != nullptr) {
+		mtpr->AccumulateSHBodyOrderEnergyGrad(cfg,
+		                                      *neighborhoods,
+		                                      body_order_weights,
+		                                      grad_accumulator);
+		return;
+	}
+	Neighborhoods local_neighborhoods(cfg, p_mlip->CutOff());
+	mtpr->AccumulateSHBodyOrderEnergyGrad(cfg,
+	                                      local_neighborhoods,
+	                                      body_order_weights,
+	                                      grad_accumulator);
+}
+
 void NonLinearRegression::AddGuardCompressionLoss(
 	Array1D* grad_accumulator,
 	bool use_cached_predictions,
@@ -346,6 +382,9 @@ void NonLinearRegression::AddGuardCompressionLoss(
 	if (!std::isfinite(guard_compression_curvature_weight)
 	    || guard_compression_curvature_weight < 0.0)
 		ERROR("--guard-compression-curvature-weight should be finite and non-negative");
+	if (!std::isfinite(guard_compression_block_monotonic_weight)
+	    || guard_compression_block_monotonic_weight < 0.0)
+		ERROR("--guard-compression-block-monotonic-weight should be finite and non-negative");
 	if (!std::isfinite(guard_compression_floor_margin))
 		ERROR("--guard-compression-floor-margin should be finite");
 	if (!std::isfinite(guard_compression_monotonic_margin))
@@ -395,6 +434,45 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		sample_energy_per_atom[idx] = pred.energy / pred.size();
 	}
 
+	MLMTPR* mtpr = nullptr;
+	int block_body_order_max = 0;
+	std::vector<std::vector<double>> sample_body_energy_per_atom;
+	std::vector<std::vector<double>> sample_body_grad_scale;
+	if (guard_compression_block_monotonic_weight > 0.0
+	    && guard_compression_global_pair_count_ > 0) {
+		mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		if (mtpr == nullptr || !mtpr->HasSHBodyOrderBlocks())
+			ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
+		block_body_order_max = mtpr->SHBodyOrderMax();
+		if (block_body_order_max < 2)
+			ERROR("guard-compression block monotonic loss found no body-order blocks");
+		sample_body_energy_per_atom.assign(
+			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
+		sample_body_grad_scale.assign(
+			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			Configuration cfg = guard_compression_samples_[idx].cfg;
+			if (cfg.size() == 0)
+				continue;
+			std::vector<double> body_energy;
+			const Neighborhoods* neighborhoods =
+				guard_compression_neighborhoods_.empty()
+					? nullptr
+					: &guard_compression_neighborhoods_[idx];
+			if (neighborhoods != nullptr) {
+				mtpr->CalcSHBodyOrderEnergyContributions(
+					cfg, *neighborhoods, body_energy);
+			} else {
+				Neighborhoods local_neighborhoods(cfg, p_mlip->CutOff());
+				mtpr->CalcSHBodyOrderEnergyContributions(
+					cfg, local_neighborhoods, body_energy);
+			}
+			for (int body_order = 2; body_order <= block_body_order_max; ++body_order)
+				sample_body_energy_per_atom[idx][body_order] =
+					body_energy[body_order] / cfg.size();
+		}
+	}
+
 	if (guard_compression_floor_weight > 0.0
 	    && guard_compression_global_sample_count_ > 0) {
 		const double scale = guard_compression_objective_multiplier_
@@ -403,7 +481,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		for (std::size_t idx = 0; idx < sample_count; ++idx) {
 			const GuardCompressionSample& sample = guard_compression_samples_[idx];
 			const Configuration& pred = (*predictions)[idx];
-			if (pred.size() == 0)
+			if (pred.size() == 0 || sample.is_anchor)
 				continue;
 			const double violation = sample.floor_energy_per_atom
 				+ guard_compression_floor_margin
@@ -454,6 +532,47 @@ void NonLinearRegression::AddGuardCompressionLoss(
 			sample_grad_scale[pair.more_compressed] -=
 				scale * pair_atoms * derivative / more_pred.size();
 		}
+	}
+
+	if (guard_compression_block_monotonic_weight > 0.0
+	    && guard_compression_global_pair_count_ > 0) {
+		const long long global_block_pair_count =
+			guard_compression_global_pair_count_
+			* static_cast<long long>(block_body_order_max - 1);
+		if (global_block_pair_count <= 0)
+			ERROR("guard-compression block monotonic loss found no block pairs");
+		const double scale = guard_compression_objective_multiplier_
+			* guard_compression_block_monotonic_weight
+			/ static_cast<double>(global_block_pair_count);
+		auto add_block_pair = [&](int less_index, int more_index) {
+			Configuration& less_pred = (*predictions)[less_index];
+			Configuration& more_pred = (*predictions)[more_index];
+			if (less_pred.size() == 0 || more_pred.size() == 0)
+				return;
+			const double pair_atoms = static_cast<double>(
+				std::min(less_pred.size(), more_pred.size()));
+			for (int body_order = 2; body_order <= block_body_order_max; ++body_order) {
+				const double violation =
+					sample_body_energy_per_atom[less_index][body_order]
+					- sample_body_energy_per_atom[more_index][body_order];
+				const double value = PositiveHuberValue(violation,
+				                                        guard_compression_smooth);
+				const double derivative = PositiveHuberGrad(violation,
+				                                            guard_compression_smooth);
+				loss_ += scale * pair_atoms * value;
+				sample_body_grad_scale[less_index][body_order] +=
+					scale * pair_atoms * derivative / less_pred.size();
+				sample_body_grad_scale[more_index][body_order] -=
+					scale * pair_atoms * derivative / more_pred.size();
+			}
+		};
+		for (const GuardCompressionAnchorPair& pair : guard_compression_anchor_pairs_) {
+			if (pair.anchor < 0)
+				ERROR("guard-compression block monotonic loss requires cached anchor samples");
+			add_block_pair(pair.anchor, pair.more_compressed);
+		}
+		for (const GuardCompressionPair& pair : guard_compression_pairs_)
+			add_block_pair(pair.less_compressed, pair.more_compressed);
 	}
 
 	if (guard_compression_curvature_weight > 0.0
@@ -547,6 +666,28 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		                                     neighborhoods,
 		                                     sample_grad_scale[idx],
 		                                     *grad_accumulator);
+	}
+	if (guard_compression_block_monotonic_weight > 0.0
+	    && !sample_body_grad_scale.empty()) {
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			bool has_body_grad = false;
+			for (int body_order = 2; body_order <= block_body_order_max; ++body_order)
+				if (sample_body_grad_scale[idx][body_order] != 0.0) {
+					has_body_grad = true;
+					break;
+				}
+			if (!has_body_grad)
+				continue;
+			const Neighborhoods* neighborhoods =
+				guard_compression_neighborhoods_.empty()
+					? nullptr
+					: &guard_compression_neighborhoods_[idx];
+			AccumulateGuardCompressionBodyOrderGrad(
+				guard_compression_samples_[idx].cfg,
+				neighborhoods,
+				sample_body_grad_scale[idx],
+				*grad_accumulator);
+		}
 	}
 }
 
