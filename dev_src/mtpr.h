@@ -343,6 +343,10 @@ protected:
 	void PrepareEvalCaches() override;
 	bool UsesJacobiIndexedBasis() const;
 	int JacobiIndexedBlockForMu(int mu) const;
+	void CalcEnergyAndSiteEnergiesImpl(
+		Configuration& cfg,
+		const Neighborhoods& neighborhoods,
+		std::vector<double>* out_energy_by_body_order);
 
 public:
 	double scaling = 1.0; //!< how to scale moments
@@ -484,6 +488,10 @@ public:
 		void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
 		void CalcEnergyAndSiteEnergies(Configuration& cfg) override;
 		void CalcEnergyAndSiteEnergies(Configuration& cfg, const Neighborhoods& neighborhoods) override;
+		void CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
+			Configuration& cfg,
+			const Neighborhoods& neighborhoods,
+			std::vector<double>& out_energy_by_body_order);
 		void AccumulateEFSCombinationGrad(Configuration& cfg,
 	                                  std::vector<double>& ene_weight,
 	                                  const std::vector<Vector3>& frc_weights,

@@ -398,6 +398,26 @@ void NonLinearRegression::AddGuardCompressionLoss(
 	const std::size_t sample_count = guard_compression_samples_.size();
 	std::vector<Configuration> local_predictions;
 	std::vector<Configuration>* predictions = nullptr;
+	MLMTPR* mtpr = nullptr;
+	int block_body_order_max = 0;
+	std::vector<std::vector<double>> sample_body_energy_per_atom;
+	std::vector<std::vector<double>> sample_body_grad_scale;
+	const bool need_block_monotonic =
+		guard_compression_block_monotonic_weight > 0.0
+		&& guard_compression_global_pair_count_ > 0;
+	if (need_block_monotonic) {
+		mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		if (mtpr == nullptr || !mtpr->HasSHBodyOrderBlocks())
+			ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
+		block_body_order_max = mtpr->SHBodyOrderMax();
+		if (block_body_order_max < 2)
+			ERROR("guard-compression block monotonic loss found no body-order blocks");
+		sample_body_energy_per_atom.assign(
+			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
+		sample_body_grad_scale.assign(
+			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
+	}
+	bool body_energy_filled_during_prediction = false;
 	if (use_cached_predictions
 	    && guard_compression_prediction_cache_valid_
 	    && guard_compression_prediction_cache_.size() == sample_count) {
@@ -417,11 +437,29 @@ void NonLinearRegression::AddGuardCompressionLoss(
 				guard_compression_neighborhoods_.empty()
 					? nullptr
 					: &guard_compression_neighborhoods_[idx];
-			if (neighborhoods != nullptr)
-				p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx], *neighborhoods);
-			else
-				p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx]);
+			if (need_block_monotonic) {
+				std::vector<double> body_energy;
+				if (neighborhoods != nullptr) {
+					mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
+						(*predictions)[idx], *neighborhoods, body_energy);
+				} else {
+					Neighborhoods local_neighborhoods(
+						(*predictions)[idx], p_mlip->CutOff());
+					mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
+						(*predictions)[idx], local_neighborhoods, body_energy);
+				}
+				if ((*predictions)[idx].size() != 0)
+					for (int body_order = 2; body_order <= block_body_order_max; ++body_order)
+						sample_body_energy_per_atom[idx][body_order] =
+							body_energy[body_order] / (*predictions)[idx].size();
+			} else {
+				if (neighborhoods != nullptr)
+					p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx], *neighborhoods);
+				else
+					p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx]);
+			}
 		}
+		body_energy_filled_during_prediction = need_block_monotonic;
 		guard_compression_prediction_cache_valid_ = fill_prediction_cache;
 	}
 
@@ -434,22 +472,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		sample_energy_per_atom[idx] = pred.energy / pred.size();
 	}
 
-	MLMTPR* mtpr = nullptr;
-	int block_body_order_max = 0;
-	std::vector<std::vector<double>> sample_body_energy_per_atom;
-	std::vector<std::vector<double>> sample_body_grad_scale;
-	if (guard_compression_block_monotonic_weight > 0.0
-	    && guard_compression_global_pair_count_ > 0) {
-		mtpr = dynamic_cast<MLMTPR*>(p_mlip);
-		if (mtpr == nullptr || !mtpr->HasSHBodyOrderBlocks())
-			ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
-		block_body_order_max = mtpr->SHBodyOrderMax();
-		if (block_body_order_max < 2)
-			ERROR("guard-compression block monotonic loss found no body-order blocks");
-		sample_body_energy_per_atom.assign(
-			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
-		sample_body_grad_scale.assign(
-			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
+	if (need_block_monotonic && !body_energy_filled_during_prediction) {
 		for (std::size_t idx = 0; idx < sample_count; ++idx) {
 			Configuration cfg = guard_compression_samples_[idx].cfg;
 			if (cfg.size() == 0)
