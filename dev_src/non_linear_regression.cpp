@@ -396,15 +396,28 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		ERROR("--guard-compression-smooth should be finite and non-negative");
 
 	const std::size_t sample_count = guard_compression_samples_.size();
+	const bool need_floor =
+		guard_compression_floor_weight > 0.0
+		&& guard_compression_global_sample_count_ > 0;
+	const bool need_monotonic =
+		guard_compression_monotonic_weight > 0.0
+		&& guard_compression_global_pair_count_ > 0;
+	const bool need_curvature =
+		guard_compression_curvature_weight > 0.0
+		&& guard_compression_global_triplet_count_ > 0;
+	const bool need_block_monotonic =
+		guard_compression_block_monotonic_weight > 0.0
+		&& guard_compression_global_pair_count_ > 0;
+	const bool need_energy_terms =
+		need_floor || need_monotonic || need_curvature;
+	if (!need_energy_terms && !need_block_monotonic)
+		return;
 	std::vector<Configuration> local_predictions;
 	std::vector<Configuration>* predictions = nullptr;
 	MLMTPR* mtpr = nullptr;
 	int block_body_order_max = 0;
 	std::vector<std::vector<double>> sample_body_energy_per_atom;
 	std::vector<std::vector<double>> sample_body_grad_scale;
-	const bool need_block_monotonic =
-		guard_compression_block_monotonic_weight > 0.0
-		&& guard_compression_global_pair_count_ > 0;
 	if (need_block_monotonic) {
 		mtpr = dynamic_cast<MLMTPR*>(p_mlip);
 		if (mtpr == nullptr || !mtpr->HasSHBodyOrderBlocks())
@@ -418,58 +431,64 @@ void NonLinearRegression::AddGuardCompressionLoss(
 			sample_count, std::vector<double>(block_body_order_max + 1, 0.0));
 	}
 	bool body_energy_filled_during_prediction = false;
-	if (use_cached_predictions
-	    && guard_compression_prediction_cache_valid_
-	    && guard_compression_prediction_cache_.size() == sample_count) {
-		predictions = &guard_compression_prediction_cache_;
-	} else {
-		if (fill_prediction_cache) {
-			guard_compression_prediction_cache_.clear();
-			guard_compression_prediction_cache_.resize(sample_count);
+	if (need_energy_terms) {
+		if (use_cached_predictions
+		    && guard_compression_prediction_cache_valid_
+		    && guard_compression_prediction_cache_.size() == sample_count) {
 			predictions = &guard_compression_prediction_cache_;
 		} else {
-			local_predictions.resize(sample_count);
-			predictions = &local_predictions;
-		}
-		for (std::size_t idx = 0; idx < sample_count; ++idx) {
-			(*predictions)[idx] = guard_compression_samples_[idx].cfg;
-			const Neighborhoods* neighborhoods =
-				guard_compression_neighborhoods_.empty()
-					? nullptr
-					: &guard_compression_neighborhoods_[idx];
-			if (need_block_monotonic) {
-				std::vector<double> body_energy;
-				if (neighborhoods != nullptr) {
-					mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
-						(*predictions)[idx], *neighborhoods, body_energy);
-				} else {
-					Neighborhoods local_neighborhoods(
-						(*predictions)[idx], p_mlip->CutOff());
-					mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
-						(*predictions)[idx], local_neighborhoods, body_energy);
-				}
-				if ((*predictions)[idx].size() != 0)
-					for (int body_order = 2; body_order <= block_body_order_max; ++body_order)
-						sample_body_energy_per_atom[idx][body_order] =
-							body_energy[body_order] / (*predictions)[idx].size();
+			if (fill_prediction_cache) {
+				guard_compression_prediction_cache_.clear();
+				guard_compression_prediction_cache_.resize(sample_count);
+				predictions = &guard_compression_prediction_cache_;
 			} else {
-				if (neighborhoods != nullptr)
-					p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx], *neighborhoods);
-				else
-					p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx]);
+				local_predictions.resize(sample_count);
+				predictions = &local_predictions;
 			}
+			for (std::size_t idx = 0; idx < sample_count; ++idx) {
+				(*predictions)[idx] = guard_compression_samples_[idx].cfg;
+				const Neighborhoods* neighborhoods =
+					guard_compression_neighborhoods_.empty()
+						? nullptr
+						: &guard_compression_neighborhoods_[idx];
+				if (need_block_monotonic) {
+					std::vector<double> body_energy;
+					if (neighborhoods != nullptr) {
+						mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
+							(*predictions)[idx], *neighborhoods, body_energy);
+					} else {
+						Neighborhoods local_neighborhoods(
+							(*predictions)[idx], p_mlip->CutOff());
+						mtpr->CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
+							(*predictions)[idx], local_neighborhoods, body_energy);
+					}
+					if ((*predictions)[idx].size() != 0)
+						for (int body_order = 2; body_order <= block_body_order_max; ++body_order)
+							sample_body_energy_per_atom[idx][body_order] =
+								body_energy[body_order] / (*predictions)[idx].size();
+				} else {
+					if (neighborhoods != nullptr)
+						p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx], *neighborhoods);
+					else
+						p_mlip->CalcEnergyAndSiteEnergies((*predictions)[idx]);
+				}
+			}
+			body_energy_filled_during_prediction = need_block_monotonic;
+			guard_compression_prediction_cache_valid_ = fill_prediction_cache;
 		}
-		body_energy_filled_during_prediction = need_block_monotonic;
-		guard_compression_prediction_cache_valid_ = fill_prediction_cache;
 	}
 
-	std::vector<double> sample_energy_per_atom(sample_count, 0.0);
-	std::vector<double> sample_grad_scale(sample_count, 0.0);
-	for (std::size_t idx = 0; idx < sample_count; ++idx) {
-		const Configuration& pred = (*predictions)[idx];
-		if (pred.size() == 0)
-			continue;
-		sample_energy_per_atom[idx] = pred.energy / pred.size();
+	std::vector<double> sample_energy_per_atom;
+	std::vector<double> sample_grad_scale;
+	if (need_energy_terms) {
+		sample_energy_per_atom.assign(sample_count, 0.0);
+		sample_grad_scale.assign(sample_count, 0.0);
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			const Configuration& pred = (*predictions)[idx];
+			if (pred.size() == 0)
+				continue;
+			sample_energy_per_atom[idx] = pred.energy / pred.size();
+		}
 	}
 
 	if (need_block_monotonic && !body_energy_filled_during_prediction) {
@@ -496,8 +515,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		}
 	}
 
-	if (guard_compression_floor_weight > 0.0
-	    && guard_compression_global_sample_count_ > 0) {
+	if (need_floor) {
 		const double scale = guard_compression_objective_multiplier_
 			* guard_compression_floor_weight
 			/ static_cast<double>(guard_compression_global_sample_count_);
@@ -516,8 +534,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		}
 	}
 
-	if (guard_compression_monotonic_weight > 0.0
-	    && guard_compression_global_pair_count_ > 0) {
+	if (need_monotonic) {
 		const double scale = guard_compression_objective_multiplier_
 			* guard_compression_monotonic_weight
 			/ static_cast<double>(guard_compression_global_pair_count_);
@@ -557,8 +574,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 		}
 	}
 
-	if (guard_compression_block_monotonic_weight > 0.0
-	    && guard_compression_global_pair_count_ > 0) {
+	if (need_block_monotonic) {
 		const long long global_block_pair_count =
 			guard_compression_global_pair_count_
 			* static_cast<long long>(block_body_order_max - 1);
@@ -568,12 +584,12 @@ void NonLinearRegression::AddGuardCompressionLoss(
 			* guard_compression_block_monotonic_weight
 			/ static_cast<double>(global_block_pair_count);
 		auto add_block_pair = [&](int less_index, int more_index) {
-			Configuration& less_pred = (*predictions)[less_index];
-			Configuration& more_pred = (*predictions)[more_index];
-			if (less_pred.size() == 0 || more_pred.size() == 0)
+			const Configuration& less_cfg = guard_compression_samples_[less_index].cfg;
+			const Configuration& more_cfg = guard_compression_samples_[more_index].cfg;
+			if (less_cfg.size() == 0 || more_cfg.size() == 0)
 				return;
 			const double pair_atoms = static_cast<double>(
-				std::min(less_pred.size(), more_pred.size()));
+				std::min(less_cfg.size(), more_cfg.size()));
 			for (int body_order = 2; body_order <= block_body_order_max; ++body_order) {
 				const double violation =
 					sample_body_energy_per_atom[less_index][body_order]
@@ -584,9 +600,9 @@ void NonLinearRegression::AddGuardCompressionLoss(
 				                                            guard_compression_smooth);
 				loss_ += scale * pair_atoms * value;
 				sample_body_grad_scale[less_index][body_order] +=
-					scale * pair_atoms * derivative / less_pred.size();
+					scale * pair_atoms * derivative / less_cfg.size();
 				sample_body_grad_scale[more_index][body_order] -=
-					scale * pair_atoms * derivative / more_pred.size();
+					scale * pair_atoms * derivative / more_cfg.size();
 			}
 		};
 		for (const GuardCompressionAnchorPair& pair : guard_compression_anchor_pairs_) {
@@ -598,8 +614,7 @@ void NonLinearRegression::AddGuardCompressionLoss(
 			add_block_pair(pair.less_compressed, pair.more_compressed);
 	}
 
-	if (guard_compression_curvature_weight > 0.0
-	    && guard_compression_global_triplet_count_ > 0) {
+	if (need_curvature) {
 		const double scale = guard_compression_objective_multiplier_
 			* guard_compression_curvature_weight
 			/ static_cast<double>(guard_compression_global_triplet_count_);
@@ -678,20 +693,21 @@ void NonLinearRegression::AddGuardCompressionLoss(
 
 	if (grad_accumulator == nullptr)
 		return;
-	for (std::size_t idx = 0; idx < sample_count; ++idx) {
-		if (sample_grad_scale[idx] == 0.0)
-			continue;
-		const Neighborhoods* neighborhoods =
-			guard_compression_neighborhoods_.empty()
-				? nullptr
-				: &guard_compression_neighborhoods_[idx];
-		AccumulateGuardCompressionEnergyGrad((*predictions)[idx],
-		                                     neighborhoods,
-		                                     sample_grad_scale[idx],
-		                                     *grad_accumulator);
+	if (need_energy_terms) {
+		for (std::size_t idx = 0; idx < sample_count; ++idx) {
+			if (sample_grad_scale[idx] == 0.0)
+				continue;
+			const Neighborhoods* neighborhoods =
+				guard_compression_neighborhoods_.empty()
+					? nullptr
+					: &guard_compression_neighborhoods_[idx];
+			AccumulateGuardCompressionEnergyGrad((*predictions)[idx],
+			                                     neighborhoods,
+			                                     sample_grad_scale[idx],
+			                                     *grad_accumulator);
+		}
 	}
-	if (guard_compression_block_monotonic_weight > 0.0
-	    && !sample_body_grad_scale.empty()) {
+	if (need_block_monotonic && !sample_body_grad_scale.empty()) {
 		for (std::size_t idx = 0; idx < sample_count; ++idx) {
 			bool has_body_grad = false;
 			for (int body_order = 2; body_order <= block_body_order_max; ++body_order)

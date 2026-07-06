@@ -839,12 +839,13 @@ GuardCompressionOptions ParseGuardCompressionOptions(
 		ERROR("--guard-compression-curvature-margin should be finite");
 	if (!std::isfinite(options.smooth) || options.smooth < 0.0)
 		ERROR("--guard-compression-smooth should be finite and non-negative");
-	if (options.enabled
-	    && options.floor_weight == 0.0
-	    && options.monotonic_weight == 0.0
-	    && options.curvature_weight == 0.0
-	    && options.block_monotonic_weight == 0.0)
-		ERROR("guard compression is enabled but floor, monotonic, curvature, and block monotonic weights are all zero");
+	const bool has_active_loss =
+		options.floor_weight > 0.0
+		|| options.monotonic_weight > 0.0
+		|| options.curvature_weight > 0.0
+		|| options.block_monotonic_weight > 0.0;
+	if (options.enabled && !has_active_loss)
+		options.enabled = false;
 	return options;
 }
 
@@ -1234,6 +1235,11 @@ void ReportGuardCompressionStatus(
 {
 	if (!options.enabled)
 		return;
+	const bool need_floor = options.floor_weight > 0.0;
+	const bool need_monotonic = options.monotonic_weight > 0.0;
+	const bool need_curvature = options.curvature_weight > 0.0;
+	if (!need_floor && !need_monotonic && !need_curvature)
+		return;
 	std::vector<double> epa(samples.size(), 0.0);
 	double local_worst_floor = 0.0;
 	double local_worst_mono = 0.0;
@@ -1250,7 +1256,7 @@ void ReportGuardCompressionStatus(
 		if (cfg.size() == 0)
 			continue;
 		epa[i] = cfg.energy / cfg.size();
-		if (samples[i].is_anchor)
+		if (!need_floor || samples[i].is_anchor)
 			continue;
 		const double violation = samples[i].floor_energy_per_atom
 			+ options.floor_margin - epa[i];
@@ -1259,64 +1265,68 @@ void ReportGuardCompressionStatus(
 			local_worst_floor = std::max(local_worst_floor, violation);
 		}
 	}
-	for (const auto& pair : anchor_pairs) {
-		const double violation = samples[pair.more_compressed].floor_energy_per_atom
-			+ options.monotonic_margin - epa[pair.more_compressed];
-		if (violation > 0.0) {
-			local_mono_active++;
-			local_worst_mono = std::max(local_worst_mono, violation);
+	if (need_monotonic) {
+		for (const auto& pair : anchor_pairs) {
+			const double violation = samples[pair.more_compressed].floor_energy_per_atom
+				+ options.monotonic_margin - epa[pair.more_compressed];
+			if (violation > 0.0) {
+				local_mono_active++;
+				local_worst_mono = std::max(local_worst_mono, violation);
+			}
+		}
+		for (const auto& pair : pairs) {
+			const double violation = epa[pair.less_compressed]
+				+ options.monotonic_margin - epa[pair.more_compressed];
+			if (violation > 0.0) {
+				local_mono_active++;
+				local_worst_mono = std::max(local_worst_mono, violation);
+			}
 		}
 	}
-	for (const auto& pair : pairs) {
-		const double violation = epa[pair.less_compressed]
-			+ options.monotonic_margin - epa[pair.more_compressed];
-		if (violation > 0.0) {
-			local_mono_active++;
-			local_worst_mono = std::max(local_worst_mono, violation);
+	if (need_curvature) {
+		for (const auto& triplet : anchor_triplets) {
+			const double x_anchor = 0.0;
+			const double x_first = GuardCompressionCoordinate(
+				samples[triplet.first_compressed].scale);
+			const double x_second = GuardCompressionCoordinate(
+				samples[triplet.second_compressed].scale);
+			const double dx_left = x_first - x_anchor;
+			const double dx_right = x_second - x_first;
+			if (!(dx_left > 0.0 && dx_right > 0.0))
+				ERROR("guard-compression anchor-curvature triplet has non-increasing compression coordinate");
+			const double slope_left =
+				(epa[triplet.first_compressed]
+				 - samples[triplet.first_compressed].floor_energy_per_atom) / dx_left;
+			const double slope_right =
+				(epa[triplet.second_compressed] - epa[triplet.first_compressed]) / dx_right;
+			const double violation =
+				slope_left + options.curvature_margin - slope_right;
+			if (violation > 0.0) {
+				local_curv_active++;
+				local_worst_curv = std::max(local_worst_curv, violation);
+			}
 		}
-	}
-	for (const auto& triplet : anchor_triplets) {
-		const double x_anchor = 0.0;
-		const double x_first = GuardCompressionCoordinate(
-			samples[triplet.first_compressed].scale);
-		const double x_second = GuardCompressionCoordinate(
-			samples[triplet.second_compressed].scale);
-		const double dx_left = x_first - x_anchor;
-		const double dx_right = x_second - x_first;
-		if (!(dx_left > 0.0 && dx_right > 0.0))
-			ERROR("guard-compression anchor-curvature triplet has non-increasing compression coordinate");
-		const double slope_left =
-			(epa[triplet.first_compressed]
-			 - samples[triplet.first_compressed].floor_energy_per_atom) / dx_left;
-		const double slope_right =
-			(epa[triplet.second_compressed] - epa[triplet.first_compressed]) / dx_right;
-		const double violation =
-			slope_left + options.curvature_margin - slope_right;
-		if (violation > 0.0) {
-			local_curv_active++;
-			local_worst_curv = std::max(local_worst_curv, violation);
-		}
-	}
-	for (const auto& triplet : triplets) {
-		const double x_less = GuardCompressionCoordinate(
-			samples[triplet.less_compressed].scale);
-		const double x_middle = GuardCompressionCoordinate(
-			samples[triplet.middle_compressed].scale);
-		const double x_more = GuardCompressionCoordinate(
-			samples[triplet.more_compressed].scale);
-		const double dx_left = x_middle - x_less;
-		const double dx_right = x_more - x_middle;
-		if (!(dx_left > 0.0 && dx_right > 0.0))
-			ERROR("guard-compression curvature triplet has non-increasing compression coordinate");
-		const double slope_left =
-			(epa[triplet.middle_compressed] - epa[triplet.less_compressed]) / dx_left;
-		const double slope_right =
-			(epa[triplet.more_compressed] - epa[triplet.middle_compressed]) / dx_right;
-		const double violation =
-			slope_left + options.curvature_margin - slope_right;
-		if (violation > 0.0) {
-			local_curv_active++;
-			local_worst_curv = std::max(local_worst_curv, violation);
+		for (const auto& triplet : triplets) {
+			const double x_less = GuardCompressionCoordinate(
+				samples[triplet.less_compressed].scale);
+			const double x_middle = GuardCompressionCoordinate(
+				samples[triplet.middle_compressed].scale);
+			const double x_more = GuardCompressionCoordinate(
+				samples[triplet.more_compressed].scale);
+			const double dx_left = x_middle - x_less;
+			const double dx_right = x_more - x_middle;
+			if (!(dx_left > 0.0 && dx_right > 0.0))
+				ERROR("guard-compression curvature triplet has non-increasing compression coordinate");
+			const double slope_left =
+				(epa[triplet.middle_compressed] - epa[triplet.less_compressed]) / dx_left;
+			const double slope_right =
+				(epa[triplet.more_compressed] - epa[triplet.middle_compressed]) / dx_right;
+			const double violation =
+				slope_left + options.curvature_margin - slope_right;
+			if (violation > 0.0) {
+				local_curv_active++;
+				local_worst_curv = std::max(local_worst_curv, violation);
+			}
 		}
 	}
 
