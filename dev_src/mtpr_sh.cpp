@@ -4486,22 +4486,36 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		BuildTwoLayerGateProductProgram();
 	if (static_cast<int>(out_grad_accumulator.size()) < CoeffCount())
 		out_grad_accumulator.resize(CoeffCount());
+	if (static_cast<int>(basic_mu_cache_.size()) < alpha_index_basic_count
+	    || static_cast<int>(basic_sh_index_cache_.size()) < alpha_index_basic_count
+	    || static_cast<int>(basic_scaling_block_cache_.size()) < alpha_index_basic_count)
+		ERROR("SUS2-SH edge L1 source adjoint cache metadata is incomplete");
+	if (static_cast<int>(mu_to_radial_eval_block_.size()) < radial_func_count)
+		ERROR("SUS2-SH edge L1 source adjoint radial map is incomplete");
 
 	const int C = species_count;
 	const int R = p_RadialBasis->rb_size;
-	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const bool have_edge_cache = HasTwoLayerEdgePrimitiveCache(0, false, false);
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = basis_radial_ders_buffer_;
+	std::vector<double>& radial_values = grad_mu_contract_vals_;
+	std::vector<double>& radial_s_derivatives = grad_mu_contract_ders_s_;
+	std::vector<double>& radial_ss_derivatives = grad_mu_contract_ders_ss_;
 	const int eval_block_count =
 		static_cast<int>(radial_eval_to_scaling_block_.size());
 	rb_vals.resize(static_cast<size_t>(eval_block_count) * R);
 	rb_ders.resize(static_cast<size_t>(eval_block_count) * R * 5);
+	if (static_cast<int>(radial_values.size()) < radial_func_count)
+		radial_values.resize(radial_func_count);
+	if (static_cast<int>(radial_s_derivatives.size()) < radial_func_count)
+		radial_s_derivatives.resize(radial_func_count);
+	if (static_cast<int>(radial_ss_derivatives.size()) < radial_func_count)
+		radial_ss_derivatives.resize(radial_func_count);
+	if (static_cast<int>(grad_radial_coeff_value_accum_.size()) != radial_func_count)
+		grad_radial_coeff_value_accum_.resize(radial_func_count);
 	double sh_values[kMaxSHComponents];
-	std::vector<double> source_radial_values(source_count, 0.0);
-	std::vector<double> source_radial_s_values(source_count, 0.0);
-	std::vector<double> source_radial_ss_values(source_count, 0.0);
+	grad_dloss_dmom_.assign(alpha_moments_count, 0.0);
 
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const double* atom_adjoints =
@@ -4520,13 +4534,62 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		const int type_central = nbh.my_type;
 		if (type_central >= species_count)
 			throw MlipException("Too few species count in the MTP potential!");
-			for (int j = 0; j < nbh.count; ++j) {
+
+		bool loaded_moment_cache = false;
+		const int cached_moment_count =
+			static_cast<int>(two_layer_gate_required_moment_indices_.size());
+		const size_t moment_cache_offset =
+			static_cast<size_t>(ind) * cached_moment_count;
+		if (cached_moment_count > 0
+		    && moment_cache_offset + cached_moment_count
+		        <= two_layer_gate_moment_values_cache_.size()) {
+			const double* cached_moments =
+				two_layer_gate_moment_values_cache_.data()
+				+ moment_cache_offset;
+			for (int i = 0; i < cached_moment_count; ++i)
+				moment_vals[two_layer_gate_required_moment_indices_[i]] =
+					cached_moments[i];
+			loaded_moment_cache = true;
+		}
+		if (!loaded_moment_cache)
+			CalcTwoLayerGateScalarValuesOnly(
+				nbh, sh_gate_scalar_values_, ind);
+
+		std::fill(grad_dloss_dmom_.begin(), grad_dloss_dmom_.end(), 0.0);
+		for (int source = 0; source < source_count; ++source) {
+			const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
+			if (base < 0 || base + 2 >= alpha_moments_count)
+				ERROR("SUS2-SH edge L1 source adjoint moment index is out of range");
+			for (int m = 0; m < 3; ++m)
+				grad_dloss_dmom_[base + m] += atom_adjoints[source * 3 + m];
+		}
+		for (int p = static_cast<int>(two_layer_gate_required_product_indices_.size()) - 1;
+		     p >= 0; --p) {
+			const SHProduct& product =
+				sh_products_[two_layer_gate_required_product_indices_[p]];
+			if (product.left < 0 || product.left >= alpha_moments_count
+			    || product.right < 0 || product.right >= alpha_moments_count
+			    || product.target < 0 || product.target >= alpha_moments_count)
+				ERROR("SUS2-SH edge L1 source adjoint product index is out of range");
+			const double adj_target = grad_dloss_dmom_[product.target];
+			if (adj_target == 0.0)
+				continue;
+			grad_dloss_dmom_[product.left] +=
+				product.coeff * moment_vals[product.right] * adj_target;
+			grad_dloss_dmom_[product.right] +=
+				product.coeff * moment_vals[product.left] * adj_target;
+		}
+
+		for (int j = 0; j < nbh.count; ++j) {
 			const int type_outer = nbh.types[j];
 			if (type_outer >= species_count)
 				throw MlipException("Too few species count in the MTP potential!");
 			const double* sh_values_use = sh_values;
 			if (have_edge_cache) {
 				const size_t edge = TwoLayerEdgePrimitiveOffset(ind, j);
+				if ((edge + 1) * static_cast<size_t>(sh_count)
+				    > two_layer_edge_sh_values_cache_.size())
+					ERROR("SUS2-SH edge L1 source adjoint SH edge cache is out of range");
 				sh_values_use =
 					two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			} else {
@@ -4556,12 +4619,19 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				}
 			}
 
-			for (int source = 0; source < source_count; ++source) {
-				const int source_base = TwoLayerGateEdgeL1SourceMomentIndex(source);
-				const int mu = alpha_index_basic_.comp0[source_base];
+			for (int mu : two_layer_gate_required_mu_indices_) {
+				if (mu < 0 || mu >= radial_func_count)
+					ERROR("SUS2-SH edge L1 source adjoint mu index is out of range");
 				const int radial_base = mu_to_radial_eval_block_[mu] * R;
 				const int deriv_base = 5 * radial_base;
+				if (radial_base < 0
+				    || radial_base + R > static_cast<int>(rb_vals.size())
+				    || deriv_base < 0
+				    || deriv_base + 5 * R > static_cast<int>(rb_ders.size()))
+					ERROR("SUS2-SH edge L1 source adjoint radial buffer is out of range");
 				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
+				if (radial_offset < 0 || radial_offset + R > CoeffCount())
+					ERROR("SUS2-SH edge L1 source adjoint radial coefficient index is out of range");
 				double radial_value = 0.0;
 				double radial_s_value = 0.0;
 				double radial_ss_value = 0.0;
@@ -4575,41 +4645,57 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 					radial_ss_value +=
 						radial_coeff * rb_ders[deriv_base + xi + 3 * R];
 				}
-				source_radial_values[source] = radial_value;
-				source_radial_s_values[source] = radial_s_value;
-				source_radial_ss_values[source] = radial_ss_value;
+				radial_values[mu] = radial_value;
+				radial_s_derivatives[mu] = radial_s_value;
+				radial_ss_derivatives[mu] = radial_ss_value;
 			}
 
-			std::vector<double> radial_accum(source_count, 0.0);
-			for (int source = 0; source < source_count; ++source) {
-				const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
-				const int mu = alpha_index_basic_.comp0[base];
+			double* radial_coeff_accum =
+				grad_radial_coeff_value_accum_.data();
+			for (int mu : two_layer_gate_required_mu_indices_)
+				radial_coeff_accum[mu] = 0.0;
+			for (int basic_index : two_layer_gate_required_basic_indices_) {
+				const double value_weight = grad_dloss_dmom_[basic_index];
+				if (value_weight == 0.0)
+					continue;
+				if (basic_index < 0 || basic_index >= alpha_index_basic_count)
+					ERROR("SUS2-SH edge L1 source adjoint basic index is out of range");
+				const int mu = basic_mu_cache_[basic_index];
+				const int sh_index = basic_sh_index_cache_[basic_index];
+				const int scaling_block = basic_scaling_block_cache_[basic_index];
+				if (mu < 0 || mu >= radial_func_count
+				    || sh_index < 0 || sh_index >= sh_count
+				    || scaling_block < 0 || scaling_block >= K_)
+					ERROR("SUS2-SH edge L1 source adjoint basic metadata is out of range");
+				const double y = sh_values_use[sh_index];
 				const double gate_center_type_coeff =
 					TwoLayerGateTypeCoeff(type_central, mu);
 				const double gate_outer_type_coeff =
 					TwoLayerGateTypeCoeff(type_outer, mu);
-				for (int m = 0; m < 3; ++m) {
-					const double adjoint = atom_adjoints[source * 3 + m];
-					if (adjoint == 0.0)
-						continue;
-					const int basic_index = base + m;
-					const int sh_index = basic_sh_index_cache_[basic_index];
-					const double y = sh_values_use[sh_index];
-					const double radial_value = source_radial_values[source];
-					radial_accum[source] += adjoint * y;
-					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
-						adjoint * gate_outer_type_coeff * radial_value * y;
-					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer, mu)] +=
-						adjoint * gate_center_type_coeff * radial_value * y;
-				}
+				const double radial_value = radial_values[mu];
+				radial_coeff_accum[mu] += value_weight * y;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
+					value_weight * gate_outer_type_coeff * radial_value * y;
+				out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_outer, mu)] +=
+					value_weight * gate_center_type_coeff * radial_value * y;
+				const double type_scale =
+					gate_center_type_coeff * gate_outer_type_coeff;
+				const int sigma_coeff_offset =
+					C + 2 * C * C * scaling_block
+					+ type_central * C + type_outer;
+				if (sigma_coeff_offset < 0
+				    || sigma_coeff_offset + C * C >= CoeffCount())
+					ERROR("SUS2-SH edge L1 source adjoint radial scale coefficient index is out of range");
+				out_grad_accumulator[sigma_coeff_offset] +=
+					value_weight * type_scale * radial_s_derivatives[mu] * y;
+				out_grad_accumulator[sigma_coeff_offset + C * C] +=
+					value_weight * type_scale * radial_ss_derivatives[mu] * y;
 			}
 
-			for (int source = 0; source < source_count; ++source) {
-				const double accum = radial_accum[source];
-				if (accum == 0.0)
+			for (int mu : two_layer_gate_required_mu_indices_) {
+				const double value_accum = radial_coeff_accum[mu];
+				if (value_accum == 0.0)
 					continue;
-				const int source_base = TwoLayerGateEdgeL1SourceMomentIndex(source);
-				const int mu = alpha_index_basic_.comp0[source_base];
 				const double gate_center_type_coeff =
 					TwoLayerGateTypeCoeff(type_central, mu);
 				const double gate_outer_type_coeff =
@@ -4619,18 +4705,13 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				const int eval_block = mu_to_radial_eval_block_[mu];
 				const int radial_base = eval_block * R;
 				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
-				const int scaling_block =
-					radial_eval_to_scaling_block_[eval_block];
-				const int sigma_coeff_offset =
-					C + 2 * C * C * scaling_block
-					+ type_central * C + type_outer;
-				out_grad_accumulator[sigma_coeff_offset] +=
-					type_scale * source_radial_s_values[source] * accum;
-				out_grad_accumulator[sigma_coeff_offset + C * C] +=
-					type_scale * source_radial_ss_values[source] * accum;
+				if (eval_block < 0 || eval_block >= eval_block_count
+				    || radial_base + R > static_cast<int>(rb_vals.size())
+				    || radial_offset < 0 || radial_offset + R > CoeffCount())
+					ERROR("SUS2-SH edge L1 source adjoint radial accumulation index is out of range");
 				for (int xi = 0; xi < R; ++xi)
 					out_grad_accumulator[radial_offset + xi] +=
-						type_scale * rb_vals[radial_base + xi] * accum;
+						type_scale * rb_vals[radial_base + xi] * value_accum;
 			}
 		}
 	}
