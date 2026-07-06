@@ -854,13 +854,24 @@ std::string CompositionKey(const Configuration& cfg)
 	std::map<int, int> counts;
 	for (int type : cfg.types_)
 		counts[type]++;
+	int divisor = 0;
+	for (const auto& kv : counts) {
+		int value = kv.second < 0 ? -kv.second : kv.second;
+		while (value != 0) {
+			const int tmp = divisor % value;
+			divisor = value;
+			value = tmp;
+		}
+	}
+	if (divisor <= 0)
+		divisor = 1;
 	std::ostringstream oss;
 	bool first = true;
 	for (const auto& kv : counts) {
 		if (!first)
 			oss << ';';
 		first = false;
-		oss << kv.first << ':' << kv.second;
+		oss << kv.first << ':' << (kv.second / divisor);
 	}
 	return oss.str();
 }
