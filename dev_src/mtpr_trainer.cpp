@@ -445,12 +445,20 @@ bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
 			gate_type_begin + p_mlmtpr->TwoLayerGateTypeCoeffCount();
 		const int gate_weight_begin = p_mlmtpr->TwoLayerGateWeightOffset();
 		const int gate_weight_end = gate_weight_begin + p_mlmtpr->TwoLayerGateWeightCount();
+		const int gate_body_mix_begin = p_mlmtpr->TwoLayerGateBodyMixWeightOffset();
+		const int gate_body_mix_end =
+			gate_body_mix_begin + p_mlmtpr->TwoLayerGateBodyMixWeightCount();
+		const int gate_edge_l1_begin = p_mlmtpr->TwoLayerGateEdgeL1WeightOffset();
+		const int gate_edge_l1_end =
+			gate_edge_l1_begin + p_mlmtpr->TwoLayerGateEdgeL1WeightCount();
 		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
 		const int linear_end = linear_begin + p_mlmtpr->LinearCoeffCount();
 		return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
 		    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
 		    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
 		    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+		    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
+		    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 		    || (coeff_index >= linear_begin + p_mlmtpr->species_count && coeff_index < linear_end);
 	}
 	case kResidualStageFull:
@@ -1353,11 +1361,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (!frozen_indices.empty())
 			bfgs.MaskCoordinates(frozen_indices);
 	};
-	auto reset_bfgs_state = [&]() {
-		bfgs.Restart();
-		set_bfgs_x_from_full_coeffs();
-		bfgs.SetInvHessDiagonal(inv_hess_diag);
-	};
+		auto reset_bfgs_state = [&]() {
+			bfgs.Restart();
+			bfgs.iter_step = 0;
+			set_bfgs_x_from_full_coeffs();
+			bfgs.SetInvHessDiagonal(inv_hess_diag);
+		};
 	bool freeze_species_coeffs = do_lin && do_lin_step_limit > 0;
 	std::vector<double> last_accepted_coeffs(n, 0.0);
 	auto save_last_accepted_coeffs = [&]() {
@@ -1427,10 +1436,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	std::array<long long, kAcceptedDiagCountCount> accepted_count_local{};
 	std::array<long long, kAcceptedDiagCountCount> accepted_count_global{};
 
-	int num_step = 0;
+		int num_step = 0;
+		int total_linesearch_restarts = 0;
+		const int max_total_linesearch_restarts = 3;
 
-	double linf = 9e99;
-	double loss_reduced_by = 0.0;
+		double linf = 9e99;
+		double loss_reduced_by = 0.0;
 	double loss_prev = 9e99;
 	double std_l = 0.0;
 	double stdd_l = 0.0;
@@ -1479,10 +1490,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	}
 	int trace_lines_since_flush = 0;
 
-	while (!converge)
-	{
-		//if (prank==0)
-		//cout << "itr" << endl;
+		while (!converge)
+		{
+			bool restarted_rejected_linesearch_this_iteration = false;
+			//if (prank==0)
+			//cout << "itr" << endl;
 
 		if (!linesearch)
 		{
@@ -1702,7 +1714,68 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 		}
 
-			int bfgs_status = 0;
+				auto restart_or_finish_rejected_linesearch =
+					[&](const std::string& final_message,
+					    const std::string& detail) {
+					restore_last_accepted_coeffs();
+	#ifdef MLIP_MPI
+					if (!distributed_bfgs) {
+						MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
+					}
+	#endif
+					reset_bfgs_state();
+					mask_frozen_coordinates(freeze_species_coeffs);
+					if (total_linesearch_restarts
+					    < max_total_linesearch_restarts) {
+						++total_linesearch_restarts;
+						linesearch = false;
+						restarted_rejected_linesearch_this_iteration = true;
+						linf = 9e99;
+						loss_reduced_by = 0.0;
+						if (prank == 0) {
+							logstrm1 << "[" << CurrentTimestamp() << "] "
+							         << "BFGS restored last accepted coefficients, "
+							         << "reset Hessian, and will retry after rejected "
+							         << "line-search trial"
+							         << " step=" << num_step
+							         << " restart="
+							         << total_linesearch_restarts << "/"
+							         << max_total_linesearch_restarts;
+							if (!detail.empty())
+								logstrm1 << " " << detail;
+							logstrm1 << endl;
+							MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
+							if (curr_pot_name != "")
+								p_mlmtpr->Save(curr_pot_name);
+						}
+						return;
+					}
+					restored_rejected_linesearch = true;
+					converge = true;
+					linesearch = true;
+					if (prank == 0) {
+						logstrm1 << final_message << endl;
+						logstrm1 << "[" << CurrentTimestamp() << "] "
+						         << "BFGS restored last accepted coefficients after "
+						         << "rejected line-search trial; maximum Hessian "
+						         << "restart count reached"
+						         << " step=" << num_step
+						         << " restarts="
+						         << total_linesearch_restarts << "/"
+						         << max_total_linesearch_restarts;
+						if (!detail.empty())
+							logstrm1 << " " << detail;
+						logstrm1 << endl;
+						MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
+						if (curr_pot_name != "")
+							p_mlmtpr->Save(curr_pot_name);
+					}
+				};
+
+				int bfgs_status = 0;
+				int rejected_linesearch_from_exception = 0;
+				std::string rejected_linesearch_exception_message;
+				std::string rejected_linesearch_exception_detail;
 			if (!armijo_value_trial_rejected
 			    && (distributed_bfgs || prank == 0) && !converge) {
 				auto run_bfgs_iterate = [&]() {
@@ -1771,50 +1844,38 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					return false;
 					}
 				};
-				auto finish_rejected_linesearch = [&]() {
-					restore_last_accepted_coeffs();
-					restored_rejected_linesearch = true;
-					converge = true;
-					linesearch = true;
-					if (prank == 0)
-						std::cerr << "[" << CurrentTimestamp() << "] "
-						          << "BFGS restored last accepted coefficients after rejected line-search trial"
-						          << " step=" << num_step << std::endl;
-				};
-				try {
+					try {
 					run_bfgs_iterate();
 				}
 				catch (const MlipException& exc) {
 					const std::string reason = exc.What();
 				if (prank == 0)
 					std::cerr << "[" << CurrentTimestamp() << "] BFGS failed"
-						          << " step=" << num_step
-						          << " reason=" << reason << std::endl;
-					if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
-						finish_rejected_linesearch();
-						if (prank == 0)
-							std::cerr << "[" << CurrentTimestamp() << "] "
-							          << "BFGS converged due to linesearch stagnation"
-							          << " step=" << num_step << std::endl;
-					} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
-					bfgs_status = 1;
-				}
+					          << " step=" << num_step
+					          << " reason=" << reason << std::endl;
+						if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
+							rejected_linesearch_from_exception = 1;
+							rejected_linesearch_exception_message =
+								"BFGS converged due to linesearch stagnation";
+							rejected_linesearch_exception_detail = "reason=" + reason;
+						} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
+						bfgs_status = 1;
+					}
 			}
 			catch (const std::exception& exc) {
 				const std::string reason = exc.what();
 				if (prank == 0)
 					std::cerr << "[" << CurrentTimestamp() << "] BFGS failed"
-						          << " step=" << num_step
-						          << " reason=" << reason << std::endl;
-					if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
-						finish_rejected_linesearch();
-						if (prank == 0)
-							std::cerr << "[" << CurrentTimestamp() << "] "
-							          << "BFGS converged due to linesearch stagnation"
-							          << " step=" << num_step << std::endl;
-				} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
-					bfgs_status = 1;
-				}
+					          << " step=" << num_step
+					          << " reason=" << reason << std::endl;
+						if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
+							rejected_linesearch_from_exception = 1;
+							rejected_linesearch_exception_message =
+								"BFGS converged due to linesearch stagnation";
+							rejected_linesearch_exception_detail = "reason=" + reason;
+					} else if (!try_recover_bfgs_from_ascent_direction(reason)) {
+						bfgs_status = 1;
+					}
 			}
 			catch (...) {
 				if (prank == 0)
@@ -1824,6 +1885,45 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				if (!try_recover_bfgs_from_ascent_direction("unknown exception"))
 					bfgs_status = 1;
 			}
+		}
+#ifdef MLIP_MPI
+		{
+			int rejected_linesearch_global = 0;
+			MPI_Allreduce(&rejected_linesearch_from_exception,
+			              &rejected_linesearch_global,
+			              1,
+			              MPI_INT,
+			              MPI_MAX,
+			              train_comm);
+			rejected_linesearch_from_exception = rejected_linesearch_global;
+			int message_len =
+				static_cast<int>(rejected_linesearch_exception_message.size());
+			int detail_len =
+				static_cast<int>(rejected_linesearch_exception_detail.size());
+			MPI_Bcast(&message_len, 1, MPI_INT, 0, train_comm);
+			if (prank != 0)
+				rejected_linesearch_exception_message.resize(message_len);
+			if (message_len > 0)
+				MPI_Bcast(&rejected_linesearch_exception_message[0],
+				          message_len,
+				          MPI_CHAR,
+				          0,
+				          train_comm);
+			MPI_Bcast(&detail_len, 1, MPI_INT, 0, train_comm);
+			if (prank != 0)
+				rejected_linesearch_exception_detail.resize(detail_len);
+			if (detail_len > 0)
+				MPI_Bcast(&rejected_linesearch_exception_detail[0],
+				          detail_len,
+				          MPI_CHAR,
+				          0,
+				          train_comm);
+		}
+#endif
+		if (rejected_linesearch_from_exception != 0) {
+			restart_or_finish_rejected_linesearch(
+				rejected_linesearch_exception_message,
+				rejected_linesearch_exception_detail);
 		}
 		abort_if_any_rank_reports(bfgs_status,
 			"BFGS failed at step " + std::to_string(num_step)
@@ -1852,43 +1952,59 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 #ifdef MLIP_MPI
 		MPI_Bcast(&linesearch_stop_reason, 1, MPI_INT, 0, train_comm);
 #endif
-		if (linesearch_stop_reason != 0) {
-			restore_last_accepted_coeffs();
-			restored_rejected_linesearch = true;
-			converge = true;
-			linesearch = true;
-			if (prank == 0) {
-				if (linesearch_stop_reason == 1)
-					logstrm1 << "BFGS ended due to linesearch stagnation" << endl;
-				else {
-					logstrm1 << "BFGS ended due to linesearch  more than  30 iterations" << endl;
-					logstrm1 << "d_x= " << bfgs.x(0) - x[0] << endl;
+			if (linesearch_stop_reason != 0) {
+				std::string final_message;
+				std::string detail;
+				if (prank == 0) {
+					if (linesearch_stop_reason == 1) {
+						final_message = "BFGS ended due to linesearch stagnation";
+					} else {
+						final_message = "BFGS ended due to linesearch  more than  30 iterations";
+						std::ostringstream oss;
+						oss << "d_x=" << bfgs.x(0) - x[0];
+						detail = oss.str();
+					}
 				}
-				logstrm1 << "[" << CurrentTimestamp() << "] "
-				         << "BFGS restored last accepted coefficients after rejected line-search trial"
-				         << endl;
-				MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
-				if (curr_pot_name != "")
-					p_mlmtpr->Save(curr_pot_name);
-			}
-			} else if (distributed_bfgs || prank == 0) {
-				if (use_armijo_value_line_search)
-					linesearch = !armijo_value_trial_accepted;
+	#ifdef MLIP_MPI
+				int final_message_len = static_cast<int>(final_message.size());
+				int detail_len = static_cast<int>(detail.size());
+				MPI_Bcast(&final_message_len, 1, MPI_INT, 0, train_comm);
+				if (prank != 0)
+					final_message.resize(final_message_len);
+				if (final_message_len > 0)
+					MPI_Bcast(&final_message[0], final_message_len, MPI_CHAR, 0, train_comm);
+				MPI_Bcast(&detail_len, 1, MPI_INT, 0, train_comm);
+				if (prank != 0)
+					detail.resize(detail_len);
+				if (detail_len > 0)
+					MPI_Bcast(&detail[0], detail_len, MPI_CHAR, 0, train_comm);
+	#endif
+				restart_or_finish_rejected_linesearch(final_message, detail);
+				} else if (distributed_bfgs || prank == 0) {
+					if (use_armijo_value_line_search)
+						linesearch = !armijo_value_trial_accepted;
 				else
 					linesearch = bfgs.is_in_linesearch();
 			}
 
 	#ifdef MLIP_MPI
-		if (!distributed_bfgs) {
-				int linesearch_state = linesearch ? 1 : 0;
-				MPI_Bcast(&linesearch_state, 1, MPI_INT, 0, train_comm);
-				linesearch = (linesearch_state != 0);
+			if (!distributed_bfgs) {
+					int linesearch_state = linesearch ? 1 : 0;
+					MPI_Bcast(&linesearch_state, 1, MPI_INT, 0, train_comm);
+					linesearch = (linesearch_state != 0);
+				}
+			{
+				int restarted_state =
+					restarted_rejected_linesearch_this_iteration ? 1 : 0;
+				MPI_Bcast(&restarted_state, 1, MPI_INT, 0, train_comm);
+				restarted_rejected_linesearch_this_iteration =
+					(restarted_state != 0);
 			}
-		#endif
+			#endif
 
-		if (!linesearch)
-		{
-			accepted_diag_local[0] = metric_energy_abs_sum_;
+					if (!linesearch && !restarted_rejected_linesearch_this_iteration)
+				{
+					accepted_diag_local[0] = metric_energy_abs_sum_;
 			accepted_diag_local[1] = metric_energy_sq_weighted_sum_;
 			accepted_diag_local[2] = metric_force_abs_component_sum_;
 			accepted_diag_local[3] = metric_force_sq_component_sum_;

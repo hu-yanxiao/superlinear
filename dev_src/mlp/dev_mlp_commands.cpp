@@ -177,6 +177,9 @@ public:
 			const int gate_weight_begin = mtpr->TwoLayerGateWeightOffset();
 			const int gate_weight_end =
 				gate_weight_begin + mtpr->TwoLayerGateWeightCount();
+			const int gate_body_mix_begin = mtpr->TwoLayerGateBodyMixWeightOffset();
+			const int gate_body_mix_end =
+				gate_body_mix_begin + mtpr->TwoLayerGateBodyMixWeightCount();
 			const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
 			const int gate_edge_l1_end =
 				gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
@@ -186,6 +189,7 @@ public:
 			    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
 			    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
 			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+			    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
 			    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 			    || (coeff_index >= linear_begin + mtpr->species_count
 			        && coeff_index < linear_end);
@@ -1429,6 +1433,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_type_end=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_begin=" << mtpr.TwoLayerGateWeightOffset()
 				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
+				          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
+				          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " linear_begin=" << mtpr.LinearCoeffOffset()
@@ -1508,6 +1514,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			std::cout << std::setprecision(12)
 			          << "checked_coeffs=" << result.checked_count
 			          << " coeff_count=" << mtpr.CoeffCount()
+			          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
+			          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
 			          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 			          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 			          << " residual_stage=" << DevResidualStageName(residual_stage)
