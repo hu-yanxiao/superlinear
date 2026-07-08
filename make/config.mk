@@ -18,8 +18,8 @@ FC_LIB  = ifort
 CPPFLAGS += -O3 
 FFLAGS += -O3 
 CXXFLAGS += -DMLIP_MPI
-LDFLAGS += -L/home/jinghuang/intel/oneapi/mkl/2022.0.2/lib/intel64 -lmkl_rt -lifcore
-CPPFLAGS += -I/home/jinghuang/intel/oneapi/mkl/2022.0.2/include
+LDFLAGS += -L/share/intel/oneapi/mkl/2022.2.0/lib/intel64 -lmkl_rt -lifcore
+CPPFLAGS += -I/share/intel/oneapi/mkl/2022.2.0/include
 CXXFLAGS += -DMLIP_INTEL_MKL 
 CXXFLAGS += -O3 -ipo -no-prec-div -fp-model fast=2 -qoverride-limits -qopt-mem-layout-trans=3  -qopt-streaming-stores=auto -fimf-use-svml=true -std=c++11 -qopt-report=5
 
