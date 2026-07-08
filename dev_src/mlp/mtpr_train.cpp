@@ -476,10 +476,13 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 							"two-layer-gate-mode",
 							"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
-					"two-layer-gate-shared-radial",
-					"two-layer-gate-edge-l1",
-					"two-layer-residual"
-		};
+						"two-layer-gate-shared-radial",
+						"two-layer-gate-edge-l1",
+						"multi-layer-gate",
+						"second-layer-gate-body-order",
+						"second-layer-gate-mode",
+						"two-layer-residual"
+			};
 	for (const char* name : names) {
 		std::map<std::string, std::string>::const_iterator it = opts.find(name);
 		if (it != opts.end() && !it->second.empty())
@@ -1858,6 +1861,24 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
+	bool custom_second_layer_gate_mode = false;
+	std::string second_layer_gate_mode = "mu-body-linear-combo";
+	if (opts["second-layer-gate-mode"] != "") {
+		second_layer_gate_mode = opts["second-layer-gate-mode"];
+		if (second_layer_gate_mode == "mu-body-order")
+			second_layer_gate_mode = "mu-scalar-full";
+		custom_second_layer_gate_mode = true;
+	}
+	if (second_layer_gate_mode != "mu-body-linear-combo"
+	    && second_layer_gate_mode != "mu-scalar-full")
+		ERROR("--second-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
+	int requested_second_layer_gate_body_order = -1;
+	if (opts["second-layer-gate-body-order"] != "") {
+		requested_second_layer_gate_body_order =
+			stoi(opts["second-layer-gate-body-order"]);
+		if (requested_second_layer_gate_body_order < 2)
+			ERROR("--second-layer-gate-body-order must be at least 2");
+	}
 
 	std::vector<double> fixed_atomic_energies;
 	if (opts["atomic-energies"] != "")
@@ -1906,7 +1927,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
-	const bool requested_two_layer_gate = opts["two-layer-gate"] != "";
+	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
+	const bool requested_two_layer_gate =
+		opts["two-layer-gate"] != "" || requested_multi_layer_gate;
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
 	const bool requested_two_layer_gate_edge_l1 =
@@ -1914,9 +1937,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
 	bool plain_to_gate_upgrade = false;
 	bool edge_l1_gate_upgrade = false;
+	bool multi_layer_gate_upgrade = false;
 	bool plain_to_gate_disabled_controls = false;
+	bool multi_layer_gate_disabled_controls = false;
 	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
+	if ((custom_second_layer_gate_mode
+	     || requested_second_layer_gate_body_order > 0)
+	    && !requested_multi_layer_gate
+	    && !mtpr.MultiLayerGateEnabled())
+		ERROR("--second-layer-gate-* requires --multi-layer-gate unless the loaded model already has release3 multi-layer gate");
+	if (requested_multi_layer_gate && requested_two_layer_gate_edge_l1)
+		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1");
 	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate when upgrading a plain SH model");
@@ -1955,6 +1987,23 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			edge_l1_gate_upgrade = true;
 		}
 	}
+	if (requested_multi_layer_gate) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--multi-layer-gate requires a two-layer gate model or --two-layer-gate");
+		if (mtpr.TwoLayerGateEdgeL1Enabled())
+			ERROR("--multi-layer-gate is not compatible with two-layer gate edge-L1 models");
+		if (!mtpr.MultiLayerGateEnabled()) {
+			mtpr.UpgradeTwoLayerGateToMultiLayerGate(
+				requested_second_layer_gate_body_order,
+				second_layer_gate_mode);
+			multi_layer_gate_upgrade = true;
+			multi_layer_gate_disabled_controls =
+				do_lin || do_lin_rescale || fine_tune;
+			do_lin = false;
+			do_lin_rescale = false;
+			fine_tune = false;
+		}
+	}
 	if (custom_two_layer_gate_site_mode) {
 		if (!mtpr.TwoLayerGateEnabled())
 			ERROR("--two-layer-gate-site-mode requires a two-layer gate model or --two-layer-gate");
@@ -1972,8 +2021,26 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		            && !mtpr.TwoLayerGateUsesFullScalarWeights())))
 			ERROR("--two-layer-gate-mode does not match the loaded two-layer gate model");
 	}
-		if (fine_tune && !mtpr.HasCompleteParameters())
-			ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
+	if (custom_second_layer_gate_mode) {
+		if (!mtpr.MultiLayerGateEnabled())
+			ERROR("--second-layer-gate-mode requires a release3 multi-layer gate model or --multi-layer-gate");
+		if (!multi_layer_gate_upgrade
+		    && ((second_layer_gate_mode == "mu-body-linear-combo"
+		         && !mtpr.SecondLayerGateUsesBodyLinearCombo())
+		        || (second_layer_gate_mode == "mu-scalar-full"
+		            && !mtpr.SecondLayerGateUsesFullScalarWeights())))
+			ERROR("--second-layer-gate-mode does not match the loaded release3 multi-layer gate model");
+	}
+	if (requested_second_layer_gate_body_order > 0) {
+		if (!mtpr.MultiLayerGateEnabled())
+			ERROR("--second-layer-gate-body-order requires a release3 multi-layer gate model or --multi-layer-gate");
+		if (!multi_layer_gate_upgrade
+		    && mtpr.SecondLayerGateBodyOrderCount() + 1
+		       != requested_second_layer_gate_body_order)
+			ERROR("--second-layer-gate-body-order does not match the loaded release3 multi-layer gate model");
+	}
+	if (fine_tune && !mtpr.HasCompleteParameters())
+		ERROR("--fine-tune requires a complete trained model with shift/scal/radial/linear coefficients.");
 	if (!fixed_atomic_energies.empty() &&
 	    static_cast<int>(fixed_atomic_energies.size()) != mtpr.species_count)
 		ERROR("--atomic-energies count should match species_count");
@@ -2038,8 +2105,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		std::cout << "scal-range override: " << scal_range.first << ", " << scal_range.second << std::endl;
 	if (prank == 0 && custom_s_range)
 		std::cout << "s-range override: " << s_range.first << ", " << s_range.second << std::endl;
-		if (prank == 0 && plain_to_gate_upgrade) {
-			std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
+	if (prank == 0 && plain_to_gate_upgrade) {
+		std::cout << "SUS2-SH plain-to-gate upgrade enabled: "
 		          << "gate_mode="
 		          << (mtpr.TwoLayerGateUsesFullScalarWeights()
 		              ? "mu-scalar-full"
@@ -2052,19 +2119,36 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << std::endl;
 		if (plain_to_gate_disabled_controls)
 			std::cout << "plain-to-gate upgrade disabled do-lin/do-lin-rescale/fine-tune"
-				          << std::endl;
-		}
-		if (prank == 0 && edge_l1_gate_upgrade) {
-			std::cout << "SUS2-SH two-layer gate edge-L1 upgrade enabled: "
-			          << "source_moment_count="
-			          << mtpr.TwoLayerGateEdgeL1SourceCount()
-			          << " edge_l1_weight_count="
-			          << mtpr.TwoLayerGateEdgeL1WeightCount()
-			          << " initialized_weights=zero"
 			          << std::endl;
-		}
-		if (prank == 0 && mtpr.TwoLayerGateEnabled())
-			std::cout << "two-layer gate scale mode: additive-node" << std::endl;
+	}
+	if (prank == 0 && edge_l1_gate_upgrade) {
+		std::cout << "SUS2-SH two-layer gate edge-L1 upgrade enabled: "
+		          << "source_moment_count="
+		          << mtpr.TwoLayerGateEdgeL1SourceCount()
+		          << " edge_l1_weight_count="
+		          << mtpr.TwoLayerGateEdgeL1WeightCount()
+		          << " initialized_weights=zero"
+		          << std::endl;
+	}
+	if (prank == 0 && multi_layer_gate_upgrade) {
+		std::cout << "SUS2-SH release3 multi-layer gate upgrade enabled: "
+		          << "second_gate_mode="
+		          << (mtpr.SecondLayerGateUsesFullScalarWeights()
+		              ? "mu-scalar-full"
+		              : "mu-body-linear-combo")
+		          << " second_gate_body_order="
+		          << (mtpr.SecondLayerGateBodyOrderCount() + 1)
+		          << " second_gate_weight_count="
+		          << mtpr.SecondLayerGateWeightCount()
+		          << " second_gate_radial_coeff_count="
+		          << mtpr.SecondLayerGateRadialCoeffCount()
+		          << std::endl;
+		if (multi_layer_gate_disabled_controls)
+			std::cout << "multi-layer gate upgrade disabled do-lin/do-lin-rescale/fine-tune"
+			          << std::endl;
+	}
+	if (prank == 0 && mtpr.TwoLayerGateEnabled())
+		std::cout << "two-layer gate scale mode: additive-node" << std::endl;
 		if (prank == 0)
 			std::cout << "radial smoothness penalty: " << radial_smooth
 			          << " grid=" << radial_smooth_grid << std::endl;

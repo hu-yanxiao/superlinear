@@ -89,10 +89,18 @@ protected:
 	std::vector<int> two_layer_gate_required_moment_indices_;
 	std::vector<int> two_layer_gate_required_basic_indices_;
 	std::vector<int> two_layer_gate_required_basic_dense_mu_indices_;
-	std::vector<int> two_layer_gate_required_product_indices_;
-	std::vector<int> two_layer_gate_required_mu_indices_;
-	std::vector<int> two_layer_gate_mu_dense_index_;
-	std::vector<int> two_layer_gate_required_radial_eval_blocks_;
+		std::vector<int> two_layer_gate_required_product_indices_;
+		std::vector<int> two_layer_gate_required_mu_indices_;
+		std::vector<int> two_layer_gate_mu_dense_index_;
+		std::vector<int> two_layer_gate_required_radial_eval_blocks_;
+		std::vector<char> second_layer_gate_required_moments_;
+		std::vector<int> second_layer_gate_required_moment_indices_;
+		std::vector<int> second_layer_gate_required_basic_indices_;
+		std::vector<int> second_layer_gate_required_basic_dense_mu_indices_;
+		std::vector<int> second_layer_gate_required_product_indices_;
+		std::vector<int> second_layer_gate_required_mu_indices_;
+		std::vector<int> second_layer_gate_mu_dense_index_;
+		std::vector<int> second_layer_gate_required_radial_eval_blocks_;
 	bool sh_product_rows_trace_printed_ = false;
 	bool sh_site_der_cache_trace_printed_ = false;
 	void EnsureSHScalarInfoForGateUpgrade();
@@ -202,10 +210,14 @@ protected:
 	void CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
 	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
-	void CalcTwoLayerGateScalarValuesOnly(
-		const Neighborhood& nbh,
-		std::vector<double>& gate_scalar_values,
-		int cache_atom_index = -1);
+		void CalcTwoLayerGateScalarValuesOnly(
+			const Neighborhood& nbh,
+			std::vector<double>& gate_scalar_values,
+			int cache_atom_index = -1);
+		void CalcSecondLayerGateScalarValuesOnly(
+			const Neighborhood& nbh,
+			std::vector<double>& gate_scalar_values,
+			int cache_atom_index = -1);
 			void CalcTwoLayerGateEdgeL1ValuesOnly(
 				const Neighborhood& nbh,
 				std::vector<double>& edge_l1_values,
@@ -236,11 +248,16 @@ protected:
 		std::vector<Vector3>& gate_scalar_ders,
 		int cache_atom_index,
 		const double* body_order_adjoints);
-	void CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
-		const Neighborhood& nbh,
-		std::vector<Vector3>& gate_scalar_ders,
-		int cache_atom_index,
-		const double* scalar_seeds);
+		void CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+			const Neighborhood& nbh,
+			std::vector<Vector3>& gate_scalar_ders,
+			int cache_atom_index,
+			const double* scalar_seeds);
+		void CalcSecondLayerGateWeightedScalarDersForScalarSeeds(
+			const Neighborhood& nbh,
+			std::vector<Vector3>& gate_scalar_ders,
+			int cache_atom_index,
+			const double* scalar_seeds);
 	void AccumulateTwoLayerGateScalarParamGrad(
 		const Neighborhood& nbh,
 		std::vector<double>& out_grad_accumulator,
@@ -258,14 +275,22 @@ protected:
 		int cache_atom_index,
 		const double* gate_moment_tangents,
 		const double* body_order_energy_adjoints);
-	void AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
-		const Neighborhood& nbh,
-		std::vector<double>& out_grad_accumulator,
-		const double* gate_scalar_seeds,
-		const Vector3* gate_der_weights,
-		int cache_atom_index,
-		const double* gate_moment_tangents,
-		const double* energy_scalar_seeds);
+		void AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+			const Neighborhood& nbh,
+			std::vector<double>& out_grad_accumulator,
+			const double* gate_scalar_seeds,
+			const Vector3* gate_der_weights,
+			int cache_atom_index,
+			const double* gate_moment_tangents,
+			const double* energy_scalar_seeds);
+		void AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
+			const Neighborhood& nbh,
+			std::vector<double>& out_grad_accumulator,
+			const double* gate_scalar_seeds,
+			const Vector3* gate_der_weights,
+			int cache_atom_index,
+			const double* gate_moment_tangents,
+			const double* energy_scalar_seeds);
 	void CalcSHBasisGateDers(const Neighborhood& nbh,
 	                         std::vector<double>& gate_basis_ders);
 	void CalcTwoLayerGateScalarDirectionalDerivatives(
@@ -289,10 +314,21 @@ protected:
 										const double se_weight = 0.0,
 										const Vector3* se_ders_weights = nullptr);
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
-	void WriteSHProductGraph(std::ofstream& ofs);
-	void BuildSHProductProgram();
-	void BuildTwoLayerGateProductProgram();
-	void ClearTwoLayerEdgePrimitiveCache();
+		void WriteSHProductGraph(std::ofstream& ofs);
+		void BuildSHProductProgram();
+		void BuildTwoLayerGateProductProgram();
+		void BuildSecondLayerGateProductProgram();
+		void BuildGateLayerProductProgram(
+			const std::vector<int>& scalar_indices,
+			std::vector<char>& required_moments,
+			std::vector<int>& required_moment_indices,
+			std::vector<int>& required_basic_indices,
+			std::vector<int>& required_basic_dense_mu_indices,
+			std::vector<int>& required_product_indices,
+			std::vector<int>& required_mu_indices,
+			std::vector<int>& mu_dense_index,
+			std::vector<int>& required_radial_eval_blocks) const;
+		void ClearTwoLayerEdgePrimitiveCache();
 	void BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 										bool need_derivatives,
 										bool need_param_derivatives = true);
@@ -359,10 +395,12 @@ public:
 
     BasicIndices alpha_index_basic_;
     BasicIndices alpha_index_times_;
-    Array3D radial_list;
-    Array3D radial_der_list;
-	Array3D two_layer_gate_radial_list;
-	Array3D two_layer_gate_radial_der_list;
+	    Array3D radial_list;
+	    Array3D radial_der_list;
+	    Array3D two_layer_gate_radial_list;
+	    Array3D two_layer_gate_radial_der_list;
+	    Array3D second_layer_gate_radial_list;
+	    Array3D second_layer_gate_radial_der_list;
     //const Array3D& get_radial_list() const { return radial_list; }
     //const Array3D& get_radial_der_list() const { return radial_der_list; }
     double inv_dr;
@@ -403,9 +441,23 @@ public:
 			std::vector<int> two_layer_gate_mu_body_orders_;
 			std::vector<double> two_layer_gate_radial_coeffs_;
 			std::vector<double> two_layer_gate_additive_coeffs_;
-			std::vector<double> two_layer_gate_type_coeffs_;
-			std::vector<double> two_layer_gate_weights_;
-			std::vector<double> two_layer_gate_body_mix_weights_;
+				std::vector<double> two_layer_gate_type_coeffs_;
+				std::vector<double> two_layer_gate_weights_;
+				std::vector<double> two_layer_gate_body_mix_weights_;
+				bool multi_layer_gate_enabled_ = false;
+				bool second_layer_gate_shared_radial_ = false;
+				int second_layer_gate_body_order_max_ = 0;
+				std::string second_layer_gate_mode_ = "mu-body-linear-combo";
+				std::vector<int> second_layer_gate_scalar_indices_;
+				std::vector<int> second_layer_gate_scalar_body_orders_;
+				std::vector<int> second_layer_gate_body_order_weight_offsets_;
+				std::vector<int> second_layer_gate_body_order_weight_indices_;
+				std::vector<int> second_layer_gate_mu_body_orders_;
+				std::vector<double> second_layer_gate_radial_coeffs_;
+				std::vector<double> second_layer_gate_additive_coeffs_;
+				std::vector<double> second_layer_gate_type_coeffs_;
+				std::vector<double> second_layer_gate_weights_;
+				std::vector<double> second_layer_gate_body_mix_weights_;
 				bool two_layer_gate_edge_l1_enabled_ = false;
 				std::vector<int> two_layer_gate_edge_l1_source_mu_indices_;
 				std::vector<int> two_layer_gate_edge_l1_source_moment_indices_;
@@ -427,13 +479,21 @@ public:
 			std::vector<double> two_layer_gate_body_values_cache_;
 			std::vector<double> two_layer_gate_moment_values_cache_;
 			std::vector<double> two_layer_final_moment_values_cache_;
-			std::vector<double> two_layer_final_moment_ders_cache_;
-			std::vector<double> two_layer_forward_energy_gate_adjoints_cache_;
-			std::vector<double> two_layer_gate_adjoints_;
-			bool two_layer_gate_values_from_edge_cache_ready_ = false;
-			bool two_layer_forward_final_moment_cache_ready_ = false;
-			const std::vector<double>* active_two_layer_gate_values_ = nullptr;
-			std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;
+				std::vector<double> two_layer_final_moment_ders_cache_;
+				std::vector<double> two_layer_forward_energy_gate_adjoints_cache_;
+				std::vector<double> two_layer_gate_adjoints_;
+				std::vector<double> second_layer_gate_values_;
+				std::vector<double> second_layer_gate_scalar_values_cache_;
+				std::vector<double> second_layer_gate_body_values_cache_;
+				std::vector<double> second_layer_gate_moment_values_cache_;
+				std::vector<double> second_layer_gate_adjoints_;
+				bool two_layer_gate_values_from_edge_cache_ready_ = false;
+				bool two_layer_forward_final_moment_cache_ready_ = false;
+				const std::vector<double>* active_two_layer_gate_values_ = nullptr;
+				std::vector<double>* active_two_layer_gate_adjoints_ = nullptr;
+				const std::vector<double>* active_second_layer_gate_values_ = nullptr;
+				std::vector<double>* active_second_layer_gate_adjoints_ = nullptr;
+				bool second_layer_gate_scope_ = false;
 			int two_layer_gate_center_mu_buffer_atom_index_ = -1;
 			int two_layer_gate_center_mu_buffer_atom_type_ = -1;
 			int two_layer_gate_center_mu_buffer_mask_ = 0;
@@ -524,18 +584,24 @@ public:
 	bool HasNonzeroTwoLayerGateWeights() const;
 	bool HasNonzeroTwoLayerGateEdgeL1Weights() const;
 	bool RequiresTwoLayerGateEvaluation() const;
-	void AddTwoLayerGateX2Penalty(Configuration& cfg,
-	                              const Neighborhoods& neighborhoods,
-	                              double coeff,
-	                              double& out_penalty_accumulator,
-	                              Array1D* out_penalty_grad_accumulator);
-	void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void AccumulateTwoLayerGateEdgeL1ForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
-	void AccumulateTwoLayerGateValueParamGradFromAdjoints(
-		Configuration& cfg,
-		const Neighborhoods& neighborhoods,
-		Array1D& out_grad_accumulator);
+		void AddTwoLayerGateX2Penalty(Configuration& cfg,
+		                              const Neighborhoods& neighborhoods,
+		                              double coeff,
+		                              double& out_penalty_accumulator,
+		                              Array1D* out_penalty_grad_accumulator);
+		void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
+		void PrepareSecondLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
+		void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
+		void AccumulateSecondLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
+		void AccumulateTwoLayerGateEdgeL1ForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
+		void AccumulateTwoLayerGateValueParamGradFromAdjoints(
+			Configuration& cfg,
+			const Neighborhoods& neighborhoods,
+			Array1D& out_grad_accumulator);
+		void AccumulateSecondLayerGateValueParamGradFromAdjoints(
+			Configuration& cfg,
+			const Neighborhoods& neighborhoods,
+			Array1D& out_grad_accumulator);
 	void AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		Configuration& cfg,
 		const Neighborhoods& neighborhoods,
@@ -554,9 +620,13 @@ public:
 		const double* energy_gate_adjoint_by_mu,
 		const Vector3* edge_der_weight,
 		std::vector<double>& out_grad_accumulator);
-		void AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
-		double TwoLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
-		const double* TwoLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+			void AddTwoLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
+			double TwoLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
+			const double* TwoLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+			void AddSecondLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
+			double SecondLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
+			const double* SecondLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+			const double* SecondLayerGateAtomSignals(int atom_index) const;
 		const double* PrepareTwoLayerGateEdgeL1NeighborSignals(
 				const Neighborhood& nbh,
 				int neighbor_index,
@@ -657,13 +727,17 @@ public:
 						void SetTwoLayerGateTanhAmplitude(double amplitude);
 						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
-				bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
-					void UpgradePlainSHToTwoLayerGate(int gate_body_order,
-					                                  bool independent_gate_radial_coeffs,
-					                                  const std::string& gate_site_mode = "neighbor",
-					                                  const std::string& gate_mode = "mu-body-linear-combo");
-					void UpgradeTwoLayerGateToEdgeL1();
-			void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
+					bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
+						void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+						                                  bool independent_gate_radial_coeffs,
+						                                  const std::string& gate_site_mode = "neighbor",
+						                                  const std::string& gate_mode = "mu-body-linear-combo");
+						void UpgradeTwoLayerGateToEdgeL1();
+						bool MultiLayerGateEnabled() const { return multi_layer_gate_enabled_; }
+						void UpgradeTwoLayerGateToMultiLayerGate(
+							int second_gate_body_order,
+							const std::string& second_gate_mode = "mu-body-linear-combo");
+				void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;
 		int TwoLayerGateAdditiveCoeffCount() const;
@@ -711,18 +785,64 @@ public:
 		                                    double* body_values) const;
 		void ComputeTwoLayerGateMuSignals(const double* body_values,
 		                                  double* mu_values) const;
-		const double* TwoLayerGateBodyMixWeightMatrixData() const;
-		const double* TwoLayerGateFullWeightMatrixData() const;
-		void ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count);
-		void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-			const double* mu_adjoints,
-			double* scalar_seeds,
-			std::vector<double>& body_scratch) const;
-		double TwoLayerResidualE0Coeff(int scalar_index) const;
-		void InitializeTwoLayerGateRadialCoeffsFromBase();
-		void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
-		void InitializeTwoLayerGateTypeCoeffsFromBase();
-		int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
+			const double* TwoLayerGateBodyMixWeightMatrixData() const;
+			const double* TwoLayerGateFullWeightMatrixData() const;
+			void ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count);
+			bool SecondLayerGateUsesSharedRadial() const;
+			bool SecondLayerGateUsesBodyLinearCombo() const;
+			bool SecondLayerGateUsesFullScalarWeights() const;
+			int SecondLayerGateRadialCoeffCount() const;
+			int SecondLayerGateRadialCoeffOffset() const;
+			int SecondLayerGateAdditiveCoeffCount() const;
+			int SecondLayerGateAdditiveCoeffOffset() const;
+			int SecondLayerGateTypeCoeffCount() const;
+			int SecondLayerGateTypeCoeffOffset() const;
+			int SecondLayerGateWeightCount() const;
+			int SecondLayerGateWeightOffset() const;
+			int SecondLayerGateBodyMixWeightCount() const;
+			int SecondLayerGateBodyMixWeightOffset() const;
+			int SecondLayerGateBodyOrderCount() const;
+			int SecondLayerGateScalarCount() const;
+			int SecondLayerGateMuBodyOrder(int mu) const;
+			int SecondLayerGateWeightBodyOrder(int weight_index) const;
+			void BuildSecondLayerGateBodyOrderBuckets();
+			int SecondLayerGateRadialCoeffIndex(int mu, int xi) const;
+			double SecondLayerGateRadialCoeff(int mu, int xi) const;
+			int SecondLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
+			double SecondLayerGateAdditiveCoeff(int type_outer, int mu) const;
+			int SecondLayerGateTypeCoeffIndex(int type_outer, int mu) const;
+			double SecondLayerGateTypeCoeff(int type_outer, int mu) const;
+			int SecondLayerGateWeightIndex(int scalar_weight_index) const;
+			int SecondLayerGateWeightIndex(int mu, int scalar_weight_index) const;
+			int SecondLayerGateBodyMixWeightIndex(int mu, int body_order) const;
+			double SecondLayerGateWeight(int mu, int scalar_weight_index) const;
+			double SecondLayerGateWeight(int weight_index) const;
+			double SecondLayerGateBodyMixWeight(int mu, int body_order) const;
+			double SecondLayerGateBodyMixWeight(int weight_index) const;
+			const double* SecondLayerGateScalarWeightData() const;
+			const double* SecondLayerGateBodyMixWeightMatrixData() const;
+			const double* SecondLayerGateFullWeightMatrixData() const;
+			void ComputeSecondLayerGateBodySignals(const double* scalar_values,
+			                                       double* body_values) const;
+			void ComputeSecondLayerGateMuSignals(const double* body_values,
+			                                     double* mu_values) const;
+			void ComputeSecondLayerGateFullMuSignalsForAtoms(int atom_count);
+			void AccumulateSecondLayerGateScalarSeedsFromMuAdjoints(
+				const double* mu_adjoints,
+				double* scalar_seeds,
+				std::vector<double>& body_scratch) const;
+			void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+				const double* mu_adjoints,
+				double* scalar_seeds,
+				std::vector<double>& body_scratch) const;
+			double TwoLayerResidualE0Coeff(int scalar_index) const;
+			void InitializeTwoLayerGateRadialCoeffsFromBase();
+			void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
+			void InitializeTwoLayerGateTypeCoeffsFromBase();
+			void InitializeSecondLayerGateRadialCoeffsFromFirstGate();
+			void InitializeSecondLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
+			void InitializeSecondLayerGateTypeCoeffsFromFirstGate();
+			int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
 	bool IsRadialFirstCoeff(int coeff_index) const;
 	double RadialFirstCoeffRawToValue(double raw_value) const;
 	double RadialFirstCoeffValueToRaw(double coeff_value) const;
@@ -766,9 +886,15 @@ public:
 						const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
 						const int gate_type_count = TwoLayerGateTypeCoeffCount();
 						const int gate_weight_count = TwoLayerGateWeightCount();
-					const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
-					const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
-						const int e0_count = TwoLayerResidualE0CoeffCount();
+						const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
+						const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
+						const int second_gate_radial_count = SecondLayerGateRadialCoeffCount();
+						const int second_gate_additive_count = SecondLayerGateAdditiveCoeffCount();
+						const int second_gate_type_count = SecondLayerGateTypeCoeffCount();
+						const int second_gate_weight_count = SecondLayerGateWeightCount();
+						const int second_gate_body_mix_weight_count =
+							SecondLayerGateBodyMixWeightCount();
+							const int e0_count = TwoLayerResidualE0CoeffCount();
 						const int linear_size = LinearCoeffCount();
 					std::vector<double> old_coeffs = regression_coeffs;
 					if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
@@ -777,8 +903,18 @@ public:
 						const int new_gate_type_offset = new_gate_additive_offset + gate_additive_count;
 						const int new_gate_offset = new_gate_type_offset + gate_type_count;
 						const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
-						const int new_gate_edge_l1_offset =
-							new_gate_body_mix_offset + gate_body_mix_weight_count;
+							const int new_gate_edge_l1_offset =
+								new_gate_body_mix_offset + gate_body_mix_weight_count;
+							const int new_second_gate_radial_offset =
+								new_gate_edge_l1_offset + gate_edge_l1_weight_count;
+							const int new_second_gate_additive_offset =
+								new_second_gate_radial_offset + second_gate_radial_count;
+							const int new_second_gate_type_offset =
+								new_second_gate_additive_offset + second_gate_additive_count;
+							const int new_second_gate_weight_offset =
+								new_second_gate_type_offset + second_gate_type_count;
+							const int new_second_gate_body_mix_offset =
+								new_second_gate_weight_offset + second_gate_weight_count;
 						const int legacy_gate_additive_count =
 							two_layer_gate_enabled_ ? species_count : 0;
 						const int legacy_gate_offset =
@@ -792,11 +928,17 @@ public:
 							&& static_cast<int>(old_coeffs.size()) >=
 								legacy_gate_offset + gate_weight_count
 								+ gate_body_mix_weight_count + e0_count;
-						const bool old_coeffs_have_edge_l1_layout =
-							old_coeffs_have_release_layout
-							&& gate_edge_l1_weight_count > 0
-							&& static_cast<int>(old_coeffs.size()) >=
-								new_gate_edge_l1_offset + gate_edge_l1_weight_count + e0_count;
+							const bool old_coeffs_have_edge_l1_layout =
+								old_coeffs_have_release_layout
+								&& gate_edge_l1_weight_count > 0
+								&& static_cast<int>(old_coeffs.size()) >=
+									new_gate_edge_l1_offset + gate_edge_l1_weight_count + e0_count;
+							const bool old_coeffs_have_second_gate_layout =
+								old_coeffs_have_release_layout
+								&& multi_layer_gate_enabled_
+								&& static_cast<int>(old_coeffs.size()) >=
+									new_second_gate_body_mix_offset
+									+ second_gate_body_mix_weight_count + e0_count;
 					if (gate_radial_count > 0
 					    && static_cast<int>(old_coeffs.size()) >= base_nonlinear_size + gate_radial_count) {
 						two_layer_gate_radial_coeffs_.assign(gate_radial_count, 0.0);
@@ -883,29 +1025,114 @@ public:
 									two_layer_gate_edge_l1_weights_.assign(
 										gate_edge_l1_weight_count, 0.0);
 								}
-							}
-						if (e0_count > 0) {
-							const int old_e0_offset =
-								old_coeffs_have_edge_l1_layout
-									? new_gate_edge_l1_offset + gate_edge_l1_weight_count
-									: (old_coeffs_have_release_layout
-										? new_gate_body_mix_offset + gate_body_mix_weight_count
-										: (old_coeffs_have_legacy_additive_layout
-											? legacy_gate_offset + gate_weight_count
-												+ gate_body_mix_weight_count
-											: base_nonlinear_size + gate_radial_count
-												+ gate_weight_count + gate_body_mix_weight_count));
+								}
+								if (second_gate_radial_count > 0) {
+									if (static_cast<int>(second_layer_gate_radial_coeffs_.size())
+									    == second_gate_radial_count) {
+										// Metadata is authoritative for release3 second-gate radial coeffs.
+									} else if (static_cast<int>(old_coeffs.size())
+									           >= new_second_gate_radial_offset
+									              + second_gate_radial_count) {
+										second_layer_gate_radial_coeffs_.assign(
+											second_gate_radial_count, 0.0);
+										for (int i = 0; i < second_gate_radial_count; ++i)
+											second_layer_gate_radial_coeffs_[i] =
+												old_coeffs[new_second_gate_radial_offset + i];
+									} else {
+										InitializeSecondLayerGateRadialCoeffsFromFirstGate();
+									}
+								}
+								if (second_gate_additive_count > 0) {
+									if (static_cast<int>(second_layer_gate_additive_coeffs_.size())
+									    == second_gate_additive_count) {
+										// Metadata is authoritative.
+									} else if (static_cast<int>(old_coeffs.size())
+									           >= new_second_gate_additive_offset
+									              + second_gate_additive_count) {
+										second_layer_gate_additive_coeffs_.assign(
+											second_gate_additive_count, 0.0);
+										for (int i = 0; i < second_gate_additive_count; ++i)
+											second_layer_gate_additive_coeffs_[i] =
+												old_coeffs[new_second_gate_additive_offset + i];
+									} else {
+										InitializeSecondLayerGateAdditiveCoeffs();
+									}
+								}
+								if (second_gate_type_count > 0) {
+									if (static_cast<int>(second_layer_gate_type_coeffs_.size())
+									    == second_gate_type_count) {
+										// Metadata is authoritative.
+									} else if (static_cast<int>(old_coeffs.size())
+									           >= new_second_gate_type_offset
+									              + second_gate_type_count) {
+										second_layer_gate_type_coeffs_.assign(
+											second_gate_type_count, 0.0);
+										for (int i = 0; i < second_gate_type_count; ++i)
+											second_layer_gate_type_coeffs_[i] =
+												old_coeffs[new_second_gate_type_offset + i];
+									} else {
+										InitializeSecondLayerGateTypeCoeffsFromFirstGate();
+									}
+								}
+								if (second_gate_weight_count > 0) {
+									if (static_cast<int>(second_layer_gate_weights_.size())
+									    == second_gate_weight_count) {
+										// Metadata is authoritative.
+									} else if (static_cast<int>(old_coeffs.size())
+									           >= new_second_gate_weight_offset
+									              + second_gate_weight_count) {
+										second_layer_gate_weights_.assign(
+											second_gate_weight_count, 0.0);
+										for (int i = 0; i < second_gate_weight_count; ++i)
+											second_layer_gate_weights_[i] =
+												old_coeffs[new_second_gate_weight_offset + i];
+									}
+								}
+								if (second_gate_body_mix_weight_count > 0) {
+									if (static_cast<int>(second_layer_gate_body_mix_weights_.size())
+									    == second_gate_body_mix_weight_count) {
+										// Metadata is authoritative.
+									} else if (static_cast<int>(old_coeffs.size())
+									           >= new_second_gate_body_mix_offset
+									              + second_gate_body_mix_weight_count) {
+										second_layer_gate_body_mix_weights_.assign(
+											second_gate_body_mix_weight_count, 0.0);
+										for (int i = 0; i < second_gate_body_mix_weight_count; ++i)
+											second_layer_gate_body_mix_weights_[i] =
+												old_coeffs[new_second_gate_body_mix_offset + i];
+									} else {
+										second_layer_gate_body_mix_weights_.assign(
+											second_gate_body_mix_weight_count, 1.0);
+									}
+								}
+							if (e0_count > 0) {
+								const int old_e0_offset =
+									old_coeffs_have_second_gate_layout
+										? new_second_gate_body_mix_offset
+											+ second_gate_body_mix_weight_count
+										: (old_coeffs_have_edge_l1_layout
+											? new_gate_edge_l1_offset + gate_edge_l1_weight_count
+										: (old_coeffs_have_release_layout
+											? new_gate_body_mix_offset + gate_body_mix_weight_count
+											: (old_coeffs_have_legacy_additive_layout
+												? legacy_gate_offset + gate_weight_count
+													+ gate_body_mix_weight_count
+												: base_nonlinear_size + gate_radial_count
+													+ gate_weight_count + gate_body_mix_weight_count)));
 							if (static_cast<int>(old_coeffs.size()) >= old_e0_offset + e0_count) {
 							two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
 							for (int i = 0; i < e0_count; ++i)
 								two_layer_residual_e0_coeffs_[i] = old_coeffs[old_e0_offset + i];
 						}
 					}
-						regression_coeffs.assign(
-							base_nonlinear_size + gate_radial_count
-							+ gate_additive_count + gate_type_count + gate_weight_count
-							+ gate_body_mix_weight_count + gate_edge_l1_weight_count
-							+ e0_count + linear_size, 0.0);
+							regression_coeffs.assign(
+								base_nonlinear_size + gate_radial_count
+								+ gate_additive_count + gate_type_count + gate_weight_count
+								+ gate_body_mix_weight_count + gate_edge_l1_weight_count
+								+ second_gate_radial_count + second_gate_additive_count
+								+ second_gate_type_count + second_gate_weight_count
+								+ second_gate_body_mix_weight_count
+								+ e0_count + linear_size, 0.0);
 				for (int i = 0; i < base_nonlinear_size; ++i)
 					regression_coeffs[i] = old_coeffs[i];
 			if (gate_radial_count > 0) {
@@ -945,16 +1172,57 @@ public:
 							regression_coeffs[TwoLayerGateBodyMixWeightOffset() + i] =
 								two_layer_gate_body_mix_weights_[i];
 					}
-					if (gate_edge_l1_weight_count > 0) {
+						if (gate_edge_l1_weight_count > 0) {
 						if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
 						    != gate_edge_l1_weight_count)
 							two_layer_gate_edge_l1_weights_.assign(
 								gate_edge_l1_weight_count, 0.0);
 						for (int i = 0; i < gate_edge_l1_weight_count; ++i)
-							regression_coeffs[TwoLayerGateEdgeL1WeightOffset() + i] =
-								two_layer_gate_edge_l1_weights_[i];
-					}
-					if (e0_count > 0) {
+								regression_coeffs[TwoLayerGateEdgeL1WeightOffset() + i] =
+									two_layer_gate_edge_l1_weights_[i];
+						}
+						if (second_gate_radial_count > 0) {
+							if (static_cast<int>(second_layer_gate_radial_coeffs_.size())
+							    != second_gate_radial_count)
+								InitializeSecondLayerGateRadialCoeffsFromFirstGate();
+							for (int i = 0; i < second_gate_radial_count; ++i)
+								regression_coeffs[SecondLayerGateRadialCoeffOffset() + i] =
+									second_layer_gate_radial_coeffs_[i];
+						}
+						if (second_gate_additive_count > 0) {
+							if (static_cast<int>(second_layer_gate_additive_coeffs_.size())
+							    != second_gate_additive_count)
+								InitializeSecondLayerGateAdditiveCoeffs();
+							for (int i = 0; i < second_gate_additive_count; ++i)
+								regression_coeffs[SecondLayerGateAdditiveCoeffOffset() + i] =
+									second_layer_gate_additive_coeffs_[i];
+						}
+						if (second_gate_type_count > 0) {
+							if (static_cast<int>(second_layer_gate_type_coeffs_.size())
+							    != second_gate_type_count)
+								InitializeSecondLayerGateTypeCoeffsFromFirstGate();
+							for (int i = 0; i < second_gate_type_count; ++i)
+								regression_coeffs[SecondLayerGateTypeCoeffOffset() + i] =
+									second_layer_gate_type_coeffs_[i];
+						}
+						if (second_gate_weight_count > 0) {
+							if (static_cast<int>(second_layer_gate_weights_.size())
+							    != second_gate_weight_count)
+								ERROR("SUS2-SH second-layer gate metadata has inconsistent sizes");
+							for (int i = 0; i < second_gate_weight_count; ++i)
+								regression_coeffs[SecondLayerGateWeightOffset() + i] =
+									second_layer_gate_weights_[i];
+						}
+						if (second_gate_body_mix_weight_count > 0) {
+							if (static_cast<int>(second_layer_gate_body_mix_weights_.size())
+							    != second_gate_body_mix_weight_count)
+								second_layer_gate_body_mix_weights_.assign(
+									second_gate_body_mix_weight_count, 1.0);
+							for (int i = 0; i < second_gate_body_mix_weight_count; ++i)
+								regression_coeffs[SecondLayerGateBodyMixWeightOffset() + i] =
+									second_layer_gate_body_mix_weights_[i];
+						}
+						if (e0_count > 0) {
 					if (static_cast<int>(two_layer_residual_e0_coeffs_.size()) != e0_count)
 						two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
 					for (int i = 0; i < e0_count; ++i)

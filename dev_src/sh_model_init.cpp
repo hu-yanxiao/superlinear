@@ -752,22 +752,30 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
-	const bool two_layer_gate = HasOpt(opts, "two-layer-gate");
+	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
+	const bool two_layer_gate = HasOpt(opts, "two-layer-gate") || multi_layer_gate;
 	const bool two_layer_gate_edge_l1 = HasOpt(opts, "two-layer-gate-edge-l1");
 	const bool requested_two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
 	const bool two_layer_gate_shared_radial = two_layer_gate;
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
-	const int default_two_layer_gate_body_order = std::min(body_order, kmax + 1);
+	const int default_two_layer_gate_body_order = body_order;
 	const int two_layer_gate_body_order =
 		IntOpt(opts, "two-layer-gate-body-order", default_two_layer_gate_body_order);
 	std::string two_layer_gate_mode =
 		StringOpt(opts, "two-layer-gate-mode", "mu-body-linear-combo");
 	if (two_layer_gate_mode == "mu-body-order")
 		two_layer_gate_mode = "mu-scalar-full";
+	std::string second_layer_gate_mode =
+		StringOpt(opts, "second-layer-gate-mode", two_layer_gate_mode);
+	if (second_layer_gate_mode == "mu-body-order")
+		second_layer_gate_mode = "mu-scalar-full";
+	const int second_layer_gate_body_order =
+		IntOpt(opts, "second-layer-gate-body-order", body_order);
 	const std::string two_layer_gate_site_mode =
 		StringOpt(opts, "two-layer-gate-site-mode", "neighbor");
-	const bool write_scalar_info = HasOpt(opts, "write-sh-scalar-info") || two_layer_gate;
+	const bool write_scalar_info =
+		HasOpt(opts, "write-sh-scalar-info") || two_layer_gate || multi_layer_gate;
 	std::ostringstream default_name;
 	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
 	const std::string name = StringOpt(opts, "potential-name", default_name.str());
@@ -785,6 +793,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate
 	    && (two_layer_gate_body_order < 2 || two_layer_gate_body_order > body_order))
 		ERROR("--two-layer-gate-body-order must be in [2, --body-order].");
+	if (HasOpt(opts, "second-layer-gate-body-order") && !multi_layer_gate)
+		ERROR("--second-layer-gate-body-order requires --multi-layer-gate.");
+	if (multi_layer_gate
+	    && (second_layer_gate_body_order < 2
+	        || second_layer_gate_body_order > body_order))
+		ERROR("--second-layer-gate-body-order must be in [2, --body-order].");
+	if (HasOpt(opts, "second-layer-gate-mode") && !multi_layer_gate)
+		ERROR("--second-layer-gate-mode requires --multi-layer-gate.");
 	if (two_layer_gate_edge_l1 && !two_layer_gate)
 		ERROR("--two-layer-gate-edge-l1 requires --two-layer-gate.");
 	if (two_layer_gate_edge_l1 && lmax < 1)
@@ -792,6 +808,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
+	if (second_layer_gate_mode != "mu-body-linear-combo"
+	    && second_layer_gate_mode != "mu-scalar-full")
+		ERROR("--second-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
 	if (HasOpt(opts, "two-layer-gate-mode") && !two_layer_gate)
 		ERROR("--two-layer-gate-mode requires --two-layer-gate.");
 	if (HasOpt(opts, "two-layer-gate-tanh-amplitude"))
@@ -802,6 +821,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-site-mode requires --two-layer-gate.");
 	if (two_layer_gate_edge_l1 && two_layer_gate_site_mode != "neighbor")
 		ERROR("--two-layer-gate-edge-l1 first version supports neighbor site mode only.");
+	if (multi_layer_gate && two_layer_gate_edge_l1)
+		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1.");
 	if (requested_two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
 	if (two_layer_residual && !two_layer_gate)
@@ -965,8 +986,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			if (two_layer_gate_mode == "mu-body-linear-combo") {
 				const int gate_body_mix_weight_count =
 					radial_func_count * (two_layer_gate_body_order - 1);
-			ofs << "two_layer_gate_body_mix_weight_count = "
-			    << gate_body_mix_weight_count << "\n";
+				ofs << "two_layer_gate_body_mix_weight_count = "
+				    << gate_body_mix_weight_count << "\n";
 			ofs << "two_layer_gate_body_mix_weights = {";
 			for (int i = 0; i < gate_body_mix_weight_count; ++i) {
 				if (i != 0)
@@ -974,6 +995,97 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << 1.0;
 				}
 				ofs << "}\n";
+			}
+			if (multi_layer_gate) {
+				std::vector<int> second_gate_scalar_indices;
+				std::vector<int> second_gate_body_counts(
+					second_layer_gate_body_order + 1, 0);
+				for (size_t i = 0; i < graph.scalar_infos_.size(); ++i)
+					if (graph.scalar_infos_[i].body_order >= 2
+					    && graph.scalar_infos_[i].body_order
+					       <= second_layer_gate_body_order) {
+						second_gate_scalar_indices.push_back(static_cast<int>(i));
+						++second_gate_body_counts[graph.scalar_infos_[i].body_order];
+					}
+				if (second_gate_scalar_indices.empty())
+					ERROR("--multi-layer-gate selected no second-layer SH scalar basis functions.");
+				for (int bo = 2; bo <= second_layer_gate_body_order; ++bo)
+					if (second_gate_body_counts[bo] == 0)
+						ERROR("--multi-layer-gate selected no second-layer scalar basis functions for one required mu body-order bucket.");
+
+				ofs << "multi_layer_gate_enabled = true\n";
+				ofs << "second_layer_gate_mode = " << second_layer_gate_mode << "\n";
+				ofs << "second_layer_gate_body_order_max = "
+				    << second_layer_gate_body_order << "\n";
+				ofs << "second_layer_gate_radial_mode = shared-radial\n";
+				const int second_gate_radial_count =
+					radial_func_count * rb_size;
+				ofs << "second_layer_gate_radial_coeff_count = "
+				    << second_gate_radial_count << "\n";
+				ofs << "second_layer_gate_radial_coeffs = {";
+				for (int i = 0; i < second_gate_radial_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 1.0e-2;
+				}
+				ofs << "}\n";
+				const int second_gate_additive_count =
+					species_count * radial_func_count;
+				ofs << "second_layer_gate_additive_coeff_count = "
+				    << second_gate_additive_count << "\n";
+				ofs << "second_layer_gate_additive_coeffs = {";
+				for (int i = 0; i < second_gate_additive_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << (1.0 / 12.0);
+				}
+				ofs << "}\n";
+				const int second_gate_type_count =
+					species_count * radial_func_count;
+				ofs << "second_layer_gate_type_coeff_count = "
+				    << second_gate_type_count << "\n";
+				ofs << "second_layer_gate_type_coeffs = {";
+				for (int i = 0; i < second_gate_type_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 1.0;
+				}
+				ofs << "}\n";
+				const int second_gate_weight_count =
+					(second_layer_gate_mode == "mu-scalar-full")
+						? radial_func_count
+							* static_cast<int>(second_gate_scalar_indices.size())
+						: static_cast<int>(second_gate_scalar_indices.size());
+				ofs << "second_layer_gate_weight_count = "
+				    << second_gate_weight_count << "\n";
+				ofs << "second_layer_gate_scalar_indices = {";
+				for (size_t i = 0; i < second_gate_scalar_indices.size(); ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << second_gate_scalar_indices[i];
+				}
+				ofs << "}\n";
+				ofs << "second_layer_gate_weights = {";
+				for (int i = 0; i < second_gate_weight_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 1.0e-1;
+				}
+				ofs << "}\n";
+				if (second_layer_gate_mode == "mu-body-linear-combo") {
+					const int second_gate_body_mix_weight_count =
+						radial_func_count
+						* (second_layer_gate_body_order - 1);
+					ofs << "second_layer_gate_body_mix_weight_count = "
+					    << second_gate_body_mix_weight_count << "\n";
+					ofs << "second_layer_gate_body_mix_weights = {";
+					for (int i = 0; i < second_gate_body_mix_weight_count; ++i) {
+						if (i != 0)
+							ofs << ", ";
+						ofs << 1.0;
+					}
+					ofs << "}\n";
+				}
 			}
 			if (two_layer_gate_edge_l1) {
 				const std::vector<int> edge_l1_source_moment_indices =

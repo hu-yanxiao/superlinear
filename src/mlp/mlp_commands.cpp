@@ -58,11 +58,14 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 					"two-layer-gate",
 					"two-layer-gate-body-order",
 					"two-layer-gate-mode",
-					"two-layer-gate-site-mode",
-					"two-layer-gate-shared-radial",
-					"two-layer-gate-edge-l1",
-					"two-layer-residual"
-		};
+						"two-layer-gate-site-mode",
+						"two-layer-gate-shared-radial",
+						"two-layer-gate-edge-l1",
+						"multi-layer-gate",
+						"second-layer-gate-body-order",
+						"second-layer-gate-mode",
+						"two-layer-residual"
+			};
 	for (const char* name : names) {
 		map<string, string>::const_iterator it = opts.find(name);
 		if (it != opts.end() && !it->second.empty())
@@ -626,10 +629,13 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
 					"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
-				"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
-				"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
-				"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
-						"    --two-layer-residual: rejected by mu-body-order gate models.\n"
+					"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
+					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
+					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
+					"    --multi-layer-gate: enable release3 second gate on the first gate endpoint coefficients.\n"
+					"    --second-layer-gate-body-order=<int>: second gate scalar body-order cutoff. Default=--body-order\n"
+					"    --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: second gate scalar parameterization.\n"
+							"    --two-layer-residual: rejected by mu-body-order gate models.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"
 			"    --stage-a-steps=<int>: BFGS steps for residual stage A. Default=0\n"
 			"    --stage-b-steps=<int>: BFGS steps for residual stage B. Default=0\n"

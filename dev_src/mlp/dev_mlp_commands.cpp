@@ -1299,6 +1299,23 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
 	        + mtpr.TwoLayerGateEdgeL1WeightCount())
 		return "two_layer_gate_edge_l1_weight";
+	if (index >= mtpr.SecondLayerGateRadialCoeffOffset()
+	    && index < mtpr.SecondLayerGateAdditiveCoeffOffset())
+		return "second_layer_gate_radial_coeff";
+	if (index >= mtpr.SecondLayerGateAdditiveCoeffOffset()
+	    && index < mtpr.SecondLayerGateTypeCoeffOffset())
+		return "second_layer_gate_additive_coeff";
+	if (index >= mtpr.SecondLayerGateTypeCoeffOffset()
+	    && index < mtpr.SecondLayerGateWeightOffset())
+		return "second_layer_gate_type_coeff";
+	if (index >= mtpr.SecondLayerGateWeightOffset()
+	    && index < mtpr.SecondLayerGateWeightOffset()
+	        + mtpr.SecondLayerGateWeightCount())
+		return "second_layer_gate_weight";
+	if (index >= mtpr.SecondLayerGateBodyMixWeightOffset()
+	    && index < mtpr.SecondLayerGateBodyMixWeightOffset()
+	        + mtpr.SecondLayerGateBodyMixWeightCount())
+		return "second_layer_gate_body_mix_weight";
 	if (index >= mtpr.LinearCoeffOffset())
 		return "linear";
 	return "unknown";
@@ -1435,9 +1452,19 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
 				          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
 				          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
-				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
-				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
-				          << " linear_begin=" << mtpr.LinearCoeffOffset()
+					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
+					          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
+					          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
+					          << " second_gate_radial_end=" << mtpr.SecondLayerGateAdditiveCoeffOffset()
+					          << " second_gate_additive_begin=" << mtpr.SecondLayerGateAdditiveCoeffOffset()
+					          << " second_gate_additive_end=" << mtpr.SecondLayerGateTypeCoeffOffset()
+					          << " second_gate_type_begin=" << mtpr.SecondLayerGateTypeCoeffOffset()
+					          << " second_gate_type_end=" << mtpr.SecondLayerGateWeightOffset()
+					          << " second_gate_weight_begin=" << mtpr.SecondLayerGateWeightOffset()
+					          << " second_gate_weight_end=" << mtpr.SecondLayerGateWeightOffset() + mtpr.SecondLayerGateWeightCount()
+					          << " second_gate_body_mix_begin=" << mtpr.SecondLayerGateBodyMixWeightOffset()
+					          << " second_gate_body_mix_end=" << mtpr.SecondLayerGateBodyMixWeightOffset() + mtpr.SecondLayerGateBodyMixWeightCount()
+					          << " linear_begin=" << mtpr.LinearCoeffOffset()
 			          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss
@@ -1516,9 +1543,19 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " coeff_count=" << mtpr.CoeffCount()
 			          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
 			          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
-			          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
-			          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
-			          << " residual_stage=" << DevResidualStageName(residual_stage)
+				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
+				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
+				          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
+				          << " second_gate_radial_end=" << mtpr.SecondLayerGateAdditiveCoeffOffset()
+				          << " second_gate_additive_begin=" << mtpr.SecondLayerGateAdditiveCoeffOffset()
+				          << " second_gate_additive_end=" << mtpr.SecondLayerGateTypeCoeffOffset()
+				          << " second_gate_type_begin=" << mtpr.SecondLayerGateTypeCoeffOffset()
+				          << " second_gate_type_end=" << mtpr.SecondLayerGateWeightOffset()
+				          << " second_gate_weight_begin=" << mtpr.SecondLayerGateWeightOffset()
+				          << " second_gate_weight_end=" << mtpr.SecondLayerGateWeightOffset() + mtpr.SecondLayerGateWeightCount()
+				          << " second_gate_body_mix_begin=" << mtpr.SecondLayerGateBodyMixWeightOffset()
+				          << " second_gate_body_mix_end=" << mtpr.SecondLayerGateBodyMixWeightOffset() + mtpr.SecondLayerGateBodyMixWeightCount()
+				          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss
 			          << " analytic_directional=" << result.analytic
@@ -1905,10 +1942,13 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
-			"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
-			"         --two-layer-gate-shared-radial (default for gate models),\n"
-			"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
-			"         --two-layer-residual (rejected by mu-body-order gate models),\n"
+				"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
+				"         --two-layer-gate-shared-radial (default for gate models),\n"
+				"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
+				"         --multi-layer-gate (release3 second gate on first-gate endpoint coefficients),\n"
+				"         --second-layer-gate-body-order=<int> (default=--body-order),\n"
+				"         --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full,\n"
+				"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"
 			"         --zbl-typewise-cutoff-factor=<factor>\n"
 		) {
