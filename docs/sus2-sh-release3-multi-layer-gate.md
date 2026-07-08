@@ -138,3 +138,40 @@ The Intel MPI wrapper relink of the final source snapshot timed out in the
 final `mpiicpc` link step during this development pass. The tested binary above
 contains the release3 multi-layer gate implementation used by the smoke checks;
 the later source-only edits are diagnostic output and formatting.
+
+## Exact Optimization Notes
+
+First exact release3 multi-gate optimization pass:
+
+```text
+scope: gate value and gate-seed memory flow
+math: unchanged
+```
+
+Changes:
+
+```text
+reuse object-level scratch buffers for full/body-combo gate seed projections
+avoid zero-filling gate value buffers immediately before full overwrite
+avoid zero-filling GEMM output buffers immediately before beta=0 GEMM
+cache second-gate neighbor signal pointers in first-gate hot loops
+```
+
+Server build after this pass:
+
+```text
+binary: /work/phy-weigw/20260321_Test/SUS2-SH-release3-work-codex/bin/mlp-sus2
+binary SHA-256: 9dc53e10ee9260e9eb5140e55a144e3a213cea80d00a1435b633ab3cc345ba97
+```
+
+Checked:
+
+```text
+dev_test/sh_release3_multi_layer_gate_smoke.sh
+checked_coeffs=287 coeff_count=287 abs_err=0.00183662811573 rel_err=0.000311410923406
+
+check-efs-fd-dev release3_multi_gate_probe.mtp one.cfg --max-configs=1 --max-atoms=1
+force_abs_err=7.1054273576e-11
+stress_abs_err=4.71228099703e-10
+stress_rel_err=0.000237772333266
+```

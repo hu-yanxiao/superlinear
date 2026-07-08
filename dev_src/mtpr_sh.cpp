@@ -3639,6 +3639,10 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 			}
 		}
 
+			const double* second_gate_neighbor_signals =
+				multi_layer_gate_enabled_
+					? SecondLayerGateNeighborSignals(nbh, j)
+					: nullptr;
 			for (int bi = 0;
 			     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 			     ++bi) {
@@ -3649,8 +3653,8 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 				const double gate_outer_type_coeff =
 					TwoLayerGateTypeCoeff(type_outer, mu);
 				const double second_gate_signal =
-					multi_layer_gate_enabled_
-						? SecondLayerGateNeighborSignal(nbh, j, mu)
+					second_gate_neighbor_signals != nullptr
+						? second_gate_neighbor_signals[mu]
 						: 0.0;
 				const double second_gate_additive =
 					multi_layer_gate_enabled_
@@ -4596,8 +4600,10 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 
 	std::vector<double> scalar_gate_seeds(gate_count, 0.0);
 	std::vector<double> scalar_seed_body_scratch;
-	std::vector<double> full_scalar_gate_seed_cache;
-	std::vector<double> body_combo_gate_seed_cache;
+	std::vector<double>& full_scalar_gate_seed_cache =
+		two_layer_full_scalar_seed_scratch_;
+	std::vector<double>& body_combo_gate_seed_cache =
+		two_layer_body_combo_seed_scratch_;
 	const bool full_seed_blas =
 		TwoLayerGateUsesFullScalarWeights()
 		&& two_layer_gate_adjoints_.size()
@@ -4610,8 +4616,8 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 	const double* body_combo_scalar_weights =
 		body_combo_seed_blas ? TwoLayerGateScalarWeightData() : nullptr;
 	if (full_seed_blas) {
-		full_scalar_gate_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+		full_scalar_gate_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * gate_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -4628,8 +4634,8 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 		            gate_count);
 	}
 	if (body_combo_seed_blas) {
-		body_combo_gate_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * body_count, 0.0);
+		body_combo_gate_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * body_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -4741,8 +4747,10 @@ void MLMTPR::AccumulateSecondLayerGateValueParamGradFromAdjoints(
 		            out_grad_accumulator.data()
 		                + SecondLayerGateBodyMixWeightOffset(),
 		            body_count);
-		std::vector<double> body_adjoint_cache(
-			static_cast<size_t>(cfg.size()) * body_count, 0.0);
+		std::vector<double>& body_adjoint_cache =
+			second_layer_body_adjoint_scratch_;
+		body_adjoint_cache.resize(
+			static_cast<size_t>(cfg.size()) * body_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -4776,8 +4784,10 @@ void MLMTPR::AccumulateSecondLayerGateValueParamGradFromAdjoints(
 
 	std::vector<double> scalar_gate_seeds(gate_count, 0.0);
 	std::vector<double> scalar_seed_body_scratch;
-	std::vector<double> full_scalar_gate_seed_cache;
-	std::vector<double> body_combo_gate_seed_cache;
+	std::vector<double>& full_scalar_gate_seed_cache =
+		second_layer_full_scalar_seed_scratch_;
+	std::vector<double>& body_combo_gate_seed_cache =
+		second_layer_body_combo_seed_scratch_;
 	const bool full_seed_blas =
 		SecondLayerGateUsesFullScalarWeights()
 		&& second_layer_gate_adjoints_.size()
@@ -4790,8 +4800,8 @@ void MLMTPR::AccumulateSecondLayerGateValueParamGradFromAdjoints(
 	const double* body_combo_scalar_weights =
 		body_combo_seed_blas ? SecondLayerGateScalarWeightData() : nullptr;
 	if (full_seed_blas) {
-		full_scalar_gate_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+		full_scalar_gate_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * gate_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -4808,8 +4818,8 @@ void MLMTPR::AccumulateSecondLayerGateValueParamGradFromAdjoints(
 		            gate_count);
 	}
 	if (body_combo_seed_blas) {
-		body_combo_gate_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * body_count, 0.0);
+		body_combo_gate_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * body_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -5422,7 +5432,11 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 			}
 		}
 
-		Vector3 gate_der(0.0, 0.0, 0.0);
+		const double* second_gate_neighbor_signals =
+			multi_layer_gate_enabled_
+				? SecondLayerGateNeighborSignals(nbh, j)
+				: nullptr;
+				Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 		     ++bi) {
@@ -5644,7 +5658,11 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 			}
 		}
 
-		Vector3 gate_der(0.0, 0.0, 0.0);
+			const double* second_gate_neighbor_signals =
+				multi_layer_gate_enabled_
+					? SecondLayerGateNeighborSignals(nbh, j)
+					: nullptr;
+			Vector3 gate_der(0.0, 0.0, 0.0);
 		for (int bi = 0;
 		     bi < static_cast<int>(two_layer_gate_required_basic_indices_.size());
 		     ++bi) {
@@ -5667,8 +5685,8 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 				const double gate_outer_type_coeff =
 					TwoLayerGateTypeCoeff(type_outer, mu);
 				const double second_gate_signal =
-					multi_layer_gate_enabled_
-						? SecondLayerGateNeighborSignal(nbh, j, mu)
+					second_gate_neighbor_signals != nullptr
+						? second_gate_neighbor_signals[mu]
 						: 0.0;
 				const double second_gate_additive =
 					multi_layer_gate_enabled_

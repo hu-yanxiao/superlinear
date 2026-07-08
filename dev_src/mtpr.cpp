@@ -4967,7 +4967,7 @@ void MLMTPR::PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& 
 			}
 	two_layer_gate_values_from_edge_cache_ready_ = false;
 	InvalidateTwoLayerGateTanhMuCache();
-	two_layer_gate_values_.assign(expected_gate_value_size, 0.0);
+	two_layer_gate_values_.resize(expected_gate_value_size);
 	two_layer_gate_scalar_values_cache_.resize(expected_scalar_size);
 	if (body_linear_combo)
 		two_layer_gate_body_values_cache_.resize(expected_body_size);
@@ -5069,7 +5069,7 @@ void MLMTPR::PrepareSecondLayerGateValues(Configuration& cfg, const Neighborhood
 		static_cast<size_t>(cfg.size()) * cached_moment_count;
 	const size_t expected_gate_value_size =
 		static_cast<size_t>(cfg.size()) * radial_func_count;
-	second_layer_gate_values_.assign(expected_gate_value_size, 0.0);
+	second_layer_gate_values_.resize(expected_gate_value_size);
 	second_layer_gate_scalar_values_cache_.resize(expected_scalar_size);
 	if (body_linear_combo)
 		second_layer_gate_body_values_cache_.resize(expected_body_size);
@@ -5552,8 +5552,10 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 
 	std::vector<double> scalar_seeds(TwoLayerGateScalarCount(), 0.0);
 	std::vector<double> body_seed_scratch;
-	std::vector<double> full_scalar_seed_cache;
-	std::vector<double> body_combo_seed_cache;
+	std::vector<double>& full_scalar_seed_cache =
+		two_layer_full_scalar_seed_scratch_;
+	std::vector<double>& body_combo_seed_cache =
+		two_layer_body_combo_seed_scratch_;
 	const int gate_count = TwoLayerGateScalarCount();
 	const int body_count = TwoLayerGateBodyOrderCount();
 	const bool full_seed_blas =
@@ -5570,8 +5572,8 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 	const double* body_combo_scalar_weights =
 		body_combo_seed_blas ? TwoLayerGateScalarWeightData() : nullptr;
 	if (full_seed_blas) {
-		full_scalar_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+		full_scalar_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * gate_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -5588,8 +5590,8 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 		            gate_count);
 	}
 	if (body_combo_seed_blas) {
-		body_combo_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * body_count, 0.0);
+		body_combo_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * body_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -5666,8 +5668,10 @@ void MLMTPR::AccumulateSecondLayerGateForceChain(
 
 	std::vector<double> scalar_seeds(SecondLayerGateScalarCount(), 0.0);
 	std::vector<double> body_seed_scratch;
-	std::vector<double> full_scalar_seed_cache;
-	std::vector<double> body_combo_seed_cache;
+	std::vector<double>& full_scalar_seed_cache =
+		second_layer_full_scalar_seed_scratch_;
+	std::vector<double>& body_combo_seed_cache =
+		second_layer_body_combo_seed_scratch_;
 	const int gate_count = SecondLayerGateScalarCount();
 	const int body_count = SecondLayerGateBodyOrderCount();
 	const bool full_seed_blas =
@@ -5684,8 +5688,8 @@ void MLMTPR::AccumulateSecondLayerGateForceChain(
 	const double* body_combo_scalar_weights =
 		body_combo_seed_blas ? SecondLayerGateScalarWeightData() : nullptr;
 	if (full_seed_blas) {
-		full_scalar_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+		full_scalar_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * gate_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -5702,8 +5706,8 @@ void MLMTPR::AccumulateSecondLayerGateForceChain(
 		            gate_count);
 	}
 	if (body_combo_seed_blas) {
-		body_combo_seed_cache.assign(
-			static_cast<size_t>(cfg.size()) * body_count, 0.0);
+		body_combo_seed_cache.resize(
+			static_cast<size_t>(cfg.size()) * body_count);
 		cblas_dgemm(CblasRowMajor,
 		            CblasNoTrans,
 		            CblasNoTrans,
@@ -6719,13 +6723,17 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 		if (HasNonzeroTwoLayerGateWeights()) {
 			std::vector<Vector3> gate_der_weights;
-			std::vector<double> scalar_gate_seeds(TwoLayerGateScalarCount(), 0.0);
-			std::vector<double> scalar_energy_seeds(TwoLayerGateScalarCount(), 0.0);
-			std::vector<double> scalar_seed_body_scratch;
-			std::vector<double> full_scalar_gate_seed_cache;
-			std::vector<double> full_scalar_energy_seed_cache;
-			std::vector<double> body_combo_gate_seed_cache;
-			std::vector<double> body_combo_energy_seed_cache;
+				std::vector<double> scalar_gate_seeds(TwoLayerGateScalarCount(), 0.0);
+				std::vector<double> scalar_energy_seeds(TwoLayerGateScalarCount(), 0.0);
+				std::vector<double> scalar_seed_body_scratch;
+				std::vector<double>& full_scalar_gate_seed_cache =
+					two_layer_full_scalar_seed_scratch_;
+				std::vector<double>& full_scalar_energy_seed_cache =
+					two_layer_full_scalar_energy_seed_scratch_;
+				std::vector<double>& body_combo_gate_seed_cache =
+					two_layer_body_combo_seed_scratch_;
+				std::vector<double>& body_combo_energy_seed_cache =
+					two_layer_body_combo_energy_seed_scratch_;
 			const int gate_count = TwoLayerGateScalarCount();
 			const int body_count = TwoLayerGateBodyOrderCount();
 			const bool full_seed_blas =
@@ -6741,9 +6749,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					== static_cast<size_t>(cfg.size()) * radial_func_count;
 			const double* body_combo_scalar_weights =
 				body_combo_seed_blas ? TwoLayerGateScalarWeightData() : nullptr;
-			if (full_seed_blas) {
-				full_scalar_gate_seed_cache.assign(
-					static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+				if (full_seed_blas) {
+					full_scalar_gate_seed_cache.resize(
+						static_cast<size_t>(cfg.size()) * gate_count);
 				cblas_dgemm(CblasRowMajor,
 				            CblasNoTrans,
 				            CblasNoTrans,
@@ -6758,9 +6766,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				            0.0,
 				            full_scalar_gate_seed_cache.data(),
 				            gate_count);
-				if (!energy_gate_adjoints.empty()) {
-					full_scalar_energy_seed_cache.assign(
-						static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+					if (!energy_gate_adjoints.empty()) {
+						full_scalar_energy_seed_cache.resize(
+							static_cast<size_t>(cfg.size()) * gate_count);
 					cblas_dgemm(CblasRowMajor,
 					            CblasNoTrans,
 					            CblasNoTrans,
@@ -6777,9 +6785,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					            gate_count);
 				}
 			}
-			if (body_combo_seed_blas) {
-				body_combo_gate_seed_cache.assign(
-					static_cast<size_t>(cfg.size()) * body_count, 0.0);
+				if (body_combo_seed_blas) {
+					body_combo_gate_seed_cache.resize(
+						static_cast<size_t>(cfg.size()) * body_count);
 				cblas_dgemm(CblasRowMajor,
 				            CblasNoTrans,
 				            CblasNoTrans,
@@ -6794,9 +6802,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				            0.0,
 				            body_combo_gate_seed_cache.data(),
 				            body_count);
-				if (!energy_gate_adjoints.empty()) {
-					body_combo_energy_seed_cache.assign(
-						static_cast<size_t>(cfg.size()) * body_count, 0.0);
+					if (!energy_gate_adjoints.empty()) {
+						body_combo_energy_seed_cache.resize(
+							static_cast<size_t>(cfg.size()) * body_count);
 					cblas_dgemm(CblasRowMajor,
 					            CblasNoTrans,
 					            CblasNoTrans,
@@ -7166,10 +7174,12 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 	}
 
 		if (HasNonzeroTwoLayerGateWeights()) {
-			std::vector<double> scalar_gate_seeds(TwoLayerGateScalarCount(), 0.0);
-			std::vector<double> scalar_seed_body_scratch;
-			std::vector<double> full_scalar_gate_seed_cache;
-			std::vector<double> body_combo_gate_seed_cache;
+				std::vector<double> scalar_gate_seeds(TwoLayerGateScalarCount(), 0.0);
+				std::vector<double> scalar_seed_body_scratch;
+				std::vector<double>& full_scalar_gate_seed_cache =
+					two_layer_full_scalar_seed_scratch_;
+				std::vector<double>& body_combo_gate_seed_cache =
+					two_layer_body_combo_seed_scratch_;
 			const int gate_count = TwoLayerGateScalarCount();
 			const int body_count = TwoLayerGateBodyOrderCount();
 			const bool full_seed_blas =
@@ -7185,9 +7195,9 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 					== static_cast<size_t>(cfg.size()) * radial_func_count;
 			const double* body_combo_scalar_weights =
 				body_combo_seed_blas ? TwoLayerGateScalarWeightData() : nullptr;
-			if (full_seed_blas) {
-				full_scalar_gate_seed_cache.assign(
-					static_cast<size_t>(cfg.size()) * gate_count, 0.0);
+				if (full_seed_blas) {
+					full_scalar_gate_seed_cache.resize(
+						static_cast<size_t>(cfg.size()) * gate_count);
 				cblas_dgemm(CblasRowMajor,
 				            CblasNoTrans,
 				            CblasNoTrans,
@@ -7203,9 +7213,9 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 				            full_scalar_gate_seed_cache.data(),
 				            gate_count);
 			}
-			if (body_combo_seed_blas) {
-				body_combo_gate_seed_cache.assign(
-					static_cast<size_t>(cfg.size()) * body_count, 0.0);
+				if (body_combo_seed_blas) {
+					body_combo_gate_seed_cache.resize(
+						static_cast<size_t>(cfg.size()) * body_count);
 				cblas_dgemm(CblasRowMajor,
 				            CblasNoTrans,
 				            CblasNoTrans,
