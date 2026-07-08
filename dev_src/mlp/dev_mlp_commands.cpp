@@ -163,11 +163,13 @@ public:
 			return coeff_index < base_end
 			    || (coeff_index >= e0_begin && coeff_index < e0_end)
 			    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
-		}
-		case kResidualStageE1: {
-			const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
-			const int gate_radial_end =
-				gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
+			}
+			case kResidualStageE1: {
+				const int shared_radial_scal_begin = mtpr->species_count;
+				const int shared_radial_scal_end = mtpr->RadialCoeffOffset();
+				const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
+				const int gate_radial_end =
+					gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
 			const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
 			const int gate_additive_end =
 				gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
@@ -180,20 +182,48 @@ public:
 			const int gate_body_mix_begin = mtpr->TwoLayerGateBodyMixWeightOffset();
 			const int gate_body_mix_end =
 				gate_body_mix_begin + mtpr->TwoLayerGateBodyMixWeightCount();
-			const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
-			const int gate_edge_l1_end =
-				gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
-			const int linear_begin = mtpr->LinearCoeffOffset();
-			const int linear_end = linear_begin + mtpr->LinearCoeffCount();
-			return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
-			    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
-			    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
-			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
-			    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
-			    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
-			    || (coeff_index >= linear_begin + mtpr->species_count
-			        && coeff_index < linear_end);
-		}
+				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
+				const int gate_edge_l1_end =
+					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
+				const int second_gate_radial_begin = mtpr->SecondLayerGateRadialCoeffOffset();
+				const int second_gate_radial_end =
+					second_gate_radial_begin + mtpr->SecondLayerGateRadialCoeffCount();
+				const int second_gate_additive_begin = mtpr->SecondLayerGateAdditiveCoeffOffset();
+				const int second_gate_additive_end =
+					second_gate_additive_begin + mtpr->SecondLayerGateAdditiveCoeffCount();
+				const int second_gate_type_begin = mtpr->SecondLayerGateTypeCoeffOffset();
+				const int second_gate_type_end =
+					second_gate_type_begin + mtpr->SecondLayerGateTypeCoeffCount();
+				const int second_gate_weight_begin = mtpr->SecondLayerGateWeightOffset();
+				const int second_gate_weight_end =
+					second_gate_weight_begin + mtpr->SecondLayerGateWeightCount();
+				const int second_gate_body_mix_begin =
+					mtpr->SecondLayerGateBodyMixWeightOffset();
+				const int second_gate_body_mix_end =
+					second_gate_body_mix_begin + mtpr->SecondLayerGateBodyMixWeightCount();
+				const int linear_begin = mtpr->LinearCoeffOffset();
+				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
+				return (coeff_index >= shared_radial_scal_begin
+				        && coeff_index < shared_radial_scal_end)
+				    || (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+				    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
+				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+				    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
+				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
+				    || (coeff_index >= second_gate_radial_begin
+				        && coeff_index < second_gate_radial_end)
+				    || (coeff_index >= second_gate_additive_begin
+				        && coeff_index < second_gate_additive_end)
+				    || (coeff_index >= second_gate_type_begin
+				        && coeff_index < second_gate_type_end)
+				    || (coeff_index >= second_gate_weight_begin
+				        && coeff_index < second_gate_weight_end)
+				    || (coeff_index >= second_gate_body_mix_begin
+				        && coeff_index < second_gate_body_mix_end)
+				    || (coeff_index >= linear_begin + mtpr->species_count
+				        && coeff_index < linear_end);
+			}
 		default:
 			return true;
 		}
@@ -1295,6 +1325,10 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	if (index >= mtpr.TwoLayerGateWeightOffset()
 	    && index < mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount())
 		return "two_layer_gate_weight";
+	if (index >= mtpr.TwoLayerGateBodyMixWeightOffset()
+	    && index < mtpr.TwoLayerGateBodyMixWeightOffset()
+	        + mtpr.TwoLayerGateBodyMixWeightCount())
+		return "two_layer_gate_body_mix_weight";
 	if (index >= mtpr.TwoLayerGateEdgeL1WeightOffset()
 	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
 	        + mtpr.TwoLayerGateEdgeL1WeightCount())

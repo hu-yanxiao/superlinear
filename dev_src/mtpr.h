@@ -278,11 +278,12 @@ protected:
 		void AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 			const Neighborhood& nbh,
 			std::vector<double>& out_grad_accumulator,
-			const double* gate_scalar_seeds,
-			const Vector3* gate_der_weights,
-			int cache_atom_index,
-			const double* gate_moment_tangents,
-			const double* energy_scalar_seeds);
+		const double* gate_scalar_seeds,
+		const Vector3* gate_der_weights,
+		int cache_atom_index,
+		const double* gate_moment_tangents,
+		const double* energy_scalar_seeds,
+		const std::vector<double>* second_gate_directional_values = nullptr);
 		void AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
 			const Neighborhood& nbh,
 			std::vector<double>& out_grad_accumulator,
@@ -298,7 +299,13 @@ protected:
 		const std::vector<Vector3>& direction_weights,
 		std::vector<double>& gate_scalar_tangents,
 		std::vector<double>* gate_moment_tangents = nullptr,
-		int cache_atom_index = -1);
+		int cache_atom_index = -1,
+		const std::vector<double>* second_gate_directional_values = nullptr);
+	void CalcSecondLayerGateScalarDirectionalDerivatives(
+		const Neighborhood& nbh,
+		const std::vector<Vector3>& direction_weights,
+		std::vector<double>& gate_scalar_tangents,
+		std::vector<double>* gate_moment_tangents = nullptr);
 	void AccumulateSHBasisGateDers(
 		const Neighborhood& nbh,
 		std::vector<double>& gate_linear_adjoints);
@@ -608,7 +615,10 @@ public:
 		void AccumulateSecondLayerGateValueParamGradFromAdjoints(
 			Configuration& cfg,
 			const Neighborhoods& neighborhoods,
-			Array1D& out_grad_accumulator);
+			Array1D& out_grad_accumulator,
+			const std::vector<Vector3>* force_weights = nullptr,
+			const Matrix3* stress_weights = nullptr,
+			const std::vector<double>* energy_second_gate_adjoints = nullptr);
 	void AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		Configuration& cfg,
 		const Neighborhoods& neighborhoods,
@@ -633,6 +643,7 @@ public:
 			void AddSecondLayerGateMuAdjoint(const Neighborhood& nbh, int neighbor_index, int mu, double adjoint);
 			double SecondLayerGateNeighborSignal(const Neighborhood& nbh, int neighbor_index, int mu) const;
 			const double* SecondLayerGateNeighborSignals(const Neighborhood& nbh, int neighbor_index) const;
+			double* SecondLayerGateNeighborAdjoints(const Neighborhood& nbh, int neighbor_index);
 			const double* SecondLayerGateAtomSignals(int atom_index) const;
 		const double* PrepareTwoLayerGateEdgeL1NeighborSignals(
 				const Neighborhood& nbh,

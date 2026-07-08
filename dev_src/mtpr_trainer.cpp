@@ -434,10 +434,12 @@ bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
 		    || (coeff_index >= e0_begin && coeff_index < e0_end)
 		    || (coeff_index >= linear_begin && coeff_index < species_linear_end);
 	}
-	case kResidualStageE1: {
-		const int gate_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
-		const int gate_radial_end = gate_radial_begin + p_mlmtpr->TwoLayerGateRadialCoeffCount();
-		const int gate_additive_begin = p_mlmtpr->TwoLayerGateAdditiveCoeffOffset();
+		case kResidualStageE1: {
+			const int shared_radial_scal_begin = p_mlmtpr->species_count;
+			const int shared_radial_scal_end = p_mlmtpr->RadialCoeffOffset();
+			const int gate_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
+			const int gate_radial_end = gate_radial_begin + p_mlmtpr->TwoLayerGateRadialCoeffCount();
+			const int gate_additive_begin = p_mlmtpr->TwoLayerGateAdditiveCoeffOffset();
 		const int gate_additive_end =
 			gate_additive_begin + p_mlmtpr->TwoLayerGateAdditiveCoeffCount();
 		const int gate_type_begin = p_mlmtpr->TwoLayerGateTypeCoeffOffset();
@@ -445,22 +447,50 @@ bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
 			gate_type_begin + p_mlmtpr->TwoLayerGateTypeCoeffCount();
 		const int gate_weight_begin = p_mlmtpr->TwoLayerGateWeightOffset();
 		const int gate_weight_end = gate_weight_begin + p_mlmtpr->TwoLayerGateWeightCount();
-		const int gate_body_mix_begin = p_mlmtpr->TwoLayerGateBodyMixWeightOffset();
-		const int gate_body_mix_end =
-			gate_body_mix_begin + p_mlmtpr->TwoLayerGateBodyMixWeightCount();
-		const int gate_edge_l1_begin = p_mlmtpr->TwoLayerGateEdgeL1WeightOffset();
-		const int gate_edge_l1_end =
-			gate_edge_l1_begin + p_mlmtpr->TwoLayerGateEdgeL1WeightCount();
-		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
-		const int linear_end = linear_begin + p_mlmtpr->LinearCoeffCount();
-		return (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
-		    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
-		    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
-		    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
-		    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
-		    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
-		    || (coeff_index >= linear_begin + p_mlmtpr->species_count && coeff_index < linear_end);
-	}
+			const int gate_body_mix_begin = p_mlmtpr->TwoLayerGateBodyMixWeightOffset();
+			const int gate_body_mix_end =
+				gate_body_mix_begin + p_mlmtpr->TwoLayerGateBodyMixWeightCount();
+			const int gate_edge_l1_begin = p_mlmtpr->TwoLayerGateEdgeL1WeightOffset();
+			const int gate_edge_l1_end =
+				gate_edge_l1_begin + p_mlmtpr->TwoLayerGateEdgeL1WeightCount();
+			const int second_gate_radial_begin = p_mlmtpr->SecondLayerGateRadialCoeffOffset();
+			const int second_gate_radial_end =
+				second_gate_radial_begin + p_mlmtpr->SecondLayerGateRadialCoeffCount();
+			const int second_gate_additive_begin = p_mlmtpr->SecondLayerGateAdditiveCoeffOffset();
+			const int second_gate_additive_end =
+				second_gate_additive_begin + p_mlmtpr->SecondLayerGateAdditiveCoeffCount();
+			const int second_gate_type_begin = p_mlmtpr->SecondLayerGateTypeCoeffOffset();
+			const int second_gate_type_end =
+				second_gate_type_begin + p_mlmtpr->SecondLayerGateTypeCoeffCount();
+			const int second_gate_weight_begin = p_mlmtpr->SecondLayerGateWeightOffset();
+			const int second_gate_weight_end =
+				second_gate_weight_begin + p_mlmtpr->SecondLayerGateWeightCount();
+			const int second_gate_body_mix_begin =
+				p_mlmtpr->SecondLayerGateBodyMixWeightOffset();
+			const int second_gate_body_mix_end =
+				second_gate_body_mix_begin + p_mlmtpr->SecondLayerGateBodyMixWeightCount();
+			const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+			const int linear_end = linear_begin + p_mlmtpr->LinearCoeffCount();
+			return (coeff_index >= shared_radial_scal_begin
+			        && coeff_index < shared_radial_scal_end)
+			    || (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+			    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+			    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
+			    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
+			    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
+			    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
+			    || (coeff_index >= second_gate_radial_begin
+			        && coeff_index < second_gate_radial_end)
+			    || (coeff_index >= second_gate_additive_begin
+			        && coeff_index < second_gate_additive_end)
+			    || (coeff_index >= second_gate_type_begin
+			        && coeff_index < second_gate_type_end)
+			    || (coeff_index >= second_gate_weight_begin
+			        && coeff_index < second_gate_weight_end)
+			    || (coeff_index >= second_gate_body_mix_begin
+			        && coeff_index < second_gate_body_mix_end)
+			    || (coeff_index >= linear_begin + p_mlmtpr->species_count && coeff_index < linear_end);
+		}
 	case kResidualStageFull:
 	default:
 		return true;
