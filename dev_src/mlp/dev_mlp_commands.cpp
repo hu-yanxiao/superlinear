@@ -167,10 +167,13 @@ public:
 			case kResidualStageE1: {
 				const int shared_radial_scal_begin = mtpr->species_count;
 				const int shared_radial_scal_end = mtpr->RadialCoeffOffset();
-				const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
-				const int gate_radial_end =
-					gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
-			const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
+					const int gate_radial_begin = mtpr->TwoLayerGateRadialCoeffOffset();
+					const int gate_radial_end =
+						gate_radial_begin + mtpr->TwoLayerGateRadialCoeffCount();
+					const int gate_scaling_begin = mtpr->TwoLayerGateScalingCoeffOffset();
+					const int gate_scaling_end =
+						gate_scaling_begin + mtpr->TwoLayerGateScalingCoeffCount();
+				const int gate_additive_begin = mtpr->TwoLayerGateAdditiveCoeffOffset();
 			const int gate_additive_end =
 				gate_additive_begin + mtpr->TwoLayerGateAdditiveCoeffCount();
 			const int gate_type_begin = mtpr->TwoLayerGateTypeCoeffOffset();
@@ -205,8 +208,9 @@ public:
 				const int linear_end = linear_begin + mtpr->LinearCoeffCount();
 				return (coeff_index >= shared_radial_scal_begin
 				        && coeff_index < shared_radial_scal_end)
-				    || (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
-				    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
+					    || (coeff_index >= gate_radial_begin && coeff_index < gate_radial_end)
+					    || (coeff_index >= gate_scaling_begin && coeff_index < gate_scaling_end)
+					    || (coeff_index >= gate_additive_begin && coeff_index < gate_additive_end)
 				    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
 				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
 				    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
@@ -1314,8 +1318,11 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	if (index < mtpr.BaseNonlinearCoeffCount())
 		return "nonlinear";
 	if (index >= mtpr.TwoLayerGateRadialCoeffOffset()
-	    && index < mtpr.TwoLayerGateAdditiveCoeffOffset())
+	    && index < mtpr.TwoLayerGateScalingCoeffOffset())
 		return "two_layer_gate_radial_coeff";
+	if (index >= mtpr.TwoLayerGateScalingCoeffOffset()
+	    && index < mtpr.TwoLayerGateAdditiveCoeffOffset())
+		return "two_layer_gate_scaling_coeff";
 	if (index >= mtpr.TwoLayerGateAdditiveCoeffOffset()
 	    && index < mtpr.TwoLayerGateTypeCoeffOffset())
 		return "two_layer_gate_additive_coeff";
@@ -1475,10 +1482,12 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			std::cout << std::setprecision(12)
 			          << "checked_coeffs=" << result.checked_count
 				          << " coeff_count=" << mtpr.CoeffCount()
-				          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
-				          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
-				          << " gate_radial_end=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
-				          << " gate_additive_begin=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
+					          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
+					          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
+					          << " gate_radial_end=" << mtpr.TwoLayerGateScalingCoeffOffset()
+					          << " gate_scaling_begin=" << mtpr.TwoLayerGateScalingCoeffOffset()
+					          << " gate_scaling_end=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
+					          << " gate_additive_begin=" << mtpr.TwoLayerGateAdditiveCoeffOffset()
 				          << " gate_additive_end=" << mtpr.TwoLayerGateTypeCoeffOffset()
 				          << " gate_type_begin=" << mtpr.TwoLayerGateTypeCoeffOffset()
 				          << " gate_type_end=" << mtpr.TwoLayerGateWeightOffset()
@@ -1977,8 +1986,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
-				"         --two-layer-gate-shared-radial (default for gate models),\n"
-				"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
+					"         --two-layer-gate-shared-radial (default for gate models),\n"
+					"         --two-layer-gate-decoupled-scaling|--two-layer-gate-full-decoupled (one-layer gate only),\n"
+					"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
 				"         --multi-layer-gate (release3 second gate on first-gate endpoint coefficients),\n"
 				"         --second-layer-gate-body-order=<int> (default=--body-order),\n"
 				"         --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full,\n"

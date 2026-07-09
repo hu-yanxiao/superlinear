@@ -477,6 +477,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 							"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
 						"two-layer-gate-shared-radial",
+						"two-layer-gate-decoupled-scaling",
+						"two-layer-gate-full-decoupled",
 						"two-layer-gate-edge-l1",
 						"multi-layer-gate",
 						"second-layer-gate-body-order",
@@ -1932,6 +1934,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		opts["two-layer-gate"] != "" || requested_multi_layer_gate;
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
+	const bool requested_two_layer_gate_decoupled_scaling =
+		opts["two-layer-gate-decoupled-scaling"] != ""
+		|| opts["two-layer-gate-full-decoupled"] != "";
 	const bool requested_two_layer_gate_edge_l1 =
 		opts["two-layer-gate-edge-l1"] != "";
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
@@ -1949,9 +1954,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--second-layer-gate-* requires --multi-layer-gate unless the loaded model already has release3 multi-layer gate");
 	if (requested_multi_layer_gate && requested_two_layer_gate_edge_l1)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1");
+	if (requested_multi_layer_gate && requested_two_layer_gate_decoupled_scaling)
+		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-decoupled-scaling");
 	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate when upgrading a plain SH model");
+	if (requested_two_layer_gate_decoupled_scaling && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-decoupled-scaling requires --two-layer-gate when upgrading a plain SH model");
 	if (custom_two_layer_gate_site_mode && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
 		ERROR("--two-layer-gate-site-mode requires --two-layer-gate when upgrading a plain SH model");
@@ -1972,7 +1982,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		mtpr.UpgradePlainSHToTwoLayerGate(plain_to_gate_body_order,
 		                                  plain_to_gate_independent_radial,
 		                                  two_layer_gate_site_mode,
-		                                  two_layer_gate_mode);
+		                                  two_layer_gate_mode,
+		                                  requested_two_layer_gate_decoupled_scaling);
 		plain_to_gate_upgrade = true;
 		plain_to_gate_disabled_controls = do_lin || do_lin_rescale || fine_tune;
 		do_lin = false;
@@ -1986,6 +1997,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			mtpr.UpgradeTwoLayerGateToEdgeL1();
 			edge_l1_gate_upgrade = true;
 		}
+	}
+	if (requested_two_layer_gate_decoupled_scaling) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-decoupled-scaling requires a two-layer gate model or --two-layer-gate");
+		if (mtpr.MultiLayerGateEnabled())
+			ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models");
+		if (!mtpr.TwoLayerGateUsesDecoupledScaling())
+			mtpr.EnableTwoLayerGateDecoupledScalingFromBase();
 	}
 	if (requested_multi_layer_gate) {
 		if (!mtpr.TwoLayerGateEnabled())
@@ -2114,8 +2133,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << " gate_body_order=" << (mtpr.TwoLayerGateBodyOrderCount() + 1)
 		          << " independent_gate_radial_coeffs="
 		          << (plain_to_gate_independent_radial ? "true" : "false")
+		          << " decoupled_gate_scaling="
+		          << (mtpr.TwoLayerGateUsesDecoupledScaling() ? "true" : "false")
 		          << " gate_weight_count=" << mtpr.TwoLayerGateWeightCount()
 		          << " gate_radial_coeff_count=" << mtpr.TwoLayerGateRadialCoeffCount()
+		          << " gate_scaling_coeff_count=" << mtpr.TwoLayerGateScalingCoeffCount()
 		          << std::endl;
 		if (plain_to_gate_disabled_controls)
 			std::cout << "plain-to-gate upgrade disabled do-lin/do-lin-rescale/fine-tune"

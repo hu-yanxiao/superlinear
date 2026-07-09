@@ -808,6 +808,11 @@ bool MLMTPR::TwoLayerGateUsesSharedRadial() const
 	return two_layer_gate_enabled_ && two_layer_gate_shared_radial_;
 }
 
+bool MLMTPR::TwoLayerGateUsesDecoupledScaling() const
+{
+	return two_layer_gate_enabled_ && two_layer_gate_decoupled_scaling_;
+}
+
 bool MLMTPR::TwoLayerGateUsesBodyLinearCombo() const
 {
 	return two_layer_gate_enabled_
@@ -911,7 +916,8 @@ void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
 void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
                                           bool independent_gate_radial_coeffs,
                                           const std::string& gate_site_mode,
-                                          const std::string& gate_mode)
+                                          const std::string& gate_mode,
+                                          bool decoupled_gate_scaling)
 {
 	if (!is_sh_potential_)
 		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
@@ -948,6 +954,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_gate_body_order_max_ = selected_gate_body_order;
 	two_layer_gate_include_one_body_ = false;
 	two_layer_gate_shared_radial_ = independent_gate_radial_coeffs;
+	two_layer_gate_decoupled_scaling_ = decoupled_gate_scaling;
 	two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "additive-node";
 	two_layer_gate_bias_ = 1.0;
@@ -961,10 +968,30 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 		InitializeTwoLayerGateRadialCoeffsFromBase();
 	else
 		two_layer_gate_radial_coeffs_.clear();
+	if (two_layer_gate_decoupled_scaling_)
+		InitializeTwoLayerGateScalingCoeffsFromBase();
+	else
+		two_layer_gate_scaling_coeffs_.clear();
 
 	DistributeCoeffs();
 	BuildTwoLayerGateProductProgram();
 	BuildTwoLayerGateBodyOrderBuckets();
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
+void MLMTPR::EnableTwoLayerGateDecoupledScalingFromBase()
+{
+	if (!is_sh_potential_)
+		ERROR("--two-layer-gate-decoupled-scaling can only be used with a SUS2-SH model");
+	if (!two_layer_gate_enabled_)
+		ERROR("--two-layer-gate-decoupled-scaling requires a two-layer gate model or --two-layer-gate");
+	if (multi_layer_gate_enabled_)
+		ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models");
+	if (TwoLayerGateUsesDecoupledScaling())
+		return;
+	two_layer_gate_decoupled_scaling_ = true;
+	InitializeTwoLayerGateScalingCoeffsFromBase();
+	DistributeCoeffs();
 	ClearTwoLayerEdgePrimitiveCache();
 }
 
@@ -1026,6 +1053,8 @@ void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 		ERROR("--multi-layer-gate requires a two-layer gate model or --two-layer-gate");
 	if (two_layer_gate_edge_l1_enabled_)
 		ERROR("--multi-layer-gate is not supported together with --two-layer-gate-edge-l1 in release3");
+	if (TwoLayerGateUsesDecoupledScaling())
+		ERROR("--multi-layer-gate is not compatible with decoupled first-layer gate scaling");
 	if (multi_layer_gate_enabled_)
 		return;
 	if (second_gate_mode != "mu-body-linear-combo"
@@ -1231,6 +1260,16 @@ int MLMTPR::TwoLayerGateRadialCoeffOffset() const
 	return BaseNonlinearCoeffCount();
 }
 
+int MLMTPR::TwoLayerGateScalingCoeffCount() const
+{
+	return TwoLayerGateUsesDecoupledScaling() ? ScalingCoeffCount() : 0;
+}
+
+int MLMTPR::TwoLayerGateScalingCoeffOffset() const
+{
+	return TwoLayerGateRadialCoeffOffset() + TwoLayerGateRadialCoeffCount();
+}
+
 int MLMTPR::TwoLayerGateWeightCount() const
 {
 	if (!two_layer_gate_enabled_)
@@ -1267,7 +1306,7 @@ int MLMTPR::TwoLayerGateBodyOrderCount() const
 
 int MLMTPR::TwoLayerGateAdditiveCoeffOffset() const
 {
-	return BaseNonlinearCoeffCount() + TwoLayerGateRadialCoeffCount();
+	return TwoLayerGateScalingCoeffOffset() + TwoLayerGateScalingCoeffCount();
 }
 
 int MLMTPR::TwoLayerGateWeightOffset() const
@@ -1378,6 +1417,75 @@ double MLMTPR::TwoLayerGateRadialCoeff(int mu, int xi) const
 	if (base_index >= 0 && base_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[base_index];
 	ERROR("SUS2-SH two-layer gate radial coefficient storage is inconsistent");
+	return 0.0;
+}
+
+int MLMTPR::TwoLayerGateScalingSlopeOffset(
+	int scaling_block,
+	int type_central,
+	int type_outer) const
+{
+	if (!TwoLayerGateUsesDecoupledScaling())
+		return ScalingSlopeOffset(scaling_block, type_central, type_outer);
+	if (scaling_block < 0 || scaling_block >= K_)
+		ERROR("SUS2-SH two-layer gate scaling block is out of range");
+	if (type_central < 0 || type_central >= species_count
+	    || type_outer < 0 || type_outer >= species_count)
+		ERROR("SUS2-SH two-layer gate scaling type index is out of range");
+	const int pair_count = species_count * species_count;
+	return TwoLayerGateScalingCoeffOffset()
+		+ 2 * scaling_block * pair_count
+		+ type_central * species_count + type_outer;
+}
+
+int MLMTPR::TwoLayerGateScalingShiftOffset(
+	int scaling_block,
+	int type_central,
+	int type_outer) const
+{
+	if (!TwoLayerGateUsesDecoupledScaling())
+		return ScalingShiftOffset(scaling_block, type_central, type_outer);
+	return TwoLayerGateScalingSlopeOffset(scaling_block, type_central, type_outer)
+		+ species_count * species_count;
+}
+
+double MLMTPR::TwoLayerGateScalingSlope(
+	int scaling_block,
+	int type_central,
+	int type_outer) const
+{
+	const int coeff_index =
+		TwoLayerGateScalingSlopeOffset(scaling_block, type_central, type_outer);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	if (TwoLayerGateUsesDecoupledScaling()) {
+		const int local_index =
+			coeff_index - TwoLayerGateScalingCoeffOffset();
+		if (local_index >= 0
+		    && local_index < static_cast<int>(two_layer_gate_scaling_coeffs_.size()))
+			return two_layer_gate_scaling_coeffs_[local_index];
+	}
+	ERROR("SUS2-SH two-layer gate scaling slope coefficient storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::TwoLayerGateScalingShift(
+	int scaling_block,
+	int type_central,
+	int type_outer) const
+{
+	const int coeff_index =
+		TwoLayerGateScalingShiftOffset(scaling_block, type_central, type_outer);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	if (TwoLayerGateUsesDecoupledScaling()) {
+		const int local_index =
+			coeff_index - TwoLayerGateScalingCoeffOffset();
+		if (local_index >= 0
+		    && local_index < static_cast<int>(two_layer_gate_scaling_coeffs_.size()))
+			return two_layer_gate_scaling_coeffs_[local_index];
+	}
+	ERROR("SUS2-SH two-layer gate scaling shift coefficient storage is inconsistent");
 	return 0.0;
 }
 
@@ -2340,6 +2448,21 @@ void MLMTPR::InitializeTwoLayerGateRadialCoeffsFromBase()
 	}
 }
 
+void MLMTPR::InitializeTwoLayerGateScalingCoeffsFromBase()
+{
+	const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
+	if (gate_scaling_count == 0) {
+		two_layer_gate_scaling_coeffs_.clear();
+		return;
+	}
+	const int base_offset = species_count;
+	if (base_offset + gate_scaling_count > static_cast<int>(regression_coeffs.size()))
+		ERROR("SUS2-SH cannot initialize gate scaling coefficients from base scaling block");
+	two_layer_gate_scaling_coeffs_.assign(gate_scaling_count, 0.0);
+	for (int i = 0; i < gate_scaling_count; ++i)
+		two_layer_gate_scaling_coeffs_[i] = regression_coeffs[base_offset + i];
+}
+
 void MLMTPR::InitializeTwoLayerGateAdditiveCoeffs(double value)
 {
 	const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
@@ -2489,8 +2612,12 @@ void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, boo
 	active_coeff_indices.reserve(regression_coeffs.size());
 	const int scal_begin = species_count;
 	const int scal_end = RadialCoeffOffset();
+	const int gate_scal_begin = TwoLayerGateScalingCoeffOffset();
+	const int gate_scal_end = gate_scal_begin + TwoLayerGateScalingCoeffCount();
 	for (int coeff_index = 0; coeff_index < static_cast<int>(regression_coeffs.size()); ++coeff_index) {
-		if (exclude_scal_coeffs && coeff_index >= scal_begin && coeff_index < scal_end)
+		if (exclude_scal_coeffs
+		    && ((coeff_index >= scal_begin && coeff_index < scal_end)
+		        || (coeff_index >= gate_scal_begin && coeff_index < gate_scal_end)))
 			continue;
 		if (IsRedundantRadialSpeciesCoeff(coeff_index))
 			continue;
@@ -2586,7 +2713,18 @@ void MLMTPR::RandomizeScalingCoeffs(std::mt19937_64& generator, double strength_
 					Lerp(scal_start, scal_end, sample);
 				regression_coeffs[ScalingShiftOffset(scaling_block, type_central, type_outer)] =
 					Lerp(shift_start, shift_end, sample);
+				}
 			}
+		}
+	if (TwoLayerGateUsesDecoupledScaling()) {
+		InitializeTwoLayerGateScalingCoeffsFromBase();
+		const int gate_scaling_offset = TwoLayerGateScalingCoeffOffset();
+		const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
+		if (gate_scaling_offset + gate_scaling_count <=
+		    static_cast<int>(regression_coeffs.size())) {
+			for (int i = 0; i < gate_scaling_count; ++i)
+				regression_coeffs[gate_scaling_offset + i] =
+					two_layer_gate_scaling_coeffs_[i];
 		}
 	}
 }
@@ -2656,6 +2794,12 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 	const int old_radial_block_size = rb_size + old_species_count;
 	const int new_radial_block_size = rb_size + new_species_count;
 	const int gate_radial_count = TwoLayerGateRadialCoeffCount();
+	const int old_gate_scaling_count = two_layer_gate_enabled_ && two_layer_gate_decoupled_scaling_
+		? 2 * old_species_count * old_species_count * K_
+		: 0;
+	const int new_gate_scaling_count = two_layer_gate_enabled_ && two_layer_gate_decoupled_scaling_
+		? 2 * new_species_count * new_species_count * K_
+		: 0;
 	const int old_gate_additive_count = two_layer_gate_enabled_
 		? old_species_count * radial_func_count
 		: 0;
@@ -2678,8 +2822,10 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		old_radial_offset + radial_func_count * old_radial_block_size;
 	const int new_gate_radial_offset =
 		new_radial_offset + radial_func_count * new_radial_block_size;
-	const int old_gate_additive_offset = old_gate_radial_offset + gate_radial_count;
-	const int new_gate_additive_offset = new_gate_radial_offset + gate_radial_count;
+	const int old_gate_scaling_offset = old_gate_radial_offset + gate_radial_count;
+	const int new_gate_scaling_offset = new_gate_radial_offset + gate_radial_count;
+	const int old_gate_additive_offset = old_gate_scaling_offset + old_gate_scaling_count;
+	const int new_gate_additive_offset = new_gate_scaling_offset + new_gate_scaling_count;
 	const int old_gate_type_offset = old_gate_additive_offset + old_gate_additive_count;
 	const int new_gate_type_offset = new_gate_additive_offset + new_gate_additive_count;
 	const int old_gate_offset = old_gate_type_offset + old_gate_type_count;
@@ -2739,6 +2885,33 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		new_coeffs[new_gate_radial_offset + i] =
 			old_coeffs[old_gate_radial_offset + i];
 
+	if (old_gate_scaling_count > 0 || new_gate_scaling_count > 0) {
+		if (old_gate_scaling_count <= 0 || new_gate_scaling_count <= 0)
+			ERROR("PruneSpecies found an inconsistent gate scaling coefficient layout.");
+		const int old_pair_count_gate = old_species_count * old_species_count;
+		const int new_pair_count_gate = new_species_count * new_species_count;
+		for (int scaling_block = 0; scaling_block < K_; ++scaling_block) {
+			for (int new_center = 0; new_center < new_species_count; ++new_center) {
+				const int old_center = old_species_indices[new_center];
+				for (int new_outer = 0; new_outer < new_species_count; ++new_outer) {
+					const int old_outer = old_species_indices[new_outer];
+					const int old_slope_offset = old_gate_scaling_offset
+						+ 2 * scaling_block * old_pair_count_gate
+						+ old_center * old_species_count
+						+ old_outer;
+					const int old_shift_offset = old_slope_offset + old_pair_count_gate;
+					const int new_slope_offset = new_gate_scaling_offset
+						+ 2 * scaling_block * new_pair_count_gate
+						+ new_center * new_species_count
+						+ new_outer;
+					const int new_shift_offset = new_slope_offset + new_pair_count_gate;
+					new_coeffs[new_slope_offset] = old_coeffs[old_slope_offset];
+					new_coeffs[new_shift_offset] = old_coeffs[old_shift_offset];
+				}
+			}
+		}
+	}
+
 	for (int new_type = 0; new_type < new_species_count; ++new_type) {
 		const int old_type = old_species_indices[new_type];
 		for (int mu = 0; mu < radial_func_count; ++mu)
@@ -2775,6 +2948,14 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		for (int i = 0; i < gate_radial_count; ++i)
 			two_layer_gate_radial_coeffs_[i] =
 				regression_coeffs[new_gate_radial_offset + i];
+	}
+	if (new_gate_scaling_count > 0) {
+		two_layer_gate_scaling_coeffs_.assign(new_gate_scaling_count, 0.0);
+		for (int i = 0; i < new_gate_scaling_count; ++i)
+			two_layer_gate_scaling_coeffs_[i] =
+				regression_coeffs[new_gate_scaling_offset + i];
+	} else {
+		two_layer_gate_scaling_coeffs_.clear();
 	}
 	if (gate_weight_count > 0) {
 		two_layer_gate_weights_.assign(gate_weight_count, 0.0);
@@ -2898,10 +3079,11 @@ void MLMTPR::Load(const string& filename)
 	has_sh_scalar_info_ = false;
 	sh_scalar_info_.clear();
 	two_layer_gate_enabled_ = false;
-	two_layer_gate_body_order_max_ = 0;
-		two_layer_gate_include_one_body_ = false;
-		two_layer_gate_shared_radial_ = false;
-		two_layer_gate_mode_ = "mu-body-linear-combo";
+			two_layer_gate_body_order_max_ = 0;
+				two_layer_gate_include_one_body_ = false;
+				two_layer_gate_shared_radial_ = false;
+				two_layer_gate_decoupled_scaling_ = false;
+				two_layer_gate_mode_ = "mu-body-linear-combo";
 		two_layer_gate_site_mode_ = "neighbor";
 		two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
@@ -2911,9 +3093,10 @@ void MLMTPR::Load(const string& filename)
 			two_layer_gate_scalar_body_orders_.clear();
 			two_layer_gate_body_order_weight_offsets_.clear();
 			two_layer_gate_body_order_weight_indices_.clear();
-				two_layer_gate_mu_body_orders_.clear();
-				two_layer_gate_radial_coeffs_.clear();
-					two_layer_gate_additive_coeffs_.clear();
+					two_layer_gate_mu_body_orders_.clear();
+					two_layer_gate_radial_coeffs_.clear();
+					two_layer_gate_scaling_coeffs_.clear();
+						two_layer_gate_additive_coeffs_.clear();
 					two_layer_gate_type_coeffs_.clear();
 					two_layer_gate_weights_.clear();
 				two_layer_gate_body_mix_weights_.clear();
@@ -3603,6 +3786,44 @@ void MLMTPR::Load(const string& filename)
 					ifs.ignore(1000, '\n');
 					ifs >> tmpstr;
 				}
+				if (tmpstr == "two_layer_gate_scaling_mode") {
+					std::string scaling_mode;
+					ifs.ignore(2);
+					ifs >> scaling_mode;
+					if (scaling_mode == "decoupled") {
+						two_layer_gate_decoupled_scaling_ = true;
+					} else if (scaling_mode == "shared-scaling"
+					           || scaling_mode == "legacy") {
+						two_layer_gate_decoupled_scaling_ = false;
+					} else {
+						ERROR("SUS2-SH two-layer gate has an unknown scaling mode: " + scaling_mode);
+					}
+					ifs >> tmpstr;
+					if (two_layer_gate_decoupled_scaling_) {
+						if (tmpstr != "two_layer_gate_scaling_coeff_count")
+							ERROR("SUS2-SH decoupled two-layer gate is missing two_layer_gate_scaling_coeff_count");
+						ifs.ignore(2);
+						int gate_scaling_count = 0;
+						ifs >> gate_scaling_count;
+						const int expected_gate_scaling_count =
+							TwoLayerGateScalingCoeffCount();
+						if (gate_scaling_count != expected_gate_scaling_count)
+							ERROR("SUS2-SH decoupled two-layer gate scaling coefficient count is inconsistent");
+						ifs >> tmpstr;
+						if (tmpstr != "two_layer_gate_scaling_coeffs")
+							ERROR("SUS2-SH decoupled two-layer gate is missing two_layer_gate_scaling_coeffs");
+						ReadDoubleList(ifs,
+						               two_layer_gate_scaling_coeffs_,
+						               gate_scaling_count);
+						ifs.ignore(1000, '\n');
+						ifs >> tmpstr;
+					} else {
+						two_layer_gate_scaling_coeffs_.clear();
+					}
+				} else {
+					two_layer_gate_decoupled_scaling_ = false;
+					two_layer_gate_scaling_coeffs_.clear();
+				}
 				if (tmpstr == "two_layer_gate_additive_coeff_count") {
 					ifs.ignore(2);
 					int gate_additive_count = 0;
@@ -3811,12 +4032,14 @@ void MLMTPR::Load(const string& filename)
 				multi_layer_gate_enabled_ = ReadBoolToken(bool_token);
 				if (!multi_layer_gate_enabled_)
 					ERROR("SUS2-SH release3 model should omit disabled multi_layer_gate_enabled");
-				if (!two_layer_gate_enabled_)
-					ERROR("SUS2-SH multi-layer gate requires two-layer gate metadata");
-				if (two_layer_gate_edge_l1_enabled_)
-					ERROR("SUS2-SH multi-layer gate is not compatible with edge-L1 gate metadata");
+					if (!two_layer_gate_enabled_)
+						ERROR("SUS2-SH multi-layer gate requires two-layer gate metadata");
+					if (two_layer_gate_edge_l1_enabled_)
+						ERROR("SUS2-SH multi-layer gate is not compatible with edge-L1 gate metadata");
+					if (TwoLayerGateUsesDecoupledScaling())
+						ERROR("SUS2-SH multi-layer gate is not compatible with decoupled first-layer gate scaling");
 
-				ifs >> tmpstr;
+					ifs >> tmpstr;
 				if (tmpstr != "second_layer_gate_mode")
 					ERROR("SUS2-SH multi-layer gate is missing second_layer_gate_mode");
 				ifs.ignore(2);
@@ -4045,10 +4268,12 @@ void MLMTPR::Load(const string& filename)
 
 		inv_dr = 200000 / p_RadialBasis->max_dist;
 		double dr = 1 / inv_dr;
-		const int C = species_count;
-		const int R = p_RadialBasis->rb_size;
-		int k_;
-		double factor;
+			const int C = species_count;
+			const int R = p_RadialBasis->rb_size;
+			std::vector<double> base_rb_vals(R, 0.0);
+			std::vector<double> base_rb_ders(R, 0.0);
+			int k_;
+			double factor;
 		for (int i = 0; i < C; i++)
 		{
 			for (int j = 0; j < C; j++)
@@ -4062,22 +4287,41 @@ void MLMTPR::Load(const string& filename)
 								? JacobiIndexedBlockForMu(mu)
 								: mu_to_sigma[k_];
 
-							p_RadialBasis->RB_Calc(dr * n,
-								regression_coeffs[C + 2 * k_ * C * C + C * i + j],
-								1.0 * regression_coeffs[C + 2 * k_ * C * C + C * C + C * i + j],
-								basis_k);
-						for (int xi = 0; xi < R; xi++)
-						{
-							factor = regression_coeffs[C + 2 * C * C * K_ + mu * (R + C) + xi];
-							if (!is_sh_potential_) {
-								factor *= regression_coeffs[C + 2 * C * C * K_ + R + i]
-								       * regression_coeffs[C + 2 * C * C * K_ + R + j];
-							}
-							radial_list(i * C + j, n, mu) += p_RadialBasis->rb_vals[xi] * scaling * factor;
-							radial_der_list(i * C + j, n, mu) += p_RadialBasis->rb_ders[xi] * scaling * factor;
-							if (is_sh_potential_ && TwoLayerGateUsesSharedRadial()) {
-								const double gate_factor = TwoLayerGateRadialCoeff(mu, xi);
-								two_layer_gate_radial_list(i * C + j, n, mu) +=
+								p_RadialBasis->RB_Calc(dr * n,
+									regression_coeffs[C + 2 * k_ * C * C + C * i + j],
+									1.0 * regression_coeffs[C + 2 * k_ * C * C + C * C + C * i + j],
+									basis_k);
+								const bool decoupled_gate_scaling =
+									is_sh_potential_ && TwoLayerGateUsesDecoupledScaling();
+								if (decoupled_gate_scaling) {
+									for (int xi = 0; xi < R; ++xi) {
+										base_rb_vals[xi] = p_RadialBasis->rb_vals[xi];
+										base_rb_ders[xi] = p_RadialBasis->rb_ders[xi];
+									}
+									p_RadialBasis->RB_Calc(
+										dr * n,
+										TwoLayerGateScalingSlope(k_, i, j),
+										TwoLayerGateScalingShift(k_, i, j),
+										basis_k);
+								}
+							for (int xi = 0; xi < R; xi++)
+							{
+								factor = regression_coeffs[C + 2 * C * C * K_ + mu * (R + C) + xi];
+								if (!is_sh_potential_) {
+									factor *= regression_coeffs[C + 2 * C * C * K_ + R + i]
+									       * regression_coeffs[C + 2 * C * C * K_ + R + j];
+								}
+								const double base_val = decoupled_gate_scaling
+									? base_rb_vals[xi]
+									: p_RadialBasis->rb_vals[xi];
+								const double base_der = decoupled_gate_scaling
+									? base_rb_ders[xi]
+									: p_RadialBasis->rb_ders[xi];
+								radial_list(i * C + j, n, mu) += base_val * scaling * factor;
+								radial_der_list(i * C + j, n, mu) += base_der * scaling * factor;
+								if (is_sh_potential_ && TwoLayerGateUsesSharedRadial()) {
+									const double gate_factor = TwoLayerGateRadialCoeff(mu, xi);
+									two_layer_gate_radial_list(i * C + j, n, mu) +=
 									p_RadialBasis->rb_vals[xi] * scaling * gate_factor;
 								two_layer_gate_radial_der_list(i * C + j, n, mu) +=
 									p_RadialBasis->rb_ders[xi] * scaling * gate_factor;
@@ -4478,6 +4722,8 @@ void MLMTPR::Save(const string& filename)
 		ofs << "two_layer_gate_include_one_body = false\n";
 		ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode_ << '\n';
 		ofs << "two_layer_gate_scale_mode = additive-node\n";
+		if (multi_layer_gate_enabled_ && TwoLayerGateUsesDecoupledScaling())
+			ERROR("SUS2-SH cannot save multi-layer gate with decoupled first-layer gate scaling");
 		if (TwoLayerGateUsesSharedRadial()) {
 			const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 			if (gate_radial_count <= 0)
@@ -4492,6 +4738,21 @@ void MLMTPR::Save(const string& filename)
 				const int mu = i / R;
 				const int xi = i % R;
 				ofs << TwoLayerGateRadialCoeff(mu, xi);
+			}
+			ofs << "}\n";
+		}
+		if (TwoLayerGateUsesDecoupledScaling()) {
+			const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
+			if (gate_scaling_count <= 0)
+				ERROR("SUS2-SH decoupled two-layer gate has no scaling coefficients");
+			ofs << "two_layer_gate_scaling_mode = decoupled\n";
+			ofs << "two_layer_gate_scaling_coeff_count = "
+			    << gate_scaling_count << '\n';
+			ofs << "two_layer_gate_scaling_coeffs = {";
+			for (int i = 0; i < gate_scaling_count; ++i) {
+				if (i > 0)
+					ofs << ", ";
+				ofs << regression_coeffs[TwoLayerGateScalingCoeffOffset() + i];
 			}
 			ofs << "}\n";
 		}

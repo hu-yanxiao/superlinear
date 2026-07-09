@@ -429,10 +429,11 @@ public:
 	bool has_sh_scalar_info_ = false;
 	std::vector<SHScalarInfo> sh_scalar_info_;
 		bool two_layer_gate_enabled_ = false;
-		int two_layer_gate_body_order_max_ = 0;
-		bool two_layer_gate_include_one_body_ = false;
-			bool two_layer_gate_shared_radial_ = false;
-			std::string two_layer_gate_mode_ = "mu-body-linear-combo";
+			int two_layer_gate_body_order_max_ = 0;
+			bool two_layer_gate_include_one_body_ = false;
+				bool two_layer_gate_shared_radial_ = false;
+				bool two_layer_gate_decoupled_scaling_ = false;
+				std::string two_layer_gate_mode_ = "mu-body-linear-combo";
 			std::string two_layer_gate_site_mode_ = "neighbor";
 				bool two_layer_residual_enabled_ = false;
 			std::string two_layer_gate_scale_mode_ = "legacy";
@@ -445,9 +446,10 @@ public:
 		std::vector<int> two_layer_gate_scalar_body_orders_;
 		std::vector<int> two_layer_gate_body_order_weight_offsets_;
 		std::vector<int> two_layer_gate_body_order_weight_indices_;
-			std::vector<int> two_layer_gate_mu_body_orders_;
-			std::vector<double> two_layer_gate_radial_coeffs_;
-			std::vector<double> two_layer_gate_additive_coeffs_;
+				std::vector<int> two_layer_gate_mu_body_orders_;
+				std::vector<double> two_layer_gate_radial_coeffs_;
+				std::vector<double> two_layer_gate_scaling_coeffs_;
+				std::vector<double> two_layer_gate_additive_coeffs_;
 				std::vector<double> two_layer_gate_type_coeffs_;
 				std::vector<double> two_layer_gate_weights_;
 				std::vector<double> two_layer_gate_body_mix_weights_;
@@ -733,8 +735,9 @@ public:
 		int OuterTypeCoeffIndex(int type_outer, int mu) const;
 		double OuterTypeCoeff(int type_outer, int mu) const;
 		int BaseNonlinearCoeffCount() const;
-						bool TwoLayerGateUsesSharedRadial() const;
-						bool TwoLayerGateUsesBodyLinearCombo() const;
+							bool TwoLayerGateUsesSharedRadial() const;
+							bool TwoLayerGateUsesDecoupledScaling() const;
+							bool TwoLayerGateUsesBodyLinearCombo() const;
 						bool TwoLayerGateUsesFullScalarWeights() const;
 						bool TwoLayerResidualEnabled() const;
 						bool TwoLayerGateUsesDirectScale() const;
@@ -746,11 +749,13 @@ public:
 						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
 					bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
-						void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+							void UpgradePlainSHToTwoLayerGate(int gate_body_order,
 						                                  bool independent_gate_radial_coeffs,
 						                                  const std::string& gate_site_mode = "neighbor",
-						                                  const std::string& gate_mode = "mu-body-linear-combo");
-						void UpgradeTwoLayerGateToEdgeL1();
+						                                  const std::string& gate_mode = "mu-body-linear-combo",
+						                                  bool decoupled_gate_scaling = false);
+							void EnableTwoLayerGateDecoupledScalingFromBase();
+							void UpgradeTwoLayerGateToEdgeL1();
 						bool MultiLayerGateEnabled() const { return multi_layer_gate_enabled_; }
 						void UpgradeTwoLayerGateToMultiLayerGate(
 							int second_gate_body_order,
@@ -758,6 +763,8 @@ public:
 				void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;
+		int TwoLayerGateScalingCoeffCount() const;
+		int TwoLayerGateScalingCoeffOffset() const;
 		int TwoLayerGateAdditiveCoeffCount() const;
 		int TwoLayerGateAdditiveCoeffOffset() const;
 		int TwoLayerGateTypeCoeffCount() const;
@@ -780,6 +787,10 @@ public:
 		int LinearEquationCount() const;
 		int TwoLayerGateRadialCoeffIndex(int mu, int xi) const;
 		double TwoLayerGateRadialCoeff(int mu, int xi) const;
+		int TwoLayerGateScalingSlopeOffset(int scaling_block, int type_central, int type_outer) const;
+		int TwoLayerGateScalingShiftOffset(int scaling_block, int type_central, int type_outer) const;
+		double TwoLayerGateScalingSlope(int scaling_block, int type_central, int type_outer) const;
+		double TwoLayerGateScalingShift(int scaling_block, int type_central, int type_outer) const;
 		int TwoLayerGateAdditiveCoeffIndex(int type_outer, int mu) const;
 		const double* TwoLayerGateAdditiveCoeffRowData(int type_outer) const;
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
@@ -855,6 +866,7 @@ public:
 				std::vector<double>& body_scratch) const;
 			double TwoLayerResidualE0Coeff(int scalar_index) const;
 			void InitializeTwoLayerGateRadialCoeffsFromBase();
+			void InitializeTwoLayerGateScalingCoeffsFromBase();
 			void InitializeTwoLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
 			void InitializeTwoLayerGateTypeCoeffsFromBase();
 			void InitializeSecondLayerGateRadialCoeffsFromFirstGate();
@@ -899,9 +911,10 @@ public:
 	}
 		void DistributeCoeffs()									//Combine radial and linear coefficients in one array
 		{
-			const int base_nonlinear_size = BaseNonlinearCoeffCount();
-					const int gate_radial_count = TwoLayerGateRadialCoeffCount();
-						const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
+				const int base_nonlinear_size = BaseNonlinearCoeffCount();
+						const int gate_radial_count = TwoLayerGateRadialCoeffCount();
+						const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
+							const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
 						const int gate_type_count = TwoLayerGateTypeCoeffCount();
 						const int gate_weight_count = TwoLayerGateWeightCount();
 						const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
@@ -917,8 +930,10 @@ public:
 					std::vector<double> old_coeffs = regression_coeffs;
 					if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
 						ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
-							const int new_gate_additive_offset = base_nonlinear_size + gate_radial_count;
-						const int new_gate_type_offset = new_gate_additive_offset + gate_additive_count;
+								const int new_gate_scaling_offset = base_nonlinear_size + gate_radial_count;
+								const int new_gate_additive_offset =
+									new_gate_scaling_offset + gate_scaling_count;
+							const int new_gate_type_offset = new_gate_additive_offset + gate_additive_count;
 						const int new_gate_offset = new_gate_type_offset + gate_type_count;
 						const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
 							const int new_gate_edge_l1_offset =
@@ -957,14 +972,31 @@ public:
 								&& static_cast<int>(old_coeffs.size()) >=
 									new_second_gate_body_mix_offset
 									+ second_gate_body_mix_weight_count + e0_count;
-					if (gate_radial_count > 0
+						if (gate_radial_count > 0
 					    && static_cast<int>(old_coeffs.size()) >= base_nonlinear_size + gate_radial_count) {
 						two_layer_gate_radial_coeffs_.assign(gate_radial_count, 0.0);
 						for (int i = 0; i < gate_radial_count; ++i)
 							two_layer_gate_radial_coeffs_[i] =
 								old_coeffs[base_nonlinear_size + i];
 						}
-						if (gate_additive_count > 0) {
+						if (gate_scaling_count > 0) {
+							if (static_cast<int>(two_layer_gate_scaling_coeffs_.size())
+							    == gate_scaling_count) {
+								// Model metadata is already in the current decoupled-scaling layout.
+							} else if (old_coeffs_have_release_layout
+							           && static_cast<int>(old_coeffs.size())
+							              >= new_gate_scaling_offset + gate_scaling_count) {
+								two_layer_gate_scaling_coeffs_.assign(gate_scaling_count, 0.0);
+								for (int i = 0; i < gate_scaling_count; ++i)
+									two_layer_gate_scaling_coeffs_[i] =
+										old_coeffs[new_gate_scaling_offset + i];
+							} else {
+								InitializeTwoLayerGateScalingCoeffsFromBase();
+							}
+						} else {
+							two_layer_gate_scaling_coeffs_.clear();
+						}
+							if (gate_additive_count > 0) {
 						if (static_cast<int>(two_layer_gate_additive_coeffs_.size())
 						    == gate_additive_count) {
 							// Model metadata is already in the current release layout.
@@ -1143,9 +1175,10 @@ public:
 								two_layer_residual_e0_coeffs_[i] = old_coeffs[old_e0_offset + i];
 						}
 					}
-							regression_coeffs.assign(
-								base_nonlinear_size + gate_radial_count
-								+ gate_additive_count + gate_type_count + gate_weight_count
+								regression_coeffs.assign(
+									base_nonlinear_size + gate_radial_count
+								+ gate_scaling_count + gate_additive_count
+								+ gate_type_count + gate_weight_count
 								+ gate_body_mix_weight_count + gate_edge_l1_weight_count
 								+ second_gate_radial_count + second_gate_additive_count
 								+ second_gate_type_count + second_gate_weight_count
@@ -1153,12 +1186,20 @@ public:
 								+ e0_count + linear_size, 0.0);
 				for (int i = 0; i < base_nonlinear_size; ++i)
 					regression_coeffs[i] = old_coeffs[i];
-			if (gate_radial_count > 0) {
+				if (gate_radial_count > 0) {
 				if (static_cast<int>(two_layer_gate_radial_coeffs_.size()) != gate_radial_count)
 					InitializeTwoLayerGateRadialCoeffsFromBase();
 				for (int i = 0; i < gate_radial_count; ++i)
 					regression_coeffs[base_nonlinear_size + i] =
 						two_layer_gate_radial_coeffs_[i];
+			}
+			if (gate_scaling_count > 0) {
+				if (static_cast<int>(two_layer_gate_scaling_coeffs_.size())
+				    != gate_scaling_count)
+					InitializeTwoLayerGateScalingCoeffsFromBase();
+				for (int i = 0; i < gate_scaling_count; ++i)
+					regression_coeffs[TwoLayerGateScalingCoeffOffset() + i] =
+						two_layer_gate_scaling_coeffs_[i];
 			}
 			if (gate_additive_count > 0) {
 				if (static_cast<int>(two_layer_gate_additive_coeffs_.size()) != gate_additive_count)

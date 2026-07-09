@@ -114,6 +114,83 @@ bool HasOpt(const std::map<std::string, std::string>& opts, const std::string& n
 	return it != opts.end() && !it->second.empty();
 }
 
+double LerpLocal(double a, double b, double t)
+{
+	return a + (b - a) * t;
+}
+
+double Clamp01Local(double value)
+{
+	return std::max(0.0, std::min(1.0, value));
+}
+
+double OrderedPairStrengthLocal(int type_central, int type_outer)
+{
+	return std::sqrt(static_cast<double>(type_central + 1))
+	     + std::sqrt(static_cast<double>(type_outer + 1));
+}
+
+double NormalizedOrderedPairStrengthLocal(
+	int type_central,
+	int type_outer,
+	int species_count)
+{
+	if (species_count <= 1)
+		return 0.5;
+	const double min_strength = OrderedPairStrengthLocal(0, 0);
+	const double max_strength =
+		OrderedPairStrengthLocal(species_count - 1, species_count - 1);
+	if (max_strength <= min_strength)
+		return 0.5;
+	return Clamp01Local(
+		(OrderedPairStrengthLocal(type_central, type_outer) - min_strength)
+		/ (max_strength - min_strength));
+}
+
+double DefaultScalingSlopeStart(const std::string& rbasis)
+{
+	return rbasis == "RBLaguerre_log1p" ? 3.0 : 4.0;
+}
+
+void WriteDefaultScalingCoeffList(std::ofstream& ofs,
+                                  int species_count,
+                                  int kmax,
+                                  const std::string& rbasis)
+{
+	const double scal_start = DefaultScalingSlopeStart(rbasis);
+	const double scal_end = 2.0;
+	const double shift_start = 1.5;
+	const double shift_end = 2.5;
+	const int pair_count = species_count * species_count;
+	for (int scaling_block = 0; scaling_block < kmax; ++scaling_block) {
+		if (scaling_block != 0)
+			ofs << ", ";
+		for (int pair = 0; pair < pair_count; ++pair) {
+			if (pair != 0)
+				ofs << ", ";
+			const int type_central = pair / species_count;
+			const int type_outer = pair % species_count;
+			const double strength =
+				NormalizedOrderedPairStrengthLocal(
+					type_central,
+					type_outer,
+					species_count);
+			ofs << LerpLocal(scal_start, scal_end, strength);
+		}
+		for (int pair = 0; pair < pair_count; ++pair) {
+			ofs << ", ";
+			const int type_central = pair / species_count;
+			const int type_outer = pair % species_count;
+			const double strength =
+				NormalizedOrderedPairStrengthLocal(
+					type_central,
+					type_outer,
+					species_count);
+			ofs << LerpLocal(shift_start, shift_end, strength);
+		}
+	}
+}
+
 double ParseStrictDoubleOption(const std::string& value,
                                const std::string& opt_name)
 {
@@ -757,6 +834,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool two_layer_gate_edge_l1 = HasOpt(opts, "two-layer-gate-edge-l1");
 	const bool requested_two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
+	const bool two_layer_gate_decoupled_scaling =
+		HasOpt(opts, "two-layer-gate-decoupled-scaling")
+		|| HasOpt(opts, "two-layer-gate-full-decoupled");
 	const bool two_layer_gate_shared_radial = two_layer_gate;
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
 	const int default_two_layer_gate_body_order = body_order;
@@ -825,6 +905,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1.");
 	if (requested_two_layer_gate_shared_radial && !two_layer_gate)
 		ERROR("--two-layer-gate-shared-radial requires --two-layer-gate.");
+	if (two_layer_gate_decoupled_scaling && !two_layer_gate)
+		ERROR("--two-layer-gate-decoupled-scaling requires --two-layer-gate.");
+	if (two_layer_gate_decoupled_scaling && multi_layer_gate)
+		ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models.");
 	if (two_layer_residual && !two_layer_gate)
 		ERROR("--two-layer-residual requires --two-layer-gate.");
 	if (two_layer_residual && two_layer_gate)
@@ -866,7 +950,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "\tmin_dist = " << min_dist << "\n";
 	ofs << "\tmax_dist = " << max_dist << "\n";
 	ofs << "\tradial_basis_size = " << rb_size << "\n";
-	ofs << "\tradial_funcs_count = " << kmax * (lmax + 1) << "\n";
+	const int radial_func_count = kmax * (lmax + 1);
+	ofs << "\tradial_funcs_count = " << radial_func_count << "\n";
 
 	ofs << "alpha_moments_count = " << graph.node_count_ << "\n";
 	ofs << "alpha_index_basic_count = " << graph.basic_.size() << "\n";
@@ -943,7 +1028,17 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			}
 			ofs << "}\n";
 			}
-			const int radial_func_count = kmax * (lmax + 1);
+			if (two_layer_gate_decoupled_scaling) {
+				const int gate_scaling_count =
+					2 * species_count * species_count * radial_func_count;
+				ofs << "two_layer_gate_scaling_mode = decoupled\n";
+				ofs << "two_layer_gate_scaling_coeff_count = "
+				    << gate_scaling_count << "\n";
+				ofs << "two_layer_gate_scaling_coeffs = {";
+				WriteDefaultScalingCoeffList(
+					ofs, species_count, radial_func_count, rbasis);
+				ofs << "}\n";
+			}
 			const int gate_additive_count = species_count * radial_func_count;
 			ofs << "two_layer_gate_additive_coeff_count = "
 			    << gate_additive_count << "\n";

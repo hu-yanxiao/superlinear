@@ -1918,14 +1918,22 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			}
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
-	std::vector<double> radial_vals_scratch;
-	std::vector<double> radial_ders_scratch;
-	if (!need_raw_radial_cache)
-		radial_vals_scratch.resize(radial_val_stride);
-	if (need_derivatives && !need_param_derivatives)
-		radial_ders_scratch.resize(radial_der_stride);
-	std::vector<double> gate_lmp_vals_scratch;
-	std::vector<double> gate_lmp_ders_scratch;
+		std::vector<double> radial_vals_scratch;
+		std::vector<double> radial_ders_scratch;
+		if (!need_raw_radial_cache)
+			radial_vals_scratch.resize(radial_val_stride);
+		if (need_derivatives && !need_param_derivatives)
+			radial_ders_scratch.resize(radial_der_stride);
+		const bool decoupled_gate_scaling = TwoLayerGateUsesDecoupledScaling();
+		std::vector<double> gate_radial_vals_scratch;
+		std::vector<double> gate_radial_ders_scratch;
+		if (use_gate_radial && decoupled_gate_scaling) {
+			gate_radial_vals_scratch.resize(radial_val_stride);
+			if (need_derivatives)
+				gate_radial_ders_scratch.resize(radial_der_stride);
+		}
+		std::vector<double> gate_lmp_vals_scratch;
+		std::vector<double> gate_lmp_ders_scratch;
 	if (use_lmp_table && use_gate_radial) {
 		gate_lmp_vals_scratch.resize(radial_func_count);
 		if (need_derivatives)
@@ -2096,11 +2104,51 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 							mu_coord_ders_ss[mu] = dot_coord_ss;
 						}
 					}
-				}
-				if (use_gate_radial) {
-					for (int dense_mu = 0;
-					     dense_mu < static_cast<int>(two_layer_gate_required_mu_indices_.size());
-					     ++dense_mu) {
+					}
+					if (use_gate_radial) {
+						const double* gate_rb_vals = rb_vals;
+						const double* gate_rb_ders = rb_ders;
+						if (decoupled_gate_scaling) {
+							for (int eval_block = 0;
+							     eval_block < eval_block_count;
+							     ++eval_block) {
+								const int scaling_block =
+									radial_eval_to_scaling_block_[eval_block];
+								const int basis_k =
+									radial_eval_to_basis_k_[eval_block];
+								const double sigma =
+									TwoLayerGateScalingSlope(
+										scaling_block,
+										type_central,
+										type_outer);
+								const double shift =
+									TwoLayerGateScalingShift(
+										scaling_block,
+										type_central,
+										type_outer);
+								if (need_derivatives)
+									p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
+								else
+									p_RadialBasis->RB_CalcValsOnly(
+										r, sigma, shift, basis_k);
+								for (int xi = 0; xi < R; ++xi)
+									gate_radial_vals_scratch[
+										eval_block * R + xi] =
+										p_RadialBasis->rb_vals[xi] * scaling;
+								if (need_derivatives)
+									for (int xi = 0; xi < R * 5; ++xi)
+										gate_radial_ders_scratch[
+											eval_block * R * 5 + xi] =
+											p_RadialBasis->rb_ders[xi] * scaling;
+							}
+							gate_rb_vals = gate_radial_vals_scratch.data();
+							gate_rb_ders = need_derivatives
+								? gate_radial_ders_scratch.data()
+								: nullptr;
+						}
+						for (int dense_mu = 0;
+						     dense_mu < static_cast<int>(two_layer_gate_required_mu_indices_.size());
+						     ++dense_mu) {
 						const int mu = two_layer_gate_required_mu_indices_[dense_mu];
 						const int radial_base = mu_to_radial_eval_block_[mu] * R;
 						const int deriv_base = 5 * radial_base;
@@ -2111,21 +2159,21 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						double dot_coord_s = 0.0;
 						double dot_ss = 0.0;
 						double dot_coord_ss = 0.0;
-						for (int xi = 0; xi < R; ++xi) {
-							const double coeff = regression_coeffs[radial_offset + xi];
-							dot_val += coeff * rb_vals[radial_base + xi];
-							if (need_derivatives) {
-								dot_der += coeff * rb_ders[deriv_base + xi];
-								if (need_param_derivatives) {
-									dot_s += coeff * rb_ders[deriv_base + xi + R];
-									dot_coord_s +=
-										coeff * rb_ders[deriv_base + xi + 2 * R];
-									dot_ss += coeff * rb_ders[deriv_base + xi + 3 * R];
-									dot_coord_ss +=
-										coeff * rb_ders[deriv_base + xi + 4 * R];
+							for (int xi = 0; xi < R; ++xi) {
+								const double coeff = regression_coeffs[radial_offset + xi];
+								dot_val += coeff * gate_rb_vals[radial_base + xi];
+								if (need_derivatives) {
+									dot_der += coeff * gate_rb_ders[deriv_base + xi];
+									if (need_param_derivatives) {
+										dot_s += coeff * gate_rb_ders[deriv_base + xi + R];
+										dot_coord_s +=
+											coeff * gate_rb_ders[deriv_base + xi + 2 * R];
+										dot_ss += coeff * gate_rb_ders[deriv_base + xi + 3 * R];
+										dot_coord_ss +=
+											coeff * gate_rb_ders[deriv_base + xi + 4 * R];
+									}
 								}
 							}
-						}
 						gate_mu_vals[dense_mu] = dot_val;
 						if (need_derivatives) {
 							gate_mu_ders[dense_mu] = dot_der;
@@ -3617,14 +3665,14 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 				                         radial_values.data(),
 				                         nullptr);
 			} else {
-				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_CalcValsOnly(
-						r,
-						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+						const int basis_k = radial_eval_to_basis_k_[eval_block];
+						p_RadialBasis->RB_CalcValsOnly(
+							r,
+							TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+							TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+							basis_k);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				}
@@ -4133,19 +4181,15 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 					                         radial_func_count,
 					                         radial_values.data(),
 					                         radial_derivatives.data());
-				} else {
-					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
-							r,
-							regression_coeffs[
-								C + 2 * scaling_block * C * C
-								+ C * type_central + type_outer],
-							regression_coeffs[
-								C + 2 * scaling_block * C * C + C * C
-								+ C * type_central + type_outer],
-							basis_k);
+					} else {
+						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+							const int basis_k = radial_eval_to_basis_k_[eval_block];
+							p_RadialBasis->RB_Calc(
+								r,
+								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+								basis_k);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -5190,12 +5234,8 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
 				p_RadialBasis->RB_Calc(
 					nbh.dists[j],
-					regression_coeffs[
-						C + 2 * scaling_block * C * C
-						+ C * type_central + type_outer],
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * C
-						+ C * type_central + type_outer],
+					TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+					TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
 					basis_k);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] =
@@ -5268,14 +5308,23 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				const double type_scale =
 					gate_center_type_coeff * gate_outer_type_coeff;
 				const int sigma_coeff_offset =
-					C + 2 * C * C * scaling_block
-					+ type_central * C + type_outer;
+					TwoLayerGateScalingSlopeOffset(
+						scaling_block,
+						type_central,
+						type_outer);
+				const int shift_coeff_offset =
+					TwoLayerGateScalingShiftOffset(
+						scaling_block,
+						type_central,
+						type_outer);
 				if (sigma_coeff_offset < 0
-				    || sigma_coeff_offset + C * C >= CoeffCount())
+				    || shift_coeff_offset < 0
+				    || sigma_coeff_offset >= CoeffCount()
+				    || shift_coeff_offset >= CoeffCount())
 					ERROR("SUS2-SH edge L1 source adjoint radial scale coefficient index is out of range");
 				out_grad_accumulator[sigma_coeff_offset] +=
 					value_weight * type_scale * radial_s_derivatives[mu] * y;
-				out_grad_accumulator[sigma_coeff_offset + C * C] +=
+				out_grad_accumulator[shift_coeff_offset] +=
 					value_weight * type_scale * radial_ss_derivatives[mu] * y;
 			}
 
@@ -5362,8 +5411,8 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
 				p_RadialBasis->RB_Calc(
 					r,
-					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
+					TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+					TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
 					basis_k);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
@@ -5598,15 +5647,15 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 				                         radial_func_count,
 				                         radial_values.data(),
 				                         radial_derivatives.data());
-			} else {
-				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
-							r,
-							regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-							regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-							basis_k);
+				} else {
+					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+							const int basis_k = radial_eval_to_basis_k_[eval_block];
+							p_RadialBasis->RB_Calc(
+								r,
+								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+								basis_k);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 							rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -5834,15 +5883,15 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 				                         radial_func_count,
 				                         radial_values.data(),
 				                         radial_derivatives.data());
-			} else {
-				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
-						r,
-						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
-						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+				} else {
+					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+						const int basis_k = radial_eval_to_basis_k_[eval_block];
+						p_RadialBasis->RB_Calc(
+							r,
+							TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+							TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+							basis_k);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -6231,7 +6280,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		!TwoLayerGateUsesDecoupledScaling()
+		&& HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
@@ -6281,17 +6331,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 					} else {
 					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
-					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
-							r,
-							regression_coeffs[
-								C + 2 * scaling_block * C * C + C * type_central + type_outer],
-							regression_coeffs[
-								C + 2 * scaling_block * C * C + C * C
-								+ C * type_central + type_outer],
-							basis_k);
+						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+							const int basis_k = radial_eval_to_basis_k_[eval_block];
+							p_RadialBasis->RB_Calc(
+								r,
+								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+								basis_k);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -6472,17 +6519,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 		} else {
 			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
-			for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
-					r,
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * type_central + type_outer],
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * C
-						+ C * type_central + type_outer],
-					basis_k);
+				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+					const int basis_k = radial_eval_to_basis_k_[eval_block];
+					p_RadialBasis->RB_Calc(
+						r,
+						TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+						TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+						basis_k);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -6589,7 +6633,15 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 					radial_coeff_coord_accum[mu] += coord_weight * y;
 
 					const int sigma_coeff_offset =
-						C + 2 * C * C * scaling_block + type_central * C + type_outer;
+						TwoLayerGateScalingSlopeOffset(
+							scaling_block,
+							type_central,
+							type_outer);
+					const int shift_coeff_offset =
+						TwoLayerGateScalingShiftOffset(
+							scaling_block,
+							type_central,
+							type_outer);
 					out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
 						value_weight * gate_outer_eff * dot_val * y
 						+ coord_weight * gate_outer_eff * base_direction;
@@ -6612,7 +6664,7 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 				out_grad_accumulator[sigma_coeff_offset] +=
 					value_weight * type_scale * dot_s * y
 					+ coord_weight * type_scale * sigma_direction;
-			out_grad_accumulator[sigma_coeff_offset + C * C] +=
+			out_grad_accumulator[shift_coeff_offset] +=
 				value_weight * type_scale * dot_ss * y
 				+ coord_weight * type_scale * shift_direction;
 		}
@@ -6824,7 +6876,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		!TwoLayerGateUsesDecoupledScaling()
+		&& HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
@@ -6873,17 +6926,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 				} else {
 					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
-					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
-							r,
-							regression_coeffs[
-								C + 2 * scaling_block * C * C + C * type_central + type_outer],
-							regression_coeffs[
-								C + 2 * scaling_block * C * C + C * C
-								+ C * type_central + type_outer],
-							basis_k);
+						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+							const int basis_k = radial_eval_to_basis_k_[eval_block];
+							p_RadialBasis->RB_Calc(
+								r,
+								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+								basis_k);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -7061,17 +7111,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		} else {
 			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
-			for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
-					r,
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * type_central + type_outer],
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * C
-						+ C * type_central + type_outer],
-					basis_k);
+				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+					const int basis_k = radial_eval_to_basis_k_[eval_block];
+					p_RadialBasis->RB_Calc(
+						r,
+						TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
+						TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
+						basis_k);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -7198,9 +7245,17 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 						coord_weight * gate_outer_eff_direction * y;
 
 					const int sigma_coeff_offset =
-						C + 2 * C * C * scaling_block + type_central * C + type_outer;
-						out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
-							value_weight * gate_outer_eff * dot_val * y
+						TwoLayerGateScalingSlopeOffset(
+							scaling_block,
+							type_central,
+							type_outer);
+					const int shift_coeff_offset =
+						TwoLayerGateScalingShiftOffset(
+							scaling_block,
+							type_central,
+							type_outer);
+							out_grad_accumulator[TwoLayerGateTypeCoeffIndex(type_central, mu)] +=
+								value_weight * gate_outer_eff * dot_val * y
 							+ coord_weight * (
 								gate_outer_eff * base_direction
 								+ gate_outer_eff_direction * dot_val * y);
@@ -7222,14 +7277,14 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 										endpoint_common * gate_center_type_coeff
 									* second_gate_additive;
 						}
-				out_grad_accumulator[sigma_coeff_offset] +=
-					value_weight * type_scale * dot_s * y
-					+ coord_weight * (
-						type_scale * sigma_direction
-						+ gate_center_type_coeff * gate_outer_eff_direction * dot_s * y);
-				out_grad_accumulator[sigma_coeff_offset + C * C] +=
-					value_weight * type_scale * dot_ss * y
-					+ coord_weight * (
+					out_grad_accumulator[sigma_coeff_offset] +=
+						value_weight * type_scale * dot_s * y
+						+ coord_weight * (
+							type_scale * sigma_direction
+							+ gate_center_type_coeff * gate_outer_eff_direction * dot_s * y);
+					out_grad_accumulator[shift_coeff_offset] +=
+						value_weight * type_scale * dot_ss * y
+						+ coord_weight * (
 						type_scale * shift_direction
 						+ gate_center_type_coeff * gate_outer_eff_direction * dot_ss * y);
 			}
@@ -8008,15 +8063,14 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			else
 				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
 
-			for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
-				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
-				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				const double sigma =
-					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer];
-				const double shift =
-					regression_coeffs[
-						C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer];
-				if (has_direction)
+				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
+					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
+					const int basis_k = radial_eval_to_basis_k_[eval_block];
+					const double sigma =
+						TwoLayerGateScalingSlope(scaling_block, type_central, type_outer);
+					const double shift =
+						TwoLayerGateScalingShift(scaling_block, type_central, type_outer);
+					if (has_direction)
 					p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
 				else
 					p_RadialBasis->RB_CalcValsOnly(r, sigma, shift, basis_k);
