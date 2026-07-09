@@ -6280,8 +6280,7 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		!TwoLayerGateUsesDecoupledScaling()
-		&& HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
@@ -6876,8 +6875,7 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		!TwoLayerGateUsesDecoupledScaling()
-		&& HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
