@@ -1762,6 +1762,18 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 		        || two_layer_edge_gate_mu_coord_ders_s_cache_.size() < expected_gate_mu_size
 		        || two_layer_edge_gate_mu_coord_ders_ss_cache_.size() < expected_gate_mu_size))
 			return false;
+		if (need_derivatives && need_param_derivatives
+		    && TwoLayerGateUsesDecoupledScaling()) {
+			const size_t expected_gate_radial_size =
+				edge_count
+				* static_cast<size_t>(two_layer_edge_cache_eval_block_count_)
+				* static_cast<size_t>(two_layer_edge_cache_rb_size_);
+			if (two_layer_edge_gate_radial_vals_cache_.size()
+			        < expected_gate_radial_size
+			    || two_layer_edge_gate_radial_dr_cache_.size()
+			        < expected_gate_radial_size)
+				return false;
+		}
 	}
 	return true;
 }
@@ -1806,6 +1818,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		        || two_layer_gate_required_moment_indices_.empty()))
 			BuildTwoLayerGateProductProgram();
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
+	const bool decoupled_gate_scaling =
+		use_gate_radial && TwoLayerGateUsesDecoupledScaling();
 	const int gate_count = TwoLayerGateScalarCount();
 	const int cached_gate_moment_count =
 		static_cast<int>(two_layer_gate_required_moment_indices_.size());
@@ -1835,6 +1849,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	const int atom_count = neighborhoods.size();
 	const bool need_raw_radial_cache =
 		need_derivatives && need_param_derivatives;
+	const bool need_gate_raw_radial_cache =
+		need_raw_radial_cache && decoupled_gate_scaling;
 	size_t edge_count = 0;
 
 	two_layer_edge_offsets_cache_.assign(static_cast<size_t>(atom_count) + 1, 0);
@@ -1850,6 +1866,15 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		two_layer_edge_radial_vals_cache_.resize(edge_count * radial_val_stride);
 	} else {
 		two_layer_edge_radial_vals_cache_.clear();
+	}
+	if (need_gate_raw_radial_cache) {
+		two_layer_edge_gate_radial_vals_cache_.resize(
+			edge_count * radial_val_stride);
+		two_layer_edge_gate_radial_dr_cache_.resize(
+			edge_count * radial_val_stride);
+	} else {
+		two_layer_edge_gate_radial_vals_cache_.clear();
+		two_layer_edge_gate_radial_dr_cache_.clear();
 	}
 	if (need_derivatives) {
 		two_layer_edge_sh_ders_cache_.resize(edge_count * 3 * sh_count);
@@ -1924,11 +1949,11 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			radial_vals_scratch.resize(radial_val_stride);
 		if (need_derivatives && !need_param_derivatives)
 			radial_ders_scratch.resize(radial_der_stride);
-		const bool decoupled_gate_scaling = TwoLayerGateUsesDecoupledScaling();
-		std::vector<double> gate_radial_vals_scratch;
-		std::vector<double> gate_radial_ders_scratch;
-		if (use_gate_radial && decoupled_gate_scaling) {
-			gate_radial_vals_scratch.resize(radial_val_stride);
+			std::vector<double> gate_radial_vals_scratch;
+			std::vector<double> gate_radial_ders_scratch;
+			if (use_gate_radial && decoupled_gate_scaling) {
+				if (!need_gate_raw_radial_cache)
+					gate_radial_vals_scratch.resize(radial_val_stride);
 			if (need_derivatives)
 				gate_radial_ders_scratch.resize(radial_der_stride);
 		}
@@ -2007,6 +2032,14 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			double* gate_mu_coord_ders_ss =
 				use_gate_radial && need_derivatives && need_param_derivatives
 				? two_layer_edge_gate_mu_coord_ders_ss_cache_.data() + edge * gate_mu_stride
+				: nullptr;
+			double* gate_raw_vals_cache = need_gate_raw_radial_cache
+				? two_layer_edge_gate_radial_vals_cache_.data()
+					+ edge * radial_val_stride
+				: nullptr;
+			double* gate_raw_dr_cache = need_gate_raw_radial_cache
+				? two_layer_edge_gate_radial_dr_cache_.data()
+					+ edge * radial_val_stride
 				: nullptr;
 
 				if (need_derivatives)
@@ -2109,9 +2142,11 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						const double* gate_rb_vals = rb_vals;
 						const double* gate_rb_ders = rb_ders;
 						if (decoupled_gate_scaling) {
-							for (int eval_block = 0;
-							     eval_block < eval_block_count;
-							     ++eval_block) {
+							double* gate_rb_vals_write = need_gate_raw_radial_cache
+								? gate_raw_vals_cache
+								: gate_radial_vals_scratch.data();
+							for (int eval_block :
+							     two_layer_gate_required_radial_eval_blocks_) {
 								const int scaling_block =
 									radial_eval_to_scaling_block_[eval_block];
 								const int basis_k =
@@ -2132,16 +2167,21 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 									p_RadialBasis->RB_CalcValsOnly(
 										r, sigma, shift, basis_k);
 								for (int xi = 0; xi < R; ++xi)
-									gate_radial_vals_scratch[
+									gate_rb_vals_write[
 										eval_block * R + xi] =
 										p_RadialBasis->rb_vals[xi] * scaling;
-								if (need_derivatives)
+								if (need_derivatives) {
 									for (int xi = 0; xi < R * 5; ++xi)
 										gate_radial_ders_scratch[
 											eval_block * R * 5 + xi] =
 											p_RadialBasis->rb_ders[xi] * scaling;
+									if (need_gate_raw_radial_cache)
+										for (int xi = 0; xi < R; ++xi)
+											gate_raw_dr_cache[eval_block * R + xi] =
+												p_RadialBasis->rb_ders[xi] * scaling;
+								}
 							}
-							gate_rb_vals = gate_radial_vals_scratch.data();
+							gate_rb_vals = gate_rb_vals_write;
 							gate_rb_ders = need_derivatives
 								? gate_radial_ders_scratch.data()
 								: nullptr;
@@ -6280,8 +6320,10 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
+	const bool use_decoupled_gate_raw_cache =
+		use_edge_cache && TwoLayerGateUsesDecoupledScaling();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
 	const int gate_mu_stride = use_gate_radial
@@ -6473,12 +6515,21 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			sh_ders_use =
 				two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
-			rb_vals_use =
-				two_layer_edge_radial_vals_cache_.data()
-				+ edge * radial_val_stride;
-			rb_ders_use =
-				two_layer_edge_radial_ders_cache_.data()
-				+ edge * radial_der_stride;
+			if (use_decoupled_gate_raw_cache) {
+				rb_vals_use =
+					two_layer_edge_gate_radial_vals_cache_.data()
+					+ edge * radial_val_stride;
+				rb_ders_use =
+					two_layer_edge_gate_radial_dr_cache_.data()
+					+ edge * radial_val_stride;
+			} else {
+				rb_vals_use =
+					two_layer_edge_radial_vals_cache_.data()
+					+ edge * radial_val_stride;
+				rb_ders_use =
+					two_layer_edge_radial_ders_cache_.data()
+					+ edge * radial_der_stride;
+			}
 			radial_values_use =
 				(use_gate_radial
 					? two_layer_edge_gate_mu_vals_cache_.data()
@@ -6674,7 +6725,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 			if (value_accum == 0.0 && coord_accum == 0.0)
 				continue;
 				const int radial_base = mu_to_radial_eval_block_[mu] * R;
-				const int deriv_base = 5 * radial_base;
+				const int deriv_base =
+					(use_decoupled_gate_raw_cache ? 1 : 5) * radial_base;
 				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
 					const double type_scale =
 						TwoLayerGateTypeCoeff(type_central, mu)
@@ -6875,8 +6927,10 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
 	const bool use_edge_cache =
-		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true);
+		HasTwoLayerEdgePrimitiveCache(cache_atom_index, true, true);
 	const bool use_gate_radial = TwoLayerGateUsesSharedRadial();
+	const bool use_decoupled_gate_raw_cache =
+		use_edge_cache && TwoLayerGateUsesDecoupledScaling();
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
 	const int gate_mu_stride = use_gate_radial
@@ -7064,12 +7118,21 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			sh_ders_use =
 				two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
-			rb_vals_use =
-				two_layer_edge_radial_vals_cache_.data()
-				+ edge * radial_val_stride;
-			rb_ders_use =
-				two_layer_edge_radial_ders_cache_.data()
-				+ edge * radial_der_stride;
+			if (use_decoupled_gate_raw_cache) {
+				rb_vals_use =
+					two_layer_edge_gate_radial_vals_cache_.data()
+					+ edge * radial_val_stride;
+				rb_ders_use =
+					two_layer_edge_gate_radial_dr_cache_.data()
+					+ edge * radial_val_stride;
+			} else {
+				rb_vals_use =
+					two_layer_edge_radial_vals_cache_.data()
+					+ edge * radial_val_stride;
+				rb_ders_use =
+					two_layer_edge_radial_ders_cache_.data()
+					+ edge * radial_der_stride;
+			}
 			radial_values_use =
 				(use_gate_radial
 					? two_layer_edge_gate_mu_vals_cache_.data()
@@ -7295,7 +7358,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 				    && gate_tangent_accum == 0.0)
 					continue;
 				const int radial_base = mu_to_radial_eval_block_[mu] * R;
-				const int deriv_base = 5 * radial_base;
+				const int deriv_base =
+					(use_decoupled_gate_raw_cache ? 1 : 5) * radial_base;
 				const int radial_offset = TwoLayerGateRadialCoeffIndex(mu, 0);
 				const double type_scale =
 					TwoLayerGateTypeCoeff(type_central, mu)

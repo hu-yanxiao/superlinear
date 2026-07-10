@@ -519,6 +519,8 @@ public:
 			std::vector<double> two_layer_edge_sh_ders_cache_;
 			std::vector<double> two_layer_edge_radial_vals_cache_;
 			std::vector<double> two_layer_edge_radial_ders_cache_;
+			std::vector<double> two_layer_edge_gate_radial_vals_cache_;
+			std::vector<double> two_layer_edge_gate_radial_dr_cache_;
 	std::vector<double> two_layer_edge_mu_vals_cache_;
 	std::vector<double> two_layer_edge_mu_ders_cache_;
 	std::vector<double> two_layer_edge_mu_ders_s_cache_;
