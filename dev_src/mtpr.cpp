@@ -989,9 +989,16 @@ void MLMTPR::EnableTwoLayerGateDecoupledScalingFromBase()
 		ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models");
 	if (TwoLayerGateUsesDecoupledScaling())
 		return;
+	const int gate_scaling_offset =
+		BaseNonlinearCoeffCount() + TwoLayerGateRadialCoeffCount();
+	if (gate_scaling_offset < 0
+	    || gate_scaling_offset > static_cast<int>(regression_coeffs.size()))
+		ERROR("SUS2-SH cannot insert decoupled gate scaling into an inconsistent coefficient layout");
 	two_layer_gate_decoupled_scaling_ = true;
 	InitializeTwoLayerGateScalingCoeffsFromBase();
-	DistributeCoeffs();
+	regression_coeffs.insert(regression_coeffs.begin() + gate_scaling_offset,
+	                         two_layer_gate_scaling_coeffs_.begin(),
+	                         two_layer_gate_scaling_coeffs_.end());
 	ClearTwoLayerEdgePrimitiveCache();
 }
 

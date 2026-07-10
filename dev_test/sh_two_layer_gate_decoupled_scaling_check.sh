@@ -9,11 +9,15 @@ mkdir -p "$tmp_dir"
 base_model="$tmp_dir/gated_decoupled.mtp"
 lmp_model="$tmp_dir/gated_decoupled_lmp.mtp"
 bad_model="$tmp_dir/bad_multi_decoupled.mtp"
+shared_init="$tmp_dir/shared_init.mtp"
+shared_model="$tmp_dir/shared_complete.mtp"
 train="$tmp_dir/one.cfg"
 base_pred="$tmp_dir/base_pred.cfg"
 lmp_pred="$tmp_dir/lmp_pred.cfg"
 bad_log="$tmp_dir/bad.log"
-rm -f "$base_model" "$lmp_model" "$bad_model" "$train" "$base_pred" "$lmp_pred" "$bad_log"
+shared_train_log="$tmp_dir/shared_train.log"
+rm -f "$base_model" "$lmp_model" "$bad_model" "$shared_init" "$shared_model" \
+  "$train" "$base_pred" "$lmp_pred" "$bad_log" "$shared_train_log"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
 
 ./bin/mlp-sus2 init-sh "$base_model" \
@@ -143,3 +147,30 @@ PY
   --displacement=1.0e-3 \
   --abs-tolerance=3.0e-5 \
   --rel-tolerance=3.0e-4
+
+./bin/mlp-sus2 init-sh "$shared_init" \
+  --species-count=2 \
+  --l-max=2 \
+  --k-max=2 \
+  --body-order=4 \
+  --body-l-max=2,2,2,2 \
+  --radial-basis-size=4 \
+  --cutoff=5.0 \
+  --write-sh-scalar-info \
+  --two-layer-gate \
+  --two-layer-gate-mode=mu-scalar-full >/dev/null
+
+./bin/mlp-sus2 train "$shared_init" "$train" \
+  --trained-pot-name="$shared_model" \
+  --max-iter=1 \
+  --skip-preinit \
+  --shift \
+  --energy-weight=0 \
+  --force-weight=0 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$shared_train_log"
+
+./bin/mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev \
+  "$shared_model" "$train" \
+  --max-configs=1 \
+  --abs-tolerance=1.0e-10

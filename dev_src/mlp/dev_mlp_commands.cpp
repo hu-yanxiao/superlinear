@@ -1853,6 +1853,104 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			exit(1);
 		} END_COMMAND;
 
+	BEGIN_COMMAND("check-two-layer-gate-decoupled-upgrade-dev",
+		"checks that shared-to-decoupled gate scaling upgrade preserves coefficients and E/F/S",
+		"mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev model.mtp cfg --max-configs=1 --abs-tolerance=1e-10\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("Decoupled gate upgrade check requires a two-layer gate model.");
+		if (mtpr.TwoLayerGateUsesDecoupledScaling())
+			ERROR("Decoupled gate upgrade check requires a shared-scaling gate model.");
+		if (mtpr.MultiLayerGateEnabled())
+			ERROR("Decoupled gate upgrade check only supports one-layer gate models.");
+
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for decoupled gate upgrade check.");
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs))
+			configs.push_back(cfg);
+		if (configs.empty())
+			ERROR("No configurations loaded for decoupled gate upgrade check.");
+
+		const int old_count = mtpr.CoeffCount();
+		const int insertion_offset = mtpr.TwoLayerGateScalingCoeffOffset();
+		const int scaling_count = mtpr.ScalingCoeffCount();
+		std::vector<double> old_coeffs(mtpr.Coeff(), mtpr.Coeff() + old_count);
+		std::vector<Configuration> before = configs;
+		for (Configuration& prediction : before)
+			mtpr.CalcEFS(prediction);
+
+		mtpr.EnableTwoLayerGateDecoupledScalingFromBase();
+		if (mtpr.CoeffCount() != old_count + scaling_count)
+			ERROR("Decoupled gate upgrade produced an inconsistent coefficient count.");
+
+		double coeff_max_err = 0.0;
+		int coeff_worst_index = -1;
+		auto check_coeff = [&](int new_index, double expected) {
+			const double err = std::abs(mtpr.Coeff()[new_index] - expected);
+			if (err > coeff_max_err) {
+				coeff_max_err = err;
+				coeff_worst_index = new_index;
+			}
+		};
+		for (int i = 0; i < insertion_offset; ++i)
+			check_coeff(i, old_coeffs[i]);
+		for (int i = 0; i < scaling_count; ++i)
+			check_coeff(insertion_offset + i, old_coeffs[mtpr.species_count + i]);
+		for (int i = insertion_offset; i < old_count; ++i)
+			check_coeff(i + scaling_count, old_coeffs[i]);
+
+		std::vector<Configuration> after = configs;
+		for (Configuration& prediction : after)
+			mtpr.CalcEFS(prediction);
+		double efs_max_err = 0.0;
+		for (std::size_t c = 0; c < before.size(); ++c) {
+			efs_max_err = std::max(efs_max_err,
+			                       std::abs(before[c].energy - after[c].energy));
+			for (int i = 0; i < before[c].size(); ++i) {
+				for (int a = 0; a < 3; ++a)
+					efs_max_err = std::max(efs_max_err,
+					                       std::abs(before[c].force(i, a)
+					                                - after[c].force(i, a)));
+				if (before[c].has_site_energies() && after[c].has_site_energies())
+					efs_max_err = std::max(efs_max_err,
+					                       std::abs(before[c].site_energy(i)
+					                                - after[c].site_energy(i)));
+			}
+			for (int a = 0; a < 3; ++a)
+				for (int b = 0; b < 3; ++b)
+					efs_max_err = std::max(efs_max_err,
+					                       std::abs(before[c].stresses[a][b]
+					                                - after[c].stresses[a][b]));
+		}
+
+		const double abs_tolerance =
+			ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-10);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "checked_configs=" << before.size()
+			          << " old_coeff_count=" << old_count
+			          << " new_coeff_count=" << mtpr.CoeffCount()
+			          << " scaling_insert_offset=" << insertion_offset
+			          << " scaling_count=" << scaling_count
+			          << " coeff_worst_index=" << coeff_worst_index
+			          << " coeff_max_err=" << coeff_max_err
+			          << " efs_max_err=" << efs_max_err
+			          << std::endl;
+		}
+		if (coeff_max_err > abs_tolerance || efs_max_err > abs_tolerance)
+			exit(1);
+	} END_COMMAND;
+
 		BEGIN_COMMAND("check-two-layer-gate-mu-body-order-dev",
 			"checks exact body-order routing for mu-dependent two-layer gate values",
 			"mlp-sus2 check-two-layer-gate-mu-body-order-dev model.mtp cfg --max-configs=1 --max-atoms=1 --probe-weight=0.5 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
