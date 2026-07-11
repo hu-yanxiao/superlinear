@@ -36,6 +36,7 @@ awk 'BEGIN {count=0} {print} /^END_CFG/ {count++; if (count == 2) exit}' \
   --body-order=4 \
   --body-l-max=2,2,2,2 \
   --radial-basis-size=4 \
+  --init-params=same \
   --cutoff=5.0 \
   --write-sh-scalar-info \
   --two-layer-gate
