@@ -115,11 +115,21 @@ Common training options:
 | `--force-loss=l2|log-cosh` | Nonlinear force loss. Default is componentwise L2/MSE; `log-cosh` is more robust to large force outliers. |
 | `--force-log-cosh-scale=<double>` | Scale for `log-cosh` force loss in eV/A, default `2`. |
 | `--valid-cfgs=<path>` | Optional validation CFG file. |
-| `--max-iter=<int>` | Maximum BFGS iterations, default `1000`. |
+| `--optimizer=bfgs|lbfgs` | Nonlinear optimizer. The default remains dense BFGS; L-BFGS is an independent opt-in path. |
+| `--max-iter=<int>` | Maximum accepted optimizer iterations, default `1000`. |
 | `--curr-pot-name=<path>` | Save current model during training. |
 | `--trained-pot-name=<path>` | Final trained model path, default `Trained.mtp_`. |
+| `--optimizer-conv-tol=<double>` | Generic alias for `--bfgs-conv-tol`. |
+| `--optimizer-trace-file=<path>` | Generic alias for `--bfgs-trace-file`. L-BFGS traces include curvature/history diagnostics. |
+| `--optimizer-line-search=wolfe|armijo-value` | Generic line-search selector. L-BFGS supports value-only Armijo; BFGS retains its historical Wolfe default. |
 | `--bfgs-conv-tol=<double>` | Stop when improvement over 50 BFGS iterations is below this factor, default `1e-3`. |
 | `--bfgs-trace-file=<path>` | Optional CSV trace of accepted BFGS steps. |
+| `--lbfgs-history=<int>` | Accepted curvature-pair history size, default `20`. |
+| `--lbfgs-curvature-tol=<double>` | Relative damped-curvature acceptance threshold, default `1e-10`. |
+| `--lbfgs-damping=<double>` | Diagonal Powell damping threshold in `[0,1)`, default `0.2`. |
+| `--lbfgs-armijo-c1=<double>` | Total-loss Armijo sufficient-decrease coefficient, default `1e-4`. |
+| `--lbfgs-initial-step=<double>` | Initial trial step after a reset, default `1`. |
+| `--lbfgs-step-growth=<double>` | Growth factor for the next trial after an unbacktracked accepted step, default `1.5`. |
 | `--radial-smooth=<double>` | H1 smoothness penalty on `dR/dr`, default `1e-6`; set `0` to disable. |
 | `--radial-smooth-grid=<int>` | Midpoint grid for `--radial-smooth`, default `128`. |
 | `--atomic-energies=<e0,e1,...>` | Enforce isolated element energy constraints `shift_t + species_t = e_t`. |

@@ -906,7 +906,7 @@ TEST("Linesearch") {
 	}
 } END_TEST;
 
-	TEST("BFGS Armijo value-only trial") {
+		TEST("BFGS Armijo value-only trial") {
 		Array1D x0(1);
 		x0[0] = 0.0;
 		BFGS bfgs;
@@ -943,9 +943,165 @@ TEST("Linesearch") {
 		bfgs.IterateArmijoWithGradient(accepted_f, g1);
 		if (!bfgs.ArmijoValueOnlyTrialReady())
 			FAIL();
+		} END_TEST;
+
+	TEST("L-BFGS Armijo history uses accepted points only") {
+		Array1D x0(2);
+		x0[0] = 0.0;
+		x0[1] = 0.0;
+		LBFGS lbfgs(5);
+		lbfgs.Set_x(x0);
+		lbfgs.armijo_c1 = 1.0e-4;
+
+		auto value = [](const double* x) {
+			const double dx = x[0] - 2.0;
+			const double dy = x[1] + 1.0;
+			return 0.5 * (4.0 * dx * dx + dy * dy);
+		};
+		auto gradient = [](const double* x) {
+			Array1D g(2);
+			g[0] = 4.0 * (x[0] - 2.0);
+			g[1] = x[1] + 1.0;
+			return g;
+		};
+
+		Array1D g0 = gradient(lbfgs.Data());
+		lbfgs.IterateArmijoWithGradient(value(x0.data()), g0);
+		if (lbfgs.history_size() != 0)
+			FAIL();
+		const double first_trial = value(lbfgs.Data());
+		if (lbfgs.ArmijoValueOnlyAccepts(first_trial))
+			FAIL();
+		lbfgs.BacktrackArmijoValueOnly(first_trial);
+		if (lbfgs.history_size() != 0)
+			FAIL();
+
+		int backtracks = 1;
+		double accepted_value = value(lbfgs.Data());
+		while (!lbfgs.ArmijoValueOnlyAccepts(accepted_value) && backtracks < 20) {
+			lbfgs.BacktrackArmijoValueOnly(accepted_value);
+			accepted_value = value(lbfgs.Data());
+			++backtracks;
+		}
+		if (!lbfgs.ArmijoValueOnlyAccepts(accepted_value))
+			FAIL();
+		Array1D g1 = gradient(lbfgs.Data());
+		lbfgs.IterateArmijoWithGradient(accepted_value, g1);
+		if (lbfgs.history_size() != 1)
+			FAIL();
 	} END_TEST;
 
-TEST("checks minimal distance in configurations") {
+	TEST("L-BFGS diagonal preconditioner mask and restart") {
+		Array1D x0(2);
+		x0[0] = 0.0;
+		x0[1] = 0.0;
+		Array1D diag(2);
+		diag[0] = 0.5;
+		diag[1] = 0.25;
+		Array1D gradient(2);
+		gradient[0] = 2.0;
+		gradient[1] = 4.0;
+
+		LBFGS lbfgs(3);
+		lbfgs.Set_x(x0);
+		lbfgs.SetInvHessDiagonal(diag);
+		lbfgs.MaskCoordinates(std::vector<int>(1, 1));
+		lbfgs.IterateArmijoWithGradient(0.0, gradient);
+		if (std::abs(lbfgs.x(0) + 1.0) > 1.0e-12)
+			FAIL();
+		if (std::abs(lbfgs.x(1)) > 1.0e-12)
+			FAIL();
+
+		lbfgs.Restart();
+		lbfgs.Set_x(x0);
+		lbfgs.SetInvHessDiagonal(diag);
+		lbfgs.IterateArmijoWithGradient(0.0, gradient);
+		if (std::abs(lbfgs.x(1) + 1.0) > 1.0e-12)
+			FAIL();
+	} END_TEST;
+
+	TEST("L-BFGS Powell damping handles negative curvature") {
+		Array1D x0(1);
+		x0[0] = 1.0;
+		LBFGS lbfgs(3);
+		lbfgs.Set_x(x0);
+		lbfgs.armijo_c1 = 1.0e-4;
+		auto concave_value = [](double x) { return -0.5 * x * x; };
+		auto concave_gradient = [](double x) {
+			Array1D g(1);
+			g[0] = -x;
+			return g;
+		};
+
+		Array1D g0 = concave_gradient(1.0);
+		lbfgs.IterateArmijoWithGradient(concave_value(1.0), g0);
+		const double accepted_value = concave_value(lbfgs.x(0));
+		if (!lbfgs.ArmijoValueOnlyAccepts(accepted_value))
+			FAIL();
+		Array1D g1 = concave_gradient(lbfgs.x(0));
+		lbfgs.IterateArmijoWithGradient(accepted_value, g1);
+		if (lbfgs.damped_update_count() != 1)
+			FAIL();
+		if (lbfgs.history_size() != 1)
+			FAIL();
+		if (!(lbfgs.last_curvature() > 0.0))
+			FAIL();
+	} END_TEST;
+
+	TEST("L-BFGS converges on a scaled quadratic") {
+		Array1D x0(3);
+		x0[0] = -4.0;
+		x0[1] = 3.0;
+		x0[2] = -2.0;
+		Array1D diag(3);
+		diag[0] = 10.0;
+		diag[1] = 0.5;
+		diag[2] = 0.005;
+
+		auto value = [](const double* x) {
+			const double d0 = x[0] - 2.0;
+			const double d1 = x[1] + 1.0;
+			const double d2 = x[2] - 0.5;
+			return 0.5 * (0.01 * d0 * d0 + d1 * d1 + 100.0 * d2 * d2);
+		};
+		auto gradient = [](const double* x) {
+			Array1D g(3);
+			g[0] = 0.01 * (x[0] - 2.0);
+			g[1] = x[1] + 1.0;
+			g[2] = 100.0 * (x[2] - 0.5);
+			return g;
+		};
+
+		LBFGS lbfgs(4);
+		lbfgs.Set_x(x0);
+		lbfgs.SetInvHessDiagonal(diag);
+		double accepted_value = value(lbfgs.Data());
+		const double initial_value = accepted_value;
+		for (int iteration = 0; iteration < 30 && accepted_value > 1.0e-20; ++iteration) {
+			Array1D g = gradient(lbfgs.Data());
+			lbfgs.IterateArmijoWithGradient(accepted_value, g);
+			double trial_value = value(lbfgs.Data());
+			int backtracks = 0;
+			while (!lbfgs.ArmijoValueOnlyAccepts(trial_value) && backtracks < 80) {
+				lbfgs.BacktrackArmijoValueOnly(trial_value);
+				trial_value = value(lbfgs.Data());
+				++backtracks;
+			}
+			if (!lbfgs.ArmijoValueOnlyAccepts(trial_value))
+				FAIL();
+			if (trial_value > accepted_value)
+				FAIL();
+			accepted_value = trial_value;
+		}
+		if (!(accepted_value < initial_value * 1.0e-10))
+			FAIL();
+		if (lbfgs.accepted_update_count() == 0)
+			FAIL();
+		if (lbfgs.history_size() > lbfgs.max_history())
+			FAIL();
+	} END_TEST;
+
+	TEST("checks minimal distance in configurations") {
 	int count = 0;
 	int status = 0;
 

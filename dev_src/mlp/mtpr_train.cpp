@@ -1734,22 +1734,87 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (opts["curr-pot-name"] != "")
 		curr_fnm = opts["curr-pot-name"];
 
-	string bfgs_trace_fnm = "";
-	if (opts["bfgs-trace-file"] != "")
-		bfgs_trace_fnm = opts["bfgs-trace-file"];
+	string optimizer_trace_fnm = "";
+	if (opts["optimizer-trace-file"] != "")
+		optimizer_trace_fnm = opts["optimizer-trace-file"];
+	if (opts["bfgs-trace-file"] != "") {
+		if (!optimizer_trace_fnm.empty()
+		    && optimizer_trace_fnm != opts["bfgs-trace-file"])
+			ERROR("--optimizer-trace-file and --bfgs-trace-file disagree");
+		optimizer_trace_fnm = opts["bfgs-trace-file"];
+	}
 
 	string trained_fnm = "Trained.mtp_";
 	if (opts["trained-pot-name"] != "")
 		trained_fnm = opts["trained-pot-name"];
 
+	string optimizer_kind = "bfgs";
+	if (opts["optimizer"] != "")
+		optimizer_kind = opts["optimizer"];
+	if (optimizer_kind != "bfgs" && optimizer_kind != "lbfgs")
+		ERROR("--optimizer should be 'bfgs' or 'lbfgs'");
+
 	double bfgs_conv_tol = 1e-3;
-	if (opts["bfgs-conv-tol"] != "")
-		bfgs_conv_tol = stod(opts["bfgs-conv-tol"]);
-	string bfgs_line_search = "wolfe";
-	if (opts["bfgs-line-search"] != "")
+	if (opts["optimizer-conv-tol"] != "")
+		bfgs_conv_tol = stod(opts["optimizer-conv-tol"]);
+	if (opts["bfgs-conv-tol"] != "") {
+		const double legacy_value = stod(opts["bfgs-conv-tol"]);
+		if (opts["optimizer-conv-tol"] != "" && legacy_value != bfgs_conv_tol)
+			ERROR("--optimizer-conv-tol and --bfgs-conv-tol disagree");
+		bfgs_conv_tol = legacy_value;
+	}
+	if (!std::isfinite(bfgs_conv_tol) || bfgs_conv_tol < 0.0)
+		ERROR("--optimizer-conv-tol should be finite and >= 0");
+
+	string bfgs_line_search = optimizer_kind == "lbfgs" ? "armijo-value" : "wolfe";
+	if (opts["optimizer-line-search"] != "")
+		bfgs_line_search = opts["optimizer-line-search"];
+	if (opts["bfgs-line-search"] != "") {
+		if (opts["optimizer-line-search"] != ""
+		    && opts["optimizer-line-search"] != opts["bfgs-line-search"])
+			ERROR("--optimizer-line-search and --bfgs-line-search disagree");
 		bfgs_line_search = opts["bfgs-line-search"];
+	}
 	if (bfgs_line_search != "wolfe" && bfgs_line_search != "armijo-value")
-		ERROR("--bfgs-line-search should be 'wolfe' or 'armijo-value'");
+		ERROR("--optimizer-line-search should be 'wolfe' or 'armijo-value'");
+	if (optimizer_kind == "lbfgs" && bfgs_line_search != "armijo-value")
+		ERROR("--optimizer=lbfgs supports --optimizer-line-search=armijo-value only");
+
+	int lbfgs_history_size = 20;
+	if (opts["lbfgs-history"] != "")
+		lbfgs_history_size = stoi(opts["lbfgs-history"]);
+	if (lbfgs_history_size <= 0)
+		ERROR("--lbfgs-history should be > 0");
+	double lbfgs_curvature_tolerance = 1.0e-10;
+	if (opts["lbfgs-curvature-tol"] != "")
+		lbfgs_curvature_tolerance = stod(opts["lbfgs-curvature-tol"]);
+	if (!std::isfinite(lbfgs_curvature_tolerance)
+	    || lbfgs_curvature_tolerance < 0.0)
+		ERROR("--lbfgs-curvature-tol should be finite and >= 0");
+	double lbfgs_damping_threshold = 0.2;
+	if (opts["lbfgs-damping"] != "")
+		lbfgs_damping_threshold = stod(opts["lbfgs-damping"]);
+	if (!std::isfinite(lbfgs_damping_threshold)
+	    || lbfgs_damping_threshold < 0.0
+	    || lbfgs_damping_threshold >= 1.0)
+		ERROR("--lbfgs-damping should be finite and in [0,1)");
+	double lbfgs_armijo_c1 = 1.0e-4;
+	if (opts["lbfgs-armijo-c1"] != "")
+		lbfgs_armijo_c1 = stod(opts["lbfgs-armijo-c1"]);
+	if (!std::isfinite(lbfgs_armijo_c1)
+	    || lbfgs_armijo_c1 <= 0.0
+	    || lbfgs_armijo_c1 >= 1.0)
+		ERROR("--lbfgs-armijo-c1 should be finite and in (0,1)");
+	double lbfgs_initial_step = 1.0;
+	if (opts["lbfgs-initial-step"] != "")
+		lbfgs_initial_step = stod(opts["lbfgs-initial-step"]);
+	if (!std::isfinite(lbfgs_initial_step) || lbfgs_initial_step <= 0.0)
+		ERROR("--lbfgs-initial-step should be finite and > 0");
+	double lbfgs_step_growth = 1.5;
+	if (opts["lbfgs-step-growth"] != "")
+		lbfgs_step_growth = stod(opts["lbfgs-step-growth"]);
+	if (!std::isfinite(lbfgs_step_growth) || lbfgs_step_growth < 1.0)
+		ERROR("--lbfgs-step-growth should be finite and >= 1");
         
         bool do_sample = true;
 	if (opts["do-samp"] != "")
@@ -2085,9 +2150,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.std_scaling = weight_std;
         trainer.stdd_scaling = weight_stdd;
 	trainer.linstop = bfgs_conv_tol;	//if in 100 iterations loss decreases less than this, BFGS is finished
+	trainer.optimizer_kind = optimizer_kind;
 	trainer.bfgs_line_search = bfgs_line_search;
 	trainer.curr_pot_name = curr_fnm;
-	trainer.bfgs_trace_file = bfgs_trace_fnm;
+	trainer.bfgs_trace_file = optimizer_trace_fnm;
+	trainer.lbfgs_history_size = lbfgs_history_size;
+	trainer.lbfgs_curvature_tolerance = lbfgs_curvature_tolerance;
+	trainer.lbfgs_damping_threshold = lbfgs_damping_threshold;
+	trainer.lbfgs_armijo_c1 = lbfgs_armijo_c1;
+	trainer.lbfgs_initial_step = lbfgs_initial_step;
+	trainer.lbfgs_step_growth = lbfgs_step_growth;
 	trainer.radial_smooth_regularization = radial_smooth;
 	trainer.radial_smooth_grid = radial_smooth_grid;
 	trainer.scalar_head_l2_regularization = scalar_head_l2;
@@ -2568,12 +2640,22 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (maxits > 0) {
 		if (prank == 0) {
 			std::cout << "Modified by Hu Yanxiao. " << std::endl;
-                        std::cout << "BFGS iterations count set to " << trainer.max_step_count << std::endl;
-			std::cout << "BFGS convergence tolerance set to " << bfgs_conv_tol << std::endl;
-			std::cout << "BFGS line search: " << trainer.bfgs_line_search << std::endl;
+			std::cout << "Optimizer: " << trainer.optimizer_kind << std::endl;
+			std::cout << "Optimizer iterations count set to " << trainer.max_step_count << std::endl;
+			std::cout << "Optimizer convergence tolerance set to " << bfgs_conv_tol << std::endl;
+			std::cout << "Optimizer line search: " << trainer.bfgs_line_search << std::endl;
+			if (trainer.optimizer_kind == "lbfgs") {
+				std::cout << "L-BFGS settings: history=" << trainer.lbfgs_history_size
+				          << " curvature_tol=" << trainer.lbfgs_curvature_tolerance
+				          << " damping=" << trainer.lbfgs_damping_threshold
+				          << " armijo_c1=" << trainer.lbfgs_armijo_c1
+				          << " initial_step=" << trainer.lbfgs_initial_step
+				          << " step_growth=" << trainer.lbfgs_step_growth
+				          << std::endl;
+			}
 			if (trainer.do_lin) {
 				std::cout << "do-lin enabled for first " << trainer.do_lin_step_limit
-				          << " BFGS steps, frequency " << trainer.do_lin_frequency << std::endl;
+				          << " optimizer steps, frequency " << trainer.do_lin_frequency << std::endl;
 				std::cout << "do-lin-rescale "
 				          << (trainer.do_lin_rescale ? "enabled" : "disabled")
 				          << std::endl;

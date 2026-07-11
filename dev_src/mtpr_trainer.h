@@ -11,6 +11,7 @@
 #include "non_linear_regression.h"
 #include "mtpr.h"
 #include "../src/common/bfgs.h"
+#include "../src/common/lbfgs.h"
 #include <vector>
 
 #ifdef MLIP_MPI
@@ -51,6 +52,7 @@ private:
 
 	MLMTPR* p_mlmtpr = nullptr;
 	BFGS bfgs;
+	LBFGS lbfgs;
 	double bfgs_f;
 	Array1D bfgs_g;
 	TrainErrorSummary last_train_error_summary_;
@@ -87,7 +89,14 @@ public:
 	int do_lin_step_limit = 1000;
 	int do_lin_frequency = 50;
 	bool freeze_scal_coeffs = false;
+	std::string optimizer_kind = "bfgs";
 	std::string bfgs_line_search = "wolfe";
+	int lbfgs_history_size = 20;
+	double lbfgs_curvature_tolerance = 1.0e-10;
+	double lbfgs_damping_threshold = 0.2;
+	double lbfgs_armijo_c1 = 1.0e-4;
+	double lbfgs_initial_step = 1.0;
+	double lbfgs_step_growth = 1.5;
 	enum TwoLayerResidualStage {
 		kResidualStageFull = 0,
 		kResidualStageE0 = 1,
