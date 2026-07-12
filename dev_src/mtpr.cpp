@@ -7851,9 +7851,230 @@ void MLMTPR::AccumulateSHBodyOrderEnergyGrad(
 	LinCoeff();
 }
 
+void MLMTPR::ApplySHGateLinearComponentChain(
+	Configuration& cfg,
+	const Neighborhoods& neighborhoods,
+	bool need_forces,
+	bool need_stress)
+{
+	if (!RequiresTwoLayerGateEvaluation() || alpha_scalar_moments == 0)
+		return;
+	const size_t expected_adjoint_count =
+		static_cast<size_t>(cfg.size()) * alpha_scalar_moments * radial_func_count;
+	if (sh_gate_linear_adjoints_.size() != expected_adjoint_count)
+		ERROR("SUS2-SH gate linear component adjoint buffer has inconsistent size");
 
+	const int gate_scalar_count = TwoLayerGateScalarCount();
+	if (gate_scalar_count == 0)
+		return;
+	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
+	const std::vector<double>* saved_second_gate_values =
+		active_second_layer_gate_values_;
+	std::vector<double>* saved_second_gate_adjoints =
+		active_second_layer_gate_adjoints_;
+	active_two_layer_gate_values_ = nullptr;
 
+	auto apply_component_ders = [&](int center,
+	                                int column,
+	                                const Neighborhood& nbh) {
+		for (int j = 0; j < nbh.count; ++j) {
+			const Vector3& component_der = sh_gate_component_ders_[j];
+			if (need_forces) {
+				forces_cmpnts(center, column, 0) += component_der[0];
+				forces_cmpnts(center, column, 1) += component_der[1];
+				forces_cmpnts(center, column, 2) += component_der[2];
+				forces_cmpnts(nbh.inds[j], column, 0) -= component_der[0];
+				forces_cmpnts(nbh.inds[j], column, 1) -= component_der[1];
+				forces_cmpnts(nbh.inds[j], column, 2) -= component_der[2];
+			}
+			if (need_stress)
+				for (int a = 0; a < 3; ++a)
+					for (int b = 0; b < 3; ++b)
+						stress_cmpnts[column][a][b] -=
+							component_der[a] * nbh.vecs[j][b];
+		}
+	};
 
+	if (multi_layer_gate_enabled_) {
+		const size_t expected_second_gate_count =
+			static_cast<size_t>(cfg.size()) * radial_func_count;
+		if (second_layer_gate_values_.size() != expected_second_gate_count)
+			ERROR("SUS2-SH second-layer gate value cache has inconsistent size");
+		const int second_scalar_count = SecondLayerGateScalarCount();
+		if (second_scalar_count == 0)
+			ERROR("SUS2-SH multi-layer gate has no second-layer scalar basis");
+
+		active_second_layer_gate_values_ = &second_layer_gate_values_;
+		active_second_layer_gate_adjoints_ = &second_layer_gate_adjoints_;
+		std::vector<double> first_scalar_seeds(gate_scalar_count, 0.0);
+		std::vector<double> second_scalar_seeds(second_scalar_count, 0.0);
+		std::vector<double> body_seed_scratch;
+
+		// Keep one adjoint field per linear column so the G1 -> G2 chain is exact.
+		for (int i = 0; i < alpha_scalar_moments; ++i) {
+			second_layer_gate_adjoints_.assign(expected_second_gate_count, 0.0);
+			const int column = species_count + i;
+			for (int ind = 0; ind < cfg.size(); ++ind) {
+				const double* gate_adjoints = sh_gate_linear_adjoints_.data()
+					+ (static_cast<size_t>(ind) * alpha_scalar_moments + i)
+						* radial_func_count;
+				bool has_gate_adjoint = false;
+				for (int mu = 0; mu < radial_func_count; ++mu)
+					if (gate_adjoints[mu] != 0.0) {
+						has_gate_adjoint = true;
+						break;
+					}
+				if (!has_gate_adjoint)
+					continue;
+
+				AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
+					gate_adjoints,
+					first_scalar_seeds.data(),
+					body_seed_scratch);
+				const Neighborhood& nbh = neighborhoods[ind];
+				CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+					nbh,
+					sh_gate_component_ders_,
+					ind,
+					first_scalar_seeds.data());
+				apply_component_ders(ind, column, nbh);
+			}
+
+			for (int ind = 0; ind < cfg.size(); ++ind) {
+				const double* second_gate_adjoints =
+					second_layer_gate_adjoints_.data()
+					+ static_cast<size_t>(ind) * radial_func_count;
+				bool has_second_gate_adjoint = false;
+				for (int mu = 0; mu < radial_func_count; ++mu)
+					if (second_gate_adjoints[mu] != 0.0) {
+						has_second_gate_adjoint = true;
+						break;
+					}
+				if (!has_second_gate_adjoint)
+					continue;
+
+				AccumulateSecondLayerGateScalarSeedsFromMuAdjoints(
+					second_gate_adjoints,
+					second_scalar_seeds.data(),
+					body_seed_scratch);
+				const Neighborhood& nbh = neighborhoods[ind];
+				CalcSecondLayerGateWeightedScalarDersForScalarSeeds(
+					nbh,
+					sh_gate_component_ders_,
+					ind,
+					second_scalar_seeds.data());
+				apply_component_ders(ind, column, nbh);
+			}
+		}
+
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_second_layer_gate_values_ = saved_second_gate_values;
+		active_second_layer_gate_adjoints_ = saved_second_gate_adjoints;
+		return;
+	}
+	active_second_layer_gate_values_ = nullptr;
+
+	// Evaluate A * W * D as A * (W * D). This avoids materializing the much
+	// wider alpha_scalar_moments x gate_scalar_count intermediate.
+	sh_gate_linear_weight_matrix_.resize(
+		static_cast<size_t>(radial_func_count) * gate_scalar_count);
+	bool has_gate_weight = false;
+	for (int mu = 0; mu < radial_func_count; ++mu)
+		for (int q = 0; q < gate_scalar_count; ++q) {
+			const double weight = TwoLayerGateWeight(mu, q);
+			sh_gate_linear_weight_matrix_[
+				static_cast<size_t>(mu) * gate_scalar_count + q] = weight;
+			has_gate_weight = has_gate_weight || weight != 0.0;
+		}
+	if (!has_gate_weight) {
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_second_layer_gate_values_ = saved_second_gate_values;
+		active_second_layer_gate_adjoints_ = saved_second_gate_adjoints;
+		return;
+	}
+
+	for (int ind = 0; ind < cfg.size(); ++ind) {
+		const double* gate_adjoints = sh_gate_linear_adjoints_.data()
+			+ static_cast<size_t>(ind) * alpha_scalar_moments * radial_func_count;
+		bool has_gate_adjoint = false;
+		for (int i = 0; i < alpha_scalar_moments * radial_func_count; ++i)
+			if (gate_adjoints[i] != 0.0) {
+				has_gate_adjoint = true;
+				break;
+			}
+		if (!has_gate_adjoint)
+			continue;
+
+		const Neighborhood& nbh = neighborhoods[ind];
+		const int coord_count = nbh.count * 3;
+		if (coord_count == 0)
+			continue;
+		CalcTwoLayerGateScalarDers(nbh, sh_gate_scalar_ders_);
+		const size_t expected_der_count =
+			static_cast<size_t>(gate_scalar_count) * coord_count;
+		if (sh_gate_scalar_ders_.size() != expected_der_count)
+			ERROR("SUS2-SH gate scalar derivative buffer has inconsistent size");
+
+		sh_gate_linear_mu_coord_ders_.resize(
+			static_cast<size_t>(radial_func_count) * coord_count);
+		cblas_dgemm(CblasRowMajor,
+		            CblasNoTrans,
+		            CblasNoTrans,
+		            radial_func_count,
+		            coord_count,
+		            gate_scalar_count,
+		            1.0,
+		            sh_gate_linear_weight_matrix_.data(),
+		            gate_scalar_count,
+		            sh_gate_scalar_ders_.data(),
+		            coord_count,
+		            0.0,
+		            sh_gate_linear_mu_coord_ders_.data(),
+		            coord_count);
+
+		sh_gate_linear_component_ders_.resize(
+			static_cast<size_t>(alpha_scalar_moments) * coord_count);
+		cblas_dgemm(CblasRowMajor,
+		            CblasNoTrans,
+		            CblasNoTrans,
+		            alpha_scalar_moments,
+		            coord_count,
+		            radial_func_count,
+		            1.0,
+		            gate_adjoints,
+		            radial_func_count,
+		            sh_gate_linear_mu_coord_ders_.data(),
+		            coord_count,
+		            0.0,
+		            sh_gate_linear_component_ders_.data(),
+		            coord_count);
+
+		for (int i = 0; i < alpha_scalar_moments; ++i) {
+			const int column = species_count + i;
+			const double* component_ders = sh_gate_linear_component_ders_.data()
+				+ static_cast<size_t>(i) * coord_count;
+			for (int j = 0; j < nbh.count; ++j) {
+				for (int a = 0; a < 3; ++a) {
+					const double component_der = component_ders[3 * j + a];
+					if (component_der == 0.0)
+						continue;
+					if (need_forces) {
+						forces_cmpnts(ind, column, a) += component_der;
+						forces_cmpnts(nbh.inds[j], column, a) -= component_der;
+					}
+					if (need_stress)
+						for (int b = 0; b < 3; ++b)
+							stress_cmpnts[column][a][b] -=
+								component_der * nbh.vecs[j][b];
+				}
+			}
+		}
+	}
+
+	active_two_layer_gate_values_ = saved_gate_values;
+	active_second_layer_gate_values_ = saved_second_gate_values;
+	active_second_layer_gate_adjoints_ = saved_second_gate_adjoints;
+}
 
 void MLMTPR::CalcEFSComponents(Configuration& cfg)
 {
@@ -7913,7 +8134,9 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		use_two_layer_gate && (need_forces || need_stress);
 	if (need_gate_linear_chain) {
 		sh_gate_linear_adjoints_.assign(
-			static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
+			static_cast<size_t>(cfg.size()) * alpha_scalar_moments
+				* radial_func_count,
+			0.0);
 	}
 
 		if (TwoLayerResidualEnabled()) {
@@ -7993,55 +8216,9 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 			}
 			active_two_layer_edge_cache_atom_index_ = -1;
 
-			if (need_gate_linear_chain) {
-				const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
-				active_two_layer_gate_values_ = nullptr;
-				for (int ind = 0; ind < cfg.size(); ++ind) {
-					const double* gate_adjoints = sh_gate_linear_adjoints_.data()
-						+ static_cast<size_t>(ind) * alpha_scalar_moments;
-					bool has_gate_adjoint = false;
-					for (int i = 0; i < alpha_scalar_moments; ++i)
-						if (gate_adjoints[i] != 0.0) {
-							has_gate_adjoint = true;
-							break;
-						}
-					if (!has_gate_adjoint)
-						continue;
-					const Neighborhood& nbh = neighborhoods[ind];
-					CalcTwoLayerGateWeightedScalarDers(nbh, sh_gate_component_ders_, ind);
-					for (int j = 0; j < nbh.count; ++j) {
-						for (int a = 0; a < 3; ++a) {
-							const double component_der = sh_gate_component_ders_[j][a];
-							if (component_der == 0.0)
-								continue;
-							if (need_forces) {
-								cblas_daxpy(alpha_scalar_moments,
-								            component_der,
-								            gate_adjoints,
-								            1,
-								            &forces_cmpnts(ind, species_count, a),
-								            3);
-								cblas_daxpy(alpha_scalar_moments,
-								            -component_der,
-								            gate_adjoints,
-								            1,
-								            &forces_cmpnts(nbh.inds[j], species_count, a),
-								            3);
-							}
-							if (need_stress) {
-								for (int b = 0; b < 3; ++b)
-									cblas_daxpy(alpha_scalar_moments,
-									            -component_der * nbh.vecs[j][b],
-									            gate_adjoints,
-									            1,
-									            &stress_cmpnts[species_count][a][b],
-									            9);
-							}
-						}
-					}
-				}
-				active_two_layer_gate_values_ = saved_gate_values;
-			}
+			if (need_gate_linear_chain)
+				ApplySHGateLinearComponentChain(
+					cfg, neighborhoods, need_forces, need_stress);
 			if (use_two_layer_gate)
 				active_two_layer_gate_values_ = nullptr;
 			return;
@@ -8097,57 +8274,9 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 	const double profile_after_main_components =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 
-	if (need_gate_linear_chain) {
-		const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
-		active_two_layer_gate_values_ = nullptr;
-		for (int ind = 0; ind < cfg.size(); ++ind) {
-			const double* gate_adjoints = sh_gate_linear_adjoints_.data()
-				+ static_cast<size_t>(ind) * alpha_scalar_moments;
-			bool has_gate_adjoint = false;
-			for (int i = 0; i < alpha_scalar_moments; ++i)
-				if (gate_adjoints[i] != 0.0) {
-					has_gate_adjoint = true;
-					break;
-				}
-			if (!has_gate_adjoint)
-				continue;
-
-			const Neighborhood& nbh = neighborhoods[ind];
-			CalcTwoLayerGateWeightedScalarDers(nbh, sh_gate_component_ders_, ind);
-
-			for (int j = 0; j < nbh.count; ++j) {
-				for (int a = 0; a < 3; ++a) {
-					const double component_der = sh_gate_component_ders_[j][a];
-					if (component_der == 0.0)
-						continue;
-					if (need_forces) {
-						cblas_daxpy(alpha_scalar_moments,
-						            component_der,
-						            gate_adjoints,
-						            1,
-						            &forces_cmpnts(ind, species_count, a),
-						            3);
-						cblas_daxpy(alpha_scalar_moments,
-						            -component_der,
-						            gate_adjoints,
-						            1,
-						            &forces_cmpnts(nbh.inds[j], species_count, a),
-						            3);
-					}
-					if (need_stress) {
-						for (int b = 0; b < 3; ++b)
-							cblas_daxpy(alpha_scalar_moments,
-							            -component_der * nbh.vecs[j][b],
-							            gate_adjoints,
-							            1,
-							            &stress_cmpnts[species_count][a][b],
-							            9);
-					}
-				}
-			}
-		}
-		active_two_layer_gate_values_ = saved_gate_values;
-	}
+	if (need_gate_linear_chain)
+		ApplySHGateLinearComponentChain(
+			cfg, neighborhoods, need_forces, need_stress);
 	const double profile_after_chain_apply =
 		profile_two_layer ? TwoLayerProfileNow() : 0.0;
 

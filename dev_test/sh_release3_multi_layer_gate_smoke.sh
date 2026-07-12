@@ -115,6 +115,13 @@ text = rewrite_vector(text, "second_layer_gate_additive_coeffs", set_alternating
 open(target, "w").write(text)
 PY
 
+./bin/mlp-sus2 check-linear-components-fd-dev "$probe_model" "$train" \
+  --max-configs=1 \
+  --max-atoms=1 \
+  --displacement=1.0e-5 \
+  --abs-tolerance=1.0e-5 \
+  --rel-tolerance=1.0e-4
+
 ./bin/mlp-sus2 check-loss-gradient-direction-dev "$probe_model" "$train" \
   --max-configs=1 \
   --energy-weight=1 \

@@ -187,6 +187,10 @@ protected:
 		std::vector<double> sh_gate_basis_ders_;
 		std::vector<double> sh_gate_scalar_values_;
 		std::vector<double> sh_gate_linear_adjoints_;
+		std::vector<double> sh_gate_scalar_ders_;
+		std::vector<double> sh_gate_linear_weight_matrix_;
+		std::vector<double> sh_gate_linear_mu_coord_ders_;
+		std::vector<double> sh_gate_linear_component_ders_;
 		std::vector<double> sh_gate_energy_ders_wrt_moments_;
 		std::vector<Vector3> sh_gate_component_ders_;
 	std::vector<int> basic_total_degree_cache_;
@@ -309,6 +313,11 @@ protected:
 	void AccumulateSHBasisGateDers(
 		const Neighborhood& nbh,
 		std::vector<double>& gate_linear_adjoints);
+	void ApplySHGateLinearComponentChain(
+		Configuration& cfg,
+		const Neighborhoods& neighborhoods,
+		bool need_forces,
+		bool need_stress);
 	void CalcSHResidualSiteEnergyDers(const Neighborhood& nbh);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
 		void AccumulateSHGateTangentGrad(const Neighborhood& nbh,

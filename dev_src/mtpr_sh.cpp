@@ -7911,7 +7911,9 @@ void MLMTPR::AccumulateSHBasisGateDers(
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
 	if (alpha_scalar_moments == 0)
 		return;
-	if (gate_linear_adjoints.size() % static_cast<size_t>(alpha_scalar_moments) != 0)
+	const size_t atom_stride =
+		static_cast<size_t>(alpha_scalar_moments) * radial_func_count;
+	if (atom_stride == 0 || gate_linear_adjoints.size() % atom_stride != 0)
 		ERROR("SUS2-SH gate linear adjoint buffer has an incompatible size.");
 
 	const int C = species_count;
@@ -7924,21 +7926,24 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	if (static_cast<int>(sh_gate_moment_ders_.size()) != moment_stride)
 		sh_gate_moment_ders_.resize(moment_stride);
 	const bool use_product_rows = !sh_product_rows_.empty();
+	const bool use_basic_mu_groups =
+		static_cast<int>(basic_mu_offsets_.size()) == radial_func_count + 1
+		&& static_cast<int>(basic_indices_by_mu_.size()) == alpha_index_basic_count;
 
 	double sh_values[kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, false);
-		const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
-		const int mu_stride = radial_func_count;
-		const int radial_coeff_base = C + 2 * C * C * K_;
-		const int outer_type_coeff_offset = RadialCoeffOffset();
-		const int outer_type_coeff_stride = RadialCoeffBlockSize();
+	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+	const int mu_stride = radial_func_count;
+	const int radial_coeff_base = C + 2 * C * C * K_;
+	const int center_type_coeff_offset = RadialCoeffOffset();
+	const int center_type_coeff_stride = RadialCoeffBlockSize();
 
 	for (int j = 0; j < nbh.count; ++j) {
 		const int atom_index = nbh.inds[j];
 		if (atom_index < 0
-		    || static_cast<size_t>(atom_index + 1) * alpha_scalar_moments
+		    || static_cast<size_t>(atom_index + 1) * atom_stride
 		        > gate_linear_adjoints.size())
 			ERROR("SUS2-SH two-layer gate linear component atom index is out of range");
 
@@ -7996,56 +8001,74 @@ void MLMTPR::AccumulateSHBasisGateDers(
 			}
 		}
 
-		if (!use_product_rows) {
+		const double* gate_signal_by_mu =
+			TwoLayerGateNeighborSignals(nbh, j);
+		PrepareTwoLayerGatePairMuBuffers(
+			type_central,
+			type_outer,
+			nullptr,
+			-1,
+			gate_signal_by_mu,
+			atom_index,
+			kGateMuBufferAdditive);
+		double* gate_adjoints = gate_linear_adjoints.data()
+			+ static_cast<size_t>(atom_index) * atom_stride;
+		for (int mu = 0; mu < radial_func_count; ++mu) {
 			std::fill(sh_gate_moment_ders_.begin(),
 			          sh_gate_moment_ders_.end(),
 			          0.0);
-		}
-			for (int i = 0; i < alpha_index_basic_count; ++i) {
-				const int mu = basic_mu_cache_[i];
-				const int sh_index = basic_sh_index_cache_[i];
-				const double pair_type_scale =
+			auto set_basic_tangent = [&](int basic_index) {
+				const int sh_index = basic_sh_index_cache_[basic_index];
+				const double gate_signal_derivative =
 					OuterTypeCoeffFast(regression_coeffs,
-					                   outer_type_coeff_offset,
-					                   outer_type_coeff_stride,
+					                   center_type_coeff_offset,
+					                   center_type_coeff_stride,
 					                   R,
 					                   type_central,
 					                   mu)
-					* OuterTypeCoeffFast(regression_coeffs,
-					                     outer_type_coeff_offset,
-					                     outer_type_coeff_stride,
-					                     R,
-					                     type_outer,
-					                     mu);
-				sh_gate_moment_ders_[i] =
-					pair_type_scale * radial_values_use[mu] * sh_values_use[sh_index];
+					* two_layer_gate_additive_mu_buffer_[mu];
+				sh_gate_moment_ders_[basic_index] =
+					gate_signal_derivative
+					* radial_values_use[mu] * sh_values_use[sh_index];
+			};
+			if (use_basic_mu_groups) {
+				for (int cursor = basic_mu_offsets_[mu];
+				     cursor < basic_mu_offsets_[mu + 1];
+				     ++cursor)
+					set_basic_tangent(basic_indices_by_mu_[cursor]);
+			} else {
+				for (int basic_index = 0;
+				     basic_index < alpha_index_basic_count;
+				     ++basic_index)
+					if (basic_mu_cache_[basic_index] == mu)
+						set_basic_tangent(basic_index);
 			}
 
-		if (use_product_rows) {
-			for (const SHProductRow& row : sh_product_rows_) {
-				double value = 0.0;
-				const int end = row.term_begin + row.term_count;
-				for (int t = row.term_begin; t < end; ++t) {
-					const SHProductRowTerm& term = sh_product_row_terms_[t];
-					value += term.coeff * (
-						sh_gate_moment_ders_[term.left] * moment_vals[term.right]
-						+ moment_vals[term.left] * sh_gate_moment_ders_[term.right]);
+			if (use_product_rows) {
+				for (const SHProductRow& row : sh_product_rows_) {
+					double value = 0.0;
+					const int end = row.term_begin + row.term_count;
+					for (int t = row.term_begin; t < end; ++t) {
+						const SHProductRowTerm& term = sh_product_row_terms_[t];
+						value += term.coeff * (
+							sh_gate_moment_ders_[term.left] * moment_vals[term.right]
+							+ moment_vals[term.left] * sh_gate_moment_ders_[term.right]);
+					}
+					sh_gate_moment_ders_[row.target] = value;
 				}
-				sh_gate_moment_ders_[row.target] = value;
+			} else {
+				for (size_t p = 0; p < sh_products_.size(); ++p) {
+					const SHProduct& product = sh_products_[p];
+					sh_gate_moment_ders_[product.target] += product.coeff * (
+						sh_gate_moment_ders_[product.left] * moment_vals[product.right]
+						+ moment_vals[product.left] * sh_gate_moment_ders_[product.right]);
+				}
 			}
-		} else {
-			for (size_t p = 0; p < sh_products_.size(); ++p) {
-				const SHProduct& product = sh_products_[p];
-				sh_gate_moment_ders_[product.target] += product.coeff * (
-					sh_gate_moment_ders_[product.left] * moment_vals[product.right]
-					+ moment_vals[product.left] * sh_gate_moment_ders_[product.right]);
-			}
-		}
 
-		double* gate_adjoints = gate_linear_adjoints.data()
-			+ static_cast<size_t>(atom_index) * alpha_scalar_moments;
-		for (int i = 0; i < alpha_scalar_moments; ++i)
-			gate_adjoints[i] += sh_gate_moment_ders_[alpha_moment_mapping[i]];
+			for (int i = 0; i < alpha_scalar_moments; ++i)
+				gate_adjoints[static_cast<size_t>(i) * radial_func_count + mu] +=
+					sh_gate_moment_ders_[alpha_moment_mapping[i]];
+		}
 	}
 }
 
