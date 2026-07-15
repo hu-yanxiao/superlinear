@@ -760,17 +760,23 @@ public:
 						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
 					bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
-							void UpgradePlainSHToTwoLayerGate(int gate_body_order,
-						                                  bool independent_gate_radial_coeffs,
-						                                  const std::string& gate_site_mode = "neighbor",
-						                                  const std::string& gate_mode = "mu-body-linear-combo",
-						                                  bool decoupled_gate_scaling = false);
+						void UpgradePlainSHToTwoLayerGate(int gate_body_order,
+						                                      bool independent_gate_radial_coeffs,
+						                                      const std::string& gate_site_mode = "neighbor",
+						                                      const std::string& gate_mode = "mu-body-linear-combo",
+						                                      bool decoupled_gate_scaling = false,
+						                                      const std::string& gate_factor_pruning = "q-total");
+						bool TwoLayerGateMatchesFactorPruning(
+							const std::string& factor_pruning) const;
 							void EnableTwoLayerGateDecoupledScalingFromBase();
 							void UpgradeTwoLayerGateToEdgeL1();
 						bool MultiLayerGateEnabled() const { return multi_layer_gate_enabled_; }
 						void UpgradeTwoLayerGateToMultiLayerGate(
 							int second_gate_body_order,
-							const std::string& second_gate_mode = "mu-body-linear-combo");
+							const std::string& second_gate_mode = "mu-body-linear-combo",
+							const std::string& second_gate_factor_pruning = "gate1");
+						bool SecondLayerGateMatchesFactorPruning(
+							const std::string& factor_pruning) const;
 				void RequestTwoLayerFullEdgeCacheForNextCalcEFS();
 			int TwoLayerGateRadialCoeffCount() const;
 		int TwoLayerGateRadialCoeffOffset() const;

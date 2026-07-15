@@ -22,8 +22,11 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
   --radial-basis-size=4 \
   --cutoff=5.0 \
   --write-sh-scalar-info \
+  --sh-factor-pruning=q-total \
   --two-layer-gate \
+  --two-layer-gate-factor-pruning=legacy \
   --multi-layer-gate \
+  --second-layer-gate-factor-pruning=same-k \
   --second-layer-gate-body-order=3
 
 grep -q "two_layer_gate_body_order_max = 4" "$model"

@@ -64,6 +64,8 @@ The new release3 flags are:
 ```text
 --multi-layer-gate
 --second-layer-gate-body-order=<int>
+--two-layer-gate-factor-pruning=same-k|legacy|q-total
+--second-layer-gate-factor-pruning=same-k|legacy|q-total
 --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full
 ```
 
@@ -74,6 +76,13 @@ be in `[2, --body-order]`.
 The first-gate body-order default is also aligned with the outer body-order in
 release3. Explicit older `--two-layer-gate-body-order` settings are still
 accepted.
+
+The outer scalar graph defaults to `--sh-factor-pruning=q-total`. Gate1 defaults
+to the outer pruning mode, and gate2 defaults to gate1. Each gate may instead
+select any independently requested subgraph of the outer graph. The exact
+hierarchy is `same-k` subset `legacy` subset `q-total`; `same-k` retains every
+allowed angular coupling path while requiring all leaf factors to share one
+radial channel `k`.
 
 ## Serialization
 

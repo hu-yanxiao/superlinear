@@ -18,6 +18,7 @@
 namespace {
 
 enum class SHFactorPruning {
+	SameK,
 	Legacy,
 	QTotal
 };
@@ -277,15 +278,45 @@ void WriteZBLSection(std::ofstream& ofs, const ZBLInitOptions& zbl)
 	ofs << "}\n";
 }
 
-SHFactorPruning ParseFactorPruning(const std::map<std::string, std::string>& opts)
+SHFactorPruning ParseFactorPruningValue(const std::string& value,
+	                                    const std::string& option_name)
 {
-	const std::string value = StringOpt(opts, "sh-factor-pruning", "legacy");
+	if (value == "same-k")
+		return SHFactorPruning::SameK;
 	if (value == "legacy")
 		return SHFactorPruning::Legacy;
 	if (value == "q-total" || value == "total")
 		return SHFactorPruning::QTotal;
-	ERROR("--sh-factor-pruning should be legacy or q-total.");
-	return SHFactorPruning::Legacy;
+	ERROR("--" + option_name + " should be same-k, legacy, or q-total.");
+	return SHFactorPruning::QTotal;
+}
+
+SHFactorPruning ParseFactorPruning(const std::map<std::string, std::string>& opts,
+	                               const std::string& option_name,
+	                               SHFactorPruning default_value)
+{
+	std::map<std::string, std::string>::const_iterator it = opts.find(option_name);
+	if (it == opts.end() || it->second.empty())
+		return default_value;
+	return ParseFactorPruningValue(it->second, option_name);
+}
+
+int FactorPruningRank(SHFactorPruning pruning)
+{
+	switch (pruning) {
+	case SHFactorPruning::SameK:
+		return 0;
+	case SHFactorPruning::Legacy:
+		return 1;
+	case SHFactorPruning::QTotal:
+		return 2;
+	}
+	return -1;
+}
+
+bool IsFactorPruningSubset(SHFactorPruning inner, SHFactorPruning outer)
+{
+	return FactorPruningRank(inner) <= FactorPruningRank(outer);
 }
 
 std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts,
@@ -597,21 +628,65 @@ public:
 			};
 			rec(0, lmax_, kmax_ - 1);
 		} else {
-			std::function<void(int, int)> rec = [&](int pos, int first_q_index) {
+			const bool same_k = factor_pruning_ == SHFactorPruning::SameK;
+			std::function<void(int, int, int)> rec =
+				[&](int pos, int first_q_index, int selected_k) {
 				if (pos == factor_count) {
 					callback(tuple);
 					return;
 				}
 				for (int q_index = first_q_index; q_index < static_cast<int>(q_.size()); ++q_index) {
-					if (!Allowed(q_index, body_order))
+					if (!Allowed(q_index, body_order)
+					    || (same_k && selected_k >= 0 && q_[q_index].k != selected_k))
 						continue;
 					tuple.push_back(q_index);
-					rec(pos + 1, q_index);
+					rec(pos + 1,
+					    q_index,
+					    selected_k >= 0 ? selected_k : q_[q_index].k);
 					tuple.pop_back();
 				}
 			};
-			rec(0, 0);
+			rec(0, 0, -1);
 		}
+	}
+
+	bool ScalarAllowedByFactorPruning(const ScalarSpec& spec,
+	                                  SHFactorPruning pruning) const
+	{
+		if (pruning == SHFactorPruning::QTotal)
+			return true;
+		const int qids[] = {spec.q0, spec.q1, spec.q2, spec.q3, spec.q4};
+		const int factor_count = spec.body_order - 1;
+		for (int i = 1; i < factor_count; ++i) {
+			const QIndex& previous = q_[qids[i - 1]];
+			const QIndex& current = q_[qids[i]];
+			if (current.l > previous.l || current.k > previous.k)
+				return false;
+		}
+		if (pruning == SHFactorPruning::Legacy)
+			return true;
+		const int k = q_[qids[0]].k;
+		for (int i = 1; i < factor_count; ++i)
+			if (q_[qids[i]].k != k)
+				return false;
+		return true;
+	}
+
+	std::vector<int> ScalarIndices(int body_order_max,
+	                              SHFactorPruning pruning,
+	                              std::vector<int>& body_counts) const
+	{
+		std::vector<int> indices;
+		body_counts.assign(body_order_max + 1, 0);
+		for (size_t i = 0; i < scalar_infos_.size(); ++i) {
+			const ScalarSpec& spec = scalar_infos_[i];
+			if (spec.body_order < 2 || spec.body_order > body_order_max
+			    || !ScalarAllowedByFactorPruning(spec, pruning))
+				continue;
+			indices.push_back(static_cast<int>(i));
+			++body_counts[spec.body_order];
+		}
+		return indices;
 	}
 
 	void AddScalarSpec(int body_order, int q0, int q1, int q2, int q3, int q4, int intermediate_l)
@@ -828,9 +903,16 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
-	const SHFactorPruning factor_pruning = ParseFactorPruning(opts);
+	const SHFactorPruning factor_pruning =
+		ParseFactorPruning(opts, "sh-factor-pruning", SHFactorPruning::QTotal);
 	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate") || multi_layer_gate;
+	const SHFactorPruning two_layer_gate_factor_pruning =
+		ParseFactorPruning(
+			opts, "two-layer-gate-factor-pruning", factor_pruning);
+	const SHFactorPruning second_layer_gate_factor_pruning =
+		ParseFactorPruning(
+			opts, "second-layer-gate-factor-pruning", two_layer_gate_factor_pruning);
 	const bool two_layer_gate_edge_l1 = HasOpt(opts, "two-layer-gate-edge-l1");
 	const bool requested_two_layer_gate_shared_radial =
 		HasOpt(opts, "two-layer-gate-shared-radial");
@@ -870,11 +952,21 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh supports --body-order from 2 to 6.");
 	if (HasOpt(opts, "two-layer-gate-body-order") && !two_layer_gate)
 		ERROR("--two-layer-gate-body-order requires --two-layer-gate.");
+	if (HasOpt(opts, "two-layer-gate-factor-pruning") && !two_layer_gate)
+		ERROR("--two-layer-gate-factor-pruning requires --two-layer-gate.");
+	if (two_layer_gate
+	    && !IsFactorPruningSubset(two_layer_gate_factor_pruning, factor_pruning))
+		ERROR("--two-layer-gate-factor-pruning must select a subgraph of --sh-factor-pruning.");
 	if (two_layer_gate
 	    && (two_layer_gate_body_order < 2 || two_layer_gate_body_order > body_order))
 		ERROR("--two-layer-gate-body-order must be in [2, --body-order].");
 	if (HasOpt(opts, "second-layer-gate-body-order") && !multi_layer_gate)
 		ERROR("--second-layer-gate-body-order requires --multi-layer-gate.");
+	if (HasOpt(opts, "second-layer-gate-factor-pruning") && !multi_layer_gate)
+		ERROR("--second-layer-gate-factor-pruning requires --multi-layer-gate.");
+	if (multi_layer_gate
+	    && !IsFactorPruningSubset(second_layer_gate_factor_pruning, factor_pruning))
+		ERROR("--second-layer-gate-factor-pruning must select a subgraph of --sh-factor-pruning.");
 	if (multi_layer_gate
 	    && (second_layer_gate_body_order < 2
 	        || second_layer_gate_body_order > body_order))
@@ -996,14 +1088,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << "}\n";
 	}
 	if (two_layer_gate) {
-		std::vector<int> gate_scalar_indices;
-		std::vector<int> gate_body_counts(two_layer_gate_body_order + 1, 0);
-		for (size_t i = 0; i < graph.scalar_infos_.size(); ++i)
-			if (graph.scalar_infos_[i].body_order >= 2
-			    && graph.scalar_infos_[i].body_order <= two_layer_gate_body_order) {
-				gate_scalar_indices.push_back(static_cast<int>(i));
-				++gate_body_counts[graph.scalar_infos_[i].body_order];
-			}
+		std::vector<int> gate_body_counts;
+		const std::vector<int> gate_scalar_indices =
+			graph.ScalarIndices(
+				two_layer_gate_body_order,
+				two_layer_gate_factor_pruning,
+				gate_body_counts);
 		if (gate_scalar_indices.empty())
 			ERROR("--two-layer-gate selected no SH scalar basis functions.");
 		for (int bo = 2; bo <= two_layer_gate_body_order; ++bo)
@@ -1092,16 +1182,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << "}\n";
 			}
 			if (multi_layer_gate) {
-				std::vector<int> second_gate_scalar_indices;
-				std::vector<int> second_gate_body_counts(
-					second_layer_gate_body_order + 1, 0);
-				for (size_t i = 0; i < graph.scalar_infos_.size(); ++i)
-					if (graph.scalar_infos_[i].body_order >= 2
-					    && graph.scalar_infos_[i].body_order
-					       <= second_layer_gate_body_order) {
-						second_gate_scalar_indices.push_back(static_cast<int>(i));
-						++second_gate_body_counts[graph.scalar_infos_[i].body_order];
-					}
+				std::vector<int> second_gate_body_counts;
+				const std::vector<int> second_gate_scalar_indices =
+					graph.ScalarIndices(
+						second_layer_gate_body_order,
+						second_layer_gate_factor_pruning,
+						second_gate_body_counts);
 				if (second_gate_scalar_indices.empty())
 					ERROR("--multi-layer-gate selected no second-layer SH scalar basis functions.");
 				for (int bo = 2; bo <= second_layer_gate_body_order; ++bo)

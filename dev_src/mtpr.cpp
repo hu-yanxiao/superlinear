@@ -396,6 +396,111 @@ std::vector<int> BuildFullEdgeL1SourceMomentBasesFromScalarInfo(
 	return builder.L1SourceMomentBases();
 }
 
+enum class GateScalarFactorPruning {
+	SameK,
+	Legacy,
+	QTotal
+};
+
+GateScalarFactorPruning ParseGateScalarFactorPruning(
+	const std::string& value,
+	const std::string& option_name)
+{
+	if (value == "same-k")
+		return GateScalarFactorPruning::SameK;
+	if (value == "legacy")
+		return GateScalarFactorPruning::Legacy;
+	if (value == "q-total" || value == "total")
+		return GateScalarFactorPruning::QTotal;
+	ERROR(option_name + " should be same-k, legacy, or q-total");
+	return GateScalarFactorPruning::QTotal;
+}
+
+std::pair<int, int> GateScalarQChannel(int q_index, int lmax, int kmax)
+{
+	if (q_index < 0 || q_index >= (lmax + 1) * kmax)
+		ERROR("SUS2-SH gate factor pruning requires complete sh_scalar_info q metadata");
+	return std::make_pair(
+		lmax - q_index / kmax,
+		kmax - 1 - q_index % kmax);
+}
+
+bool GateScalarMatchesFactorPruning(
+	const SHScalarInfo& spec,
+	int lmax,
+	int kmax,
+	GateScalarFactorPruning pruning)
+{
+	if (pruning == GateScalarFactorPruning::QTotal)
+		return true;
+	const int factor_count = spec.body_order - 1;
+	if (factor_count < 1 || factor_count > 5)
+		ERROR("SUS2-SH gate factor pruning found invalid scalar body order");
+	std::pair<int, int> previous =
+		GateScalarQChannel(spec.q[0], lmax, kmax);
+	const int selected_k = previous.second;
+	for (int factor = 1; factor < factor_count; ++factor) {
+		const std::pair<int, int> current =
+			GateScalarQChannel(spec.q[factor], lmax, kmax);
+		if (current.first > previous.first || current.second > previous.second)
+			return false;
+		if (pruning == GateScalarFactorPruning::SameK
+		    && current.second != selected_k)
+			return false;
+		previous = current;
+	}
+	return true;
+}
+
+std::vector<int> SelectGateScalarIndices(
+	const std::vector<SHScalarInfo>& scalar_infos,
+	int body_order_max,
+	int lmax,
+	int kmax,
+	const std::string& factor_pruning,
+	const std::string& option_name,
+	std::vector<int>* body_counts = nullptr)
+{
+	const GateScalarFactorPruning pruning =
+		ParseGateScalarFactorPruning(factor_pruning, option_name);
+	std::vector<int> indices;
+	if (body_counts != nullptr)
+		body_counts->assign(body_order_max + 1, 0);
+	for (int scalar = 0; scalar < static_cast<int>(scalar_infos.size()); ++scalar) {
+		const SHScalarInfo& info = scalar_infos[scalar];
+		if (info.body_order < 2 || info.body_order > body_order_max
+		    || !GateScalarMatchesFactorPruning(info, lmax, kmax, pruning))
+			continue;
+		indices.push_back(scalar);
+		if (body_counts != nullptr)
+			++(*body_counts)[info.body_order];
+	}
+	return indices;
+}
+
+std::string InferGateScalarFactorPruning(
+	const std::vector<SHScalarInfo>& scalar_infos,
+	const std::vector<int>& selected_indices,
+	int body_order_max,
+	int lmax,
+	int kmax)
+{
+	const char* modes[] = {"q-total", "legacy", "same-k"};
+	for (const char* mode : modes) {
+		const std::vector<int> expected = SelectGateScalarIndices(
+			scalar_infos,
+			body_order_max,
+			lmax,
+			kmax,
+			mode,
+			"SUS2-SH gate factor pruning");
+		if (expected == selected_indices)
+			return mode;
+	}
+	ERROR("SUS2-SH cannot infer the loaded gate factor-pruning mode");
+	return "q-total";
+}
+
 bool TwoLayerProfileEnabledOnRank0()
 {
 	const char* env = std::getenv("SUS2_SH_TWO_LAYER_PROFILE");
@@ -917,7 +1022,8 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
                                           bool independent_gate_radial_coeffs,
                                           const std::string& gate_site_mode,
                                           const std::string& gate_mode,
-                                          bool decoupled_gate_scaling)
+                                          bool decoupled_gate_scaling,
+                                          const std::string& gate_factor_pruning)
 {
 	if (!is_sh_potential_)
 		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
@@ -927,21 +1033,21 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 		ERROR("SUS2-SH gate upgrade requires an initialized radial basis");
 	int selected_gate_body_order = gate_body_order;
 	if (selected_gate_body_order <= 0)
-		selected_gate_body_order = std::min(sh_body_order_, sh_k_max_ + 1);
+		selected_gate_body_order = sh_body_order_;
 	if (selected_gate_body_order < 2 || selected_gate_body_order > sh_body_order_)
 		ERROR("--two-layer-gate-body-order must be in [2, sh_body_order]");
 
 	EnsureSHScalarInfoForGateUpgrade();
 
-	two_layer_gate_scalar_indices_.clear();
-	std::vector<int> gate_body_counts(selected_gate_body_order + 1, 0);
-	for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
-		const int body_order = sh_scalar_info_[scalar].body_order;
-		if (body_order >= 2 && body_order <= selected_gate_body_order) {
-			two_layer_gate_scalar_indices_.push_back(scalar);
-			++gate_body_counts[body_order];
-		}
-	}
+	std::vector<int> gate_body_counts;
+	two_layer_gate_scalar_indices_ = SelectGateScalarIndices(
+		sh_scalar_info_,
+		selected_gate_body_order,
+		sh_l_max_,
+		sh_k_max_,
+		gate_factor_pruning,
+		"--two-layer-gate-factor-pruning",
+		&gate_body_counts);
 	if (two_layer_gate_scalar_indices_.empty())
 		ERROR("--two-layer-gate selected no SH scalar basis functions");
 	for (int bo = 2; bo <= selected_gate_body_order; ++bo)
@@ -1052,7 +1158,8 @@ void MLMTPR::UpgradeTwoLayerGateToEdgeL1()
 
 void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 	int second_gate_body_order,
-	const std::string& second_gate_mode)
+	const std::string& second_gate_mode,
+	const std::string& second_gate_factor_pruning)
 {
 	if (!is_sh_potential_)
 		ERROR("--multi-layer-gate can only upgrade a SUS2-SH model");
@@ -1074,15 +1181,24 @@ void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 		ERROR("--second-layer-gate-body-order must be in [2, sh_body_order]");
 
 	EnsureSHScalarInfoForGateUpgrade();
-	second_layer_gate_scalar_indices_.clear();
-	std::vector<int> gate_body_counts(selected_gate_body_order + 1, 0);
-	for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
-		const int body_order = sh_scalar_info_[scalar].body_order;
-		if (body_order >= 2 && body_order <= selected_gate_body_order) {
-			second_layer_gate_scalar_indices_.push_back(scalar);
-			++gate_body_counts[body_order];
-		}
-	}
+	const std::string selected_factor_pruning =
+		second_gate_factor_pruning == "gate1"
+			? InferGateScalarFactorPruning(
+				sh_scalar_info_,
+				two_layer_gate_scalar_indices_,
+				two_layer_gate_body_order_max_,
+				sh_l_max_,
+				sh_k_max_)
+			: second_gate_factor_pruning;
+	std::vector<int> gate_body_counts;
+	second_layer_gate_scalar_indices_ = SelectGateScalarIndices(
+		sh_scalar_info_,
+		selected_gate_body_order,
+		sh_l_max_,
+		sh_k_max_,
+		selected_factor_pruning,
+		"--second-layer-gate-factor-pruning",
+		&gate_body_counts);
 	if (second_layer_gate_scalar_indices_.empty())
 		ERROR("--multi-layer-gate selected no SH scalar basis functions");
 	for (int bo = 2; bo <= selected_gate_body_order; ++bo)
@@ -1104,6 +1220,34 @@ void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 	BuildSecondLayerGateProductProgram();
 	BuildSecondLayerGateBodyOrderBuckets();
 	ClearTwoLayerEdgePrimitiveCache();
+}
+
+bool MLMTPR::TwoLayerGateMatchesFactorPruning(
+	const std::string& factor_pruning) const
+{
+	if (!two_layer_gate_enabled_ || !has_sh_scalar_info_)
+		return false;
+	return two_layer_gate_scalar_indices_ == SelectGateScalarIndices(
+		sh_scalar_info_,
+		two_layer_gate_body_order_max_,
+		sh_l_max_,
+		sh_k_max_,
+		factor_pruning,
+		"--two-layer-gate-factor-pruning");
+}
+
+bool MLMTPR::SecondLayerGateMatchesFactorPruning(
+	const std::string& factor_pruning) const
+{
+	if (!multi_layer_gate_enabled_ || !has_sh_scalar_info_)
+		return false;
+	return second_layer_gate_scalar_indices_ == SelectGateScalarIndices(
+		sh_scalar_info_,
+		second_layer_gate_body_order_max_,
+		sh_l_max_,
+		sh_k_max_,
+		factor_pruning,
+		"--second-layer-gate-factor-pruning");
 }
 
 int MLMTPR::TwoLayerGateMuBodyOrder(int mu) const

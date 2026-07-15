@@ -43,6 +43,8 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 		"body4-l-max",
 		"body5-l-max",
 		"body6-l-max",
+		"sh-factor-pruning",
+		"write-sh-scalar-info",
 		"cutoff",
 		"max-dist",
 		"min-dist",
@@ -57,12 +59,14 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 			"inline-sh-model",
 					"two-layer-gate",
 					"two-layer-gate-body-order",
+					"two-layer-gate-factor-pruning",
 					"two-layer-gate-mode",
 						"two-layer-gate-site-mode",
 						"two-layer-gate-shared-radial",
 						"two-layer-gate-edge-l1",
 						"multi-layer-gate",
 						"second-layer-gate-body-order",
+						"second-layer-gate-factor-pruning",
 						"second-layer-gate-mode",
 						"two-layer-residual"
 			};
@@ -637,14 +641,17 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --inline-sh-model=<string>: inline SUS2-SH model path. If the file exists,\n"
 			"                                continue training from it; otherwise create it\n"
 			"                                from the init-sh options.\n"
-					"    --two-layer-gate: initialize the exact body-order k+1 SUS2-SH mu gate.\n"
-					"    --two-layer-gate-body-order=<int>: rejected by mu-body-order gate models.\n"
+					"    --sh-factor-pruning=same-k|legacy|q-total: outer scalar graph. Default=q-total\n"
+					"    --two-layer-gate: initialize the first SUS2-SH mu gate.\n"
+					"    --two-layer-gate-body-order=<int>: gate1 scalar body-order cutoff. Default=--body-order\n"
+					"    --two-layer-gate-factor-pruning=same-k|legacy|q-total: gate1 scalar subgraph. Default=outer\n"
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
 					"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
 					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
 					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
 					"    --multi-layer-gate: enable release3 second gate on the first gate endpoint coefficients.\n"
 					"    --second-layer-gate-body-order=<int>: second gate scalar body-order cutoff. Default=--body-order\n"
+					"    --second-layer-gate-factor-pruning=same-k|legacy|q-total: gate2 scalar subgraph. Default=gate1\n"
 					"    --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: second gate scalar parameterization.\n"
 							"    --two-layer-residual: rejected by mu-body-order gate models.\n"
 			"    --two-layer-residual-staged: train residual two-layer model in A(E0), B(E1 residual), C(full) phases.\n"

@@ -459,6 +459,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"body4-l-max",
 		"body5-l-max",
 		"body6-l-max",
+		"sh-factor-pruning",
+		"write-sh-scalar-info",
 		"cutoff",
 		"max-dist",
 		"min-dist",
@@ -473,6 +475,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 				"inline-sh-model",
 					"two-layer-gate",
 							"two-layer-gate-body-order",
+							"two-layer-gate-factor-pruning",
 							"two-layer-gate-mode",
 							"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
@@ -481,7 +484,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 						"two-layer-gate-full-decoupled",
 						"two-layer-gate-edge-l1",
 						"multi-layer-gate",
-						"second-layer-gate-body-order",
+							"second-layer-gate-body-order",
+							"second-layer-gate-factor-pruning",
 						"second-layer-gate-mode",
 						"two-layer-residual"
 			};
@@ -491,6 +495,12 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			return true;
 	}
 	return false;
+}
+
+bool IsSHFactorPruningValue(const std::string& value)
+{
+	return value == "same-k" || value == "legacy"
+	    || value == "q-total" || value == "total";
 }
 
 std::string InlineSHModelFilename(const std::map<std::string, std::string>& opts)
@@ -1928,6 +1938,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
+	const bool custom_two_layer_gate_factor_pruning =
+		opts["two-layer-gate-factor-pruning"] != "";
+	const std::string two_layer_gate_factor_pruning =
+		custom_two_layer_gate_factor_pruning
+			? opts["two-layer-gate-factor-pruning"]
+			: "q-total";
+	if (!IsSHFactorPruningValue(two_layer_gate_factor_pruning))
+		ERROR("--two-layer-gate-factor-pruning should be same-k, legacy, or q-total");
 	bool custom_second_layer_gate_mode = false;
 	std::string second_layer_gate_mode = "mu-body-linear-combo";
 	if (opts["second-layer-gate-mode"] != "") {
@@ -1939,6 +1957,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (second_layer_gate_mode != "mu-body-linear-combo"
 	    && second_layer_gate_mode != "mu-scalar-full")
 		ERROR("--second-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
+	const bool custom_second_layer_gate_factor_pruning =
+		opts["second-layer-gate-factor-pruning"] != "";
+	const std::string second_layer_gate_factor_pruning =
+		custom_second_layer_gate_factor_pruning
+			? opts["second-layer-gate-factor-pruning"]
+			: "gate1";
+	if (custom_second_layer_gate_factor_pruning
+	    && !IsSHFactorPruningValue(second_layer_gate_factor_pruning))
+		ERROR("--second-layer-gate-factor-pruning should be same-k, legacy, or q-total");
 	int requested_second_layer_gate_body_order = -1;
 	if (opts["second-layer-gate-body-order"] != "") {
 		requested_second_layer_gate_body_order =
@@ -2013,6 +2040,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
 	if ((custom_second_layer_gate_mode
+	     || custom_second_layer_gate_factor_pruning
 	     || requested_second_layer_gate_body_order > 0)
 	    && !requested_multi_layer_gate
 	    && !mtpr.MultiLayerGateEnabled())
@@ -2033,6 +2061,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (custom_two_layer_gate_mode && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
 		ERROR("--two-layer-gate-mode requires --two-layer-gate when upgrading a plain SH model");
+	if (custom_two_layer_gate_factor_pruning && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-factor-pruning requires --two-layer-gate when upgrading a plain SH model");
 	if (requested_two_layer_gate && !mtpr.TwoLayerGateEnabled()) {
 		if (!mtpr.IsSHPotential())
 			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
@@ -2048,7 +2079,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                                  plain_to_gate_independent_radial,
 		                                  two_layer_gate_site_mode,
 		                                  two_layer_gate_mode,
-		                                  requested_two_layer_gate_decoupled_scaling);
+		                                  requested_two_layer_gate_decoupled_scaling,
+		                                  two_layer_gate_factor_pruning);
 		plain_to_gate_upgrade = true;
 		plain_to_gate_disabled_controls = do_lin || do_lin_rescale || fine_tune;
 		do_lin = false;
@@ -2077,9 +2109,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (mtpr.TwoLayerGateEdgeL1Enabled())
 			ERROR("--multi-layer-gate is not compatible with two-layer gate edge-L1 models");
 		if (!mtpr.MultiLayerGateEnabled()) {
+			const std::string inherited_second_layer_factor_pruning =
+				custom_second_layer_gate_factor_pruning
+					? second_layer_gate_factor_pruning
+				: (plain_to_gate_upgrade
+					? two_layer_gate_factor_pruning
+					: "gate1");
 			mtpr.UpgradeTwoLayerGateToMultiLayerGate(
 				requested_second_layer_gate_body_order,
-				second_layer_gate_mode);
+				second_layer_gate_mode,
+				inherited_second_layer_factor_pruning);
 			multi_layer_gate_upgrade = true;
 			multi_layer_gate_disabled_controls =
 				do_lin || do_lin_rescale || fine_tune;
@@ -2105,6 +2144,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		            && !mtpr.TwoLayerGateUsesFullScalarWeights())))
 			ERROR("--two-layer-gate-mode does not match the loaded two-layer gate model");
 	}
+	if (custom_two_layer_gate_factor_pruning) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-factor-pruning requires a two-layer gate model or --two-layer-gate");
+		if (!mtpr.TwoLayerGateMatchesFactorPruning(two_layer_gate_factor_pruning))
+			ERROR("--two-layer-gate-factor-pruning does not match the loaded two-layer gate model");
+	}
 	if (custom_second_layer_gate_mode) {
 		if (!mtpr.MultiLayerGateEnabled())
 			ERROR("--second-layer-gate-mode requires a release3 multi-layer gate model or --multi-layer-gate");
@@ -2114,6 +2159,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		        || (second_layer_gate_mode == "mu-scalar-full"
 		            && !mtpr.SecondLayerGateUsesFullScalarWeights())))
 			ERROR("--second-layer-gate-mode does not match the loaded release3 multi-layer gate model");
+	}
+	if (custom_second_layer_gate_factor_pruning) {
+		if (!mtpr.MultiLayerGateEnabled())
+			ERROR("--second-layer-gate-factor-pruning requires a release3 multi-layer gate model or --multi-layer-gate");
+		if (!mtpr.SecondLayerGateMatchesFactorPruning(second_layer_gate_factor_pruning))
+			ERROR("--second-layer-gate-factor-pruning does not match the loaded release3 multi-layer gate model");
 	}
 	if (requested_second_layer_gate_body_order > 0) {
 		if (!mtpr.MultiLayerGateEnabled())

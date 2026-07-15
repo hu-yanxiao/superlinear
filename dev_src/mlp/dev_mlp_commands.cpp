@@ -839,8 +839,6 @@ public:
 			two_layer_gate_weights_[q_probe] = probe_weight;
 			regression_coeffs[TwoLayerGateWeightIndex(q_probe)] = probe_weight;
 			for (int mu = 0; mu < radial_func_count; ++mu) {
-				if (TwoLayerGateMuBodyOrder(mu) != body_order)
-					continue;
 				const int local_index =
 					mu * TwoLayerGateBodyOrderCount() + (body_order - 2);
 				two_layer_gate_body_mix_weights_[local_index] = 1.0;
@@ -866,9 +864,7 @@ public:
 					CalcTwoLayerGateScalarValuesOnly(nbh, scalar_values);
 					const double selected_scalar = scalar_values[q_probe];
 					for (int mu = 0; mu < radial_func_count; ++mu) {
-						const int mu_body_order = TwoLayerGateMuBodyOrder(mu);
-						const double expected =
-							mu_body_order == body_order ? probe_weight * selected_scalar : 0.0;
+						const double expected = probe_weight * selected_scalar;
 						const double actual =
 							two_layer_gate_values_[static_cast<size_t>(atom_index) *
 							                       radial_func_count + mu];
@@ -884,8 +880,7 @@ public:
 							result.worst_atom = atom_index;
 							result.worst_mu = mu;
 						}
-						if (mu_body_order == body_order
-						    && std::abs(expected) > 1.0e-14)
+						if (std::abs(expected) > 1.0e-14)
 							saw_nonzero_matching_channel = true;
 						++result.checked_values;
 					}
@@ -1952,7 +1947,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 		BEGIN_COMMAND("check-two-layer-gate-mu-body-order-dev",
-			"checks exact body-order routing for mu-dependent two-layer gate values",
+			"checks every body bucket in mu-dependent two-layer gate linear combinations",
 			"mlp-sus2 check-two-layer-gate-mu-body-order-dev model.mtp cfg --max-configs=1 --max-atoms=1 --probe-weight=0.5 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
 		) {
 			if (args.size() != 2) {
@@ -2080,8 +2075,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"writes an untrained SUS2-SH model",
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 			"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
-				"Options: --sh-factor-pruning=legacy|q-total (default=legacy), --write-sh-scalar-info,\n"
+				"Options: --sh-factor-pruning=same-k|legacy|q-total (default=q-total), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
+				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (default=outer),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
 					"         --two-layer-gate-shared-radial (default for gate models),\n"
@@ -2089,6 +2085,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
 				"         --multi-layer-gate (release3 second gate on first-gate endpoint coefficients),\n"
 				"         --second-layer-gate-body-order=<int> (default=--body-order),\n"
+				"         --second-layer-gate-factor-pruning=same-k|legacy|q-total (default=gate1),\n"
 				"         --second-layer-gate-mode=mu-body-linear-combo|mu-scalar-full,\n"
 				"         --two-layer-residual (rejected by mu-body-order gate models),\n"
 			"         --zbl-elements=<...>, --zbl-inner=<r>, --zbl-outer=<r>,\n"

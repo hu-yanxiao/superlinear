@@ -50,7 +50,7 @@ grep -q "two_layer_gate_body_order_max = 4" "$low_body_model"
   --two-layer-gate
 
 grep -q "two_layer_gate_mode = mu-body-linear-combo" "$model"
-grep -q "two_layer_gate_body_order_max = 5" "$model"
+grep -q "two_layer_gate_body_order_max = 6" "$model"
 grep -q "two_layer_gate_site_mode = neighbor" "$model"
 if grep -q "two_layer_gate_bias" "$model"; then
   echo "mu-body-order gate model should not save two_layer_gate_bias" >&2
@@ -106,11 +106,9 @@ if not indices:
 
 selected = [body_orders[i] for i in indices]
 selected_set = set(selected)
-if selected_set != {2, 3, 4, 5}:
-    raise SystemExit(f"expected selected body orders {{2,3,4,5}}, got {sorted(selected_set)}")
-if any(order == 6 for order in selected):
-    raise SystemExit("body-order 6 scalar was incorrectly selected for k-max=4 gate")
-for order in range(2, 6):
+if selected_set != {2, 3, 4, 5, 6}:
+    raise SystemExit(f"expected selected body orders {{2,3,4,5,6}}, got {sorted(selected_set)}")
+for order in range(2, 7):
     if order not in selected_set:
         raise SystemExit(f"missing gate scalar body-order {order}")
 

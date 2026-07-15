@@ -100,7 +100,7 @@ Main SH topology options:
 | `--min-dist=<double>` | Initial radial scaling reference. It does not define a hard lower interaction cutoff. |
 | `--radial-basis-size=<int>` | Number of primitive radial basis functions used to form each `R_mu`. |
 | `--radial-basis-type=<name>` | Supported model-generation types: `RBChebyshev_sss`, `RBChebyshev_sss_rational`, `RBLaguerre_log1p`, `RBJacobi_sss`; LAMMPS table variants use the same model fields with `_lmp` names. |
-| `--sh-factor-pruning=legacy|q-total` | Scalar graph pruning rule. `legacy` is the default historical mode and sorts factor tuples by separate monotonic `l` and `k` scans with `l <= body_l_max`; `q-total` sorts/uniquifies by the combined `q=(l,k)` channel index instead, while still applying the body-specific `l` cutoff. |
+| `--sh-factor-pruning=same-k|legacy|q-total` | Outer scalar graph pruning rule, default `q-total`. `q-total` keeps the complete total-ordered `q=(l,k)` tuples; `legacy` additionally requires separate monotonic `l` and `k`; `same-k` keeps complete angular coupling but requires every factor in a scalar to use one common radial channel `k`. Thus `same-k` is a subgraph of `legacy`, which is a subgraph of `q-total`. |
 | `--write-sh-scalar-info` | Explicitly save scalar metadata; this is written automatically for gate models. |
 | `--potential-name=<string>` | Name written into the `.mtp` file. |
 | `--scaling=<double>` | Initial global scaling written to the model, default `0.01`. |
@@ -197,7 +197,6 @@ bin/mlp-sus2 train train.cfg --init-sh \
   --radial-basis-size=10 \
   --radial-basis-type=RBLaguerre_log1p \
   --two-layer-gate \
-  --two-layer-gate-tanh-amplitude=0.8 \
   --energy-weight=1 \
   --force-weight=0.01 \
   --stress-weight=0.001 \
@@ -222,10 +221,13 @@ Gate-specific options:
 | Option | Meaning |
 | --- | --- |
 | `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
-| `--two-layer-gate-body-order=<int>` | Not supported in mu-body-order mode; passing it explicitly is an error. The gate scalar body orders are fixed by `k_internal + 2`. |
-| `--two-layer-gate-site-mode=neighbor|double` | Select neighbor-only gate factors or the double-site gate \(g_i g_j\); default `neighbor`. |
+| `--two-layer-gate-body-order=<int>` | Gate1 scalar body-order cutoff in `[2, --body-order]`; default is the outer body order. |
+| `--two-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate1 scalar subgraph. It defaults to the outer mode and cannot be richer than `--sh-factor-pruning`. |
+| `--two-layer-gate-site-mode=neighbor` | Gate acts on neighbor endpoint `j`; `neighbor` is the only release mode. |
 | `--two-layer-gate-shared-radial` | Compatibility switch for the default behavior: gate models use an independent first-layer radial contraction table. |
-| `--two-layer-gate-tanh-amplitude=<double>` | Bounded additive amplitude `A` in `[1 + A tanh(a f)]`; default `0.8`, accepted range `[0,1]`. |
+| `--second-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate2 scalar subgraph for `--multi-layer-gate`. It defaults to gate1 and cannot be richer than the outer mode. |
+| `--multi-layer-gate` | Add release3 gate2 on the gate1 endpoint coefficients. |
+| `--second-layer-gate-body-order=<int>` | Gate2 scalar body-order cutoff in `[2, --body-order]`; default is the outer body order. |
 | `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |
 | `--two-layer-residual` | Experimental residual two-layer mode `E=E0+E1`; not the current production gate path. |
 | `--two-layer-residual-staged` | Stage residual training into A/B/C phases; requires a residual model and positive stage step counts. |
@@ -233,9 +235,10 @@ Gate-specific options:
 | `--stage-b-steps=<int>` | BFGS steps for residual stage B. |
 | `--stage-c-steps=<int>` | BFGS steps for residual stage C. |
 
-For current production work, use `--two-layer-gate`
-with the tanh additive form above. Legacy direct
-gate modes are retained only for model compatibility and testing.
+For current production work, use `--two-layer-gate`; add
+`--multi-layer-gate` only when gate2 is required. The saved scalar index lists
+fully define each gate subgraph, so inference and LAMMPS readers do not need a
+runtime pruning-mode branch.
 
 ## Effective Pair Energy CLI
 
