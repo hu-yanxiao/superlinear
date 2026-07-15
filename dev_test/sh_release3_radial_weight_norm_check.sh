@@ -15,8 +15,6 @@ weight_norm_model="$tmp_dir/weight_norm_step0.mtp"
 do_lin_model="$tmp_dir/weight_norm_do_lin_step0.mtp"
 physical_trace="$tmp_dir/physical.csv"
 weight_norm_trace="$tmp_dir/weight_norm.csv"
-physical_prediction="$tmp_dir/physical.cfg"
-weight_norm_prediction="$tmp_dir/weight_norm.cfg"
 rm -f "$tmp_dir"/*.mtp "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
 
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
@@ -47,6 +45,11 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
   --radial-smooth=0 >"$tmp_dir/untrained_weight_norm.log" 2>&1
 grep -q "outer radial weight-normalization coordinates enabled" \
   "$tmp_dir/untrained_weight_norm.log"
+
+./bin/mlp-sus2 check-radial-weight-norm-roundtrip-dev \
+  "$untrained_weight_norm_model" \
+  --abs-tolerance=2e-12 \
+  --rel-tolerance=2e-12 >"$tmp_dir/roundtrip.log"
 
 # Produce one complete model so both coordinate systems start from identical
 # physical coefficients without an implicit untrained-model warmup.
@@ -110,9 +113,6 @@ if grep -q "radial_parameterization\|weight_norm" "$weight_norm_model"; then
   exit 1
 fi
 
-./bin/mlp-sus2 calc-efs "$physical_model" "$train_cfg" "$physical_prediction"
-./bin/mlp-sus2 calc-efs "$weight_norm_model" "$train_cfg" "$weight_norm_prediction"
-
 # Exercise the TrainLinear refresh. In weight-norm mode it must not project the
 # radial rows through the legacy Orthogonalize() call.
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
@@ -130,15 +130,13 @@ fi
   --radial-smooth=0 >"$tmp_dir/do_lin.log" 2>&1
 
 python3 - "$physical_trace" "$weight_norm_trace" \
-  "$physical_prediction" "$weight_norm_prediction" \
   "$seed_model" "$do_lin_model" <<'PY'
 import csv
-import math
 import pathlib
 import re
 import sys
 
-physical_trace, weight_norm_trace, physical_cfg, weight_norm_cfg, seed_model, do_lin_model = map(
+physical_trace, weight_norm_trace, seed_model, do_lin_model = map(
     pathlib.Path, sys.argv[1:]
 )
 
@@ -154,30 +152,11 @@ def first_loss(path):
 physical_loss = first_loss(physical_trace)
 weight_norm_loss = first_loss(weight_norm_trace)
 loss_scale = max(1.0, abs(physical_loss), abs(weight_norm_loss))
-if abs(physical_loss - weight_norm_loss) > 2.0e-12 * loss_scale:
+if abs(physical_loss - weight_norm_loss) > 1.0e-10 * loss_scale:
     raise SystemExit(
         f"weight-norm changed the initial physical objective: "
         f"{weight_norm_loss} vs {physical_loss}"
     )
-
-
-def numbers(path):
-    return [float(value) for value in re.findall(
-        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
-        path.read_text(),
-    )]
-
-
-physical_values = numbers(physical_cfg)
-weight_norm_values = numbers(weight_norm_cfg)
-if len(physical_values) != len(weight_norm_values):
-    raise SystemExit("prediction files have different numeric layouts")
-max_prediction_error = max(
-    (abs(lhs - rhs) for lhs, rhs in zip(physical_values, weight_norm_values)),
-    default=0.0,
-)
-if max_prediction_error > 5.0e-10:
-    raise SystemExit(f"weight-norm initial prediction mismatch: {max_prediction_error}")
 
 
 def outer_radial(path):

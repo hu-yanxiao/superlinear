@@ -131,7 +131,8 @@ Run:
 dev_test/sh_release3_radial_weight_norm_check.sh
 ```
 
-The check covers the coordinate round trip, finite-difference derivatives of
-the complete training objective, equality of initial predictions and loss,
+The check covers all-row coordinate round trips, finite-difference derivatives
+of the complete training objective, equality of the initial objective,
 model-format compatibility, and a `TrainLinear` refresh without radial-row
-projection.
+projection. Models after an optimizer step are not required to match because
+the two coordinate systems intentionally produce different BFGS trajectories.

@@ -1679,6 +1679,74 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			exit(1);
 	} END_COMMAND;
 
+	BEGIN_COMMAND("check-radial-weight-norm-roundtrip-dev",
+		"checks all outer radial weight-normalization coordinate round trips",
+		"mlp-sus2 check-radial-weight-norm-roundtrip-dev model.mtp --abs-tolerance=1e-12 --rel-tolerance=1e-12\n"
+	) {
+		if (args.size() != 1) {
+			std::cout << "mlp-sus2 check-radial-weight-norm-roundtrip-dev: model argument is required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		if (mtpr.p_RadialBasis == nullptr)
+			ERROR("Radial weight-normalization round-trip check requires an initialized radial basis.");
+		const double abs_tolerance =
+			ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-12);
+		const double rel_tolerance =
+			ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-12);
+		const int row_size = mtpr.p_RadialBasis->rb_size;
+		std::vector<double> coordinates(row_size, 0.0);
+		std::vector<double> reconstructed(row_size, 0.0);
+		double worst_abs_err = 0.0;
+		double max_rel_err = 0.0;
+		double max_direction_radius = 0.0;
+		int worst_mu = -1;
+		int worst_xi = -1;
+		bool tolerance_failed = false;
+		for (int mu = 0; mu < mtpr.radial_func_count; ++mu) {
+			const int row_begin =
+				mtpr.RadialCoeffOffset() + mu * mtpr.RadialCoeffBlockSize();
+			const double* physical = mtpr.Coeff() + row_begin;
+			if (!sus2::RadialWeightNormChart::Pack(
+			        physical, row_size, coordinates.data())
+			    || !sus2::RadialWeightNormChart::Unpack(
+			        coordinates.data(), row_size, reconstructed.data()))
+				ERROR("Cannot round-trip an outer radial weight-normalization row.");
+			double direction_radius_sq = 0.0;
+			for (int xi = 1; xi < row_size; ++xi)
+				direction_radius_sq += coordinates[xi] * coordinates[xi];
+			max_direction_radius = std::max(
+				max_direction_radius, std::sqrt(direction_radius_sq));
+			for (int xi = 0; xi < row_size; ++xi) {
+				const double abs_err = std::abs(reconstructed[xi] - physical[xi]);
+				const double scale = std::max(
+					1.0e-300, std::max(std::abs(reconstructed[xi]), std::abs(physical[xi])));
+				const double rel_err = abs_err / scale;
+				max_rel_err = std::max(max_rel_err, rel_err);
+				if (abs_err > abs_tolerance && rel_err > rel_tolerance)
+					tolerance_failed = true;
+				if (abs_err > worst_abs_err) {
+					worst_abs_err = abs_err;
+					worst_mu = mu;
+					worst_xi = xi;
+				}
+			}
+		}
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "rows=" << mtpr.radial_func_count
+			          << " row_size=" << row_size
+			          << " max_direction_radius=" << max_direction_radius
+			          << " worst_mu=" << worst_mu
+			          << " worst_xi=" << worst_xi
+			          << " max_abs_err=" << worst_abs_err
+			          << " max_rel_err=" << max_rel_err
+			          << std::endl;
+		}
+		if (tolerance_failed)
+			exit(1);
+	} END_COMMAND;
+
 	BEGIN_COMMAND("check-radial-weight-norm-gradient-dev",
 		"checks the outer radial weight-normalization loss gradient",
 		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
