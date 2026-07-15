@@ -8,10 +8,15 @@ namespace sus2 {
 
 // A non-redundant norm/direction chart for radial rows whose first coefficient
 // is constrained to remain positive. Coordinate 0 is log(||c||); the remaining
-// coordinates are c_i / c_0.
+// coordinates map R^(n-1) smoothly onto the open positive hemisphere.
 class RadialWeightNormChart
 {
 private:
+	static double HalfPi()
+	{
+		return 1.57079632679489661923;
+	}
+
 	static double StableNorm(const double* values, int count)
 	{
 		double scale = 0.0;
@@ -32,25 +37,15 @@ private:
 		return scale == 0.0 ? 0.0 : scale * std::sqrt(sumsq);
 	}
 
-	static bool DirectionScale(const double* coordinates,
-	                           int count,
-	                           double& inverse_direction_norm)
+	static bool DirectionRadius(const double* coordinates,
+	                            int count,
+	                            double& radius)
 	{
-		double scale = 1.0;
-		for (int i = 1; i < count; ++i) {
+		for (int i = 1; i < count; ++i)
 			if (!std::isfinite(coordinates[i]))
 				return false;
-			scale = std::max(scale, std::abs(coordinates[i]));
-		}
-
-		double scaled_sum = 1.0 / (scale * scale);
-		for (int i = 1; i < count; ++i) {
-			const double value = coordinates[i] / scale;
-			scaled_sum += value * value;
-		}
-		inverse_direction_norm = 1.0 / (scale * std::sqrt(scaled_sum));
-		return std::isfinite(inverse_direction_norm)
-		    && inverse_direction_norm > 0.0;
+		radius = StableNorm(coordinates + 1, count - 1);
+		return std::isfinite(radius);
 	}
 
 public:
@@ -60,15 +55,36 @@ public:
 			return false;
 		if (!std::isfinite(physical[0]) || physical[0] <= 0.0)
 			return false;
+		for (int i = 1; i < count; ++i)
+			if (!std::isfinite(physical[i]))
+				return false;
 
 		const double norm = StableNorm(physical, count);
 		if (!std::isfinite(norm) || norm <= 0.0)
 			return false;
+		const double perpendicular_norm = StableNorm(physical + 1, count - 1);
+		const double theta = std::atan2(perpendicular_norm, physical[0]);
+		const double hemisphere_fraction = theta / HalfPi();
+		if (!std::isfinite(hemisphere_fraction)
+		    || hemisphere_fraction < 0.0
+		    || hemisphere_fraction >= 1.0)
+			return false;
+		const double direction_radius = 0.5 * (
+			std::log1p(hemisphere_fraction)
+			- std::log1p(-hemisphere_fraction));
+		if (!std::isfinite(direction_radius))
+			return false;
+
 		coordinates[0] = std::log(norm);
-		for (int i = 1; i < count; ++i) {
-			coordinates[i] = physical[i] / physical[0];
-			if (!std::isfinite(coordinates[i]))
-				return false;
+		if (perpendicular_norm == 0.0) {
+			for (int i = 1; i < count; ++i)
+				coordinates[i] = 0.0;
+		} else {
+			for (int i = 1; i < count; ++i) {
+				coordinates[i] = direction_radius * physical[i] / perpendicular_norm;
+				if (!std::isfinite(coordinates[i]))
+					return false;
+			}
 		}
 		return std::isfinite(coordinates[0]);
 	}
@@ -79,17 +95,27 @@ public:
 		    || !std::isfinite(coordinates[0]))
 			return false;
 
-		double inverse_direction_norm = 0.0;
-		if (!DirectionScale(coordinates, count, inverse_direction_norm))
+		double direction_radius = 0.0;
+		if (!DirectionRadius(coordinates, count, direction_radius))
 			return false;
 		const double norm = std::exp(coordinates[0]);
-		physical[0] = norm * inverse_direction_norm;
+		const double theta = HalfPi() * std::tanh(direction_radius);
+		physical[0] = norm * std::cos(theta);
 		if (!std::isfinite(physical[0]) || physical[0] <= 0.0)
 			return false;
-		for (int i = 1; i < count; ++i) {
-			physical[i] = physical[0] * coordinates[i];
-			if (!std::isfinite(physical[i]))
+		if (direction_radius == 0.0) {
+			for (int i = 1; i < count; ++i)
+				physical[i] = 0.0;
+		} else {
+			const double perpendicular_scale =
+				norm * std::sin(theta) / direction_radius;
+			if (!std::isfinite(perpendicular_scale))
 				return false;
+			for (int i = 1; i < count; ++i) {
+				physical[i] = perpendicular_scale * coordinates[i];
+				if (!std::isfinite(physical[i]))
+					return false;
+			}
 		}
 		return true;
 	}
@@ -105,11 +131,9 @@ public:
 		    || count <= 0 || !std::isfinite(physical[0]) || physical[0] <= 0.0)
 			return false;
 
-		double inverse_direction_norm = 0.0;
-		if (!DirectionScale(coordinates, count, inverse_direction_norm))
+		double direction_radius = 0.0;
+		if (!DirectionRadius(coordinates, count, direction_radius))
 			return false;
-		const double inverse_direction_norm_sq =
-			inverse_direction_norm * inverse_direction_norm;
 
 		double radial_dot = 0.0;
 		for (int i = 0; i < count; ++i) {
@@ -118,10 +142,52 @@ public:
 			radial_dot += physical_gradient[i] * physical[i];
 		}
 		coordinate_gradient[0] = radial_dot;
-		for (int i = 1; i < count; ++i) {
-			coordinate_gradient[i] =
-				physical[0] * physical_gradient[i]
-				- coordinates[i] * inverse_direction_norm_sq * radial_dot;
+
+		const double norm = StableNorm(physical, count);
+		if (!std::isfinite(norm) || norm <= 0.0)
+			return false;
+		const double alpha = HalfPi();
+		if (direction_radius < 1.0e-4) {
+			double direction_dot = 0.0;
+			for (int i = 1; i < count; ++i)
+				direction_dot += physical_gradient[i] * coordinates[i];
+			const double perpendicular_scale = alpha;
+			const double first_response_scale = alpha * alpha;
+			const double curvature_scale =
+				-alpha * (2.0 + alpha * alpha) / 3.0;
+			for (int i = 1; i < count; ++i) {
+				coordinate_gradient[i] = norm * (
+					perpendicular_scale * physical_gradient[i]
+					- physical_gradient[0] * first_response_scale * coordinates[i]
+					+ curvature_scale * direction_dot * coordinates[i]);
+			}
+		} else {
+			const double tanh_radius = std::tanh(direction_radius);
+			const double theta = alpha * tanh_radius;
+			const double sin_theta = std::sin(theta);
+			const double cos_theta = std::cos(theta);
+			const double exp_minus_two_radius =
+				std::exp(-2.0 * direction_radius);
+			const double one_plus_exp = 1.0 + exp_minus_two_radius;
+			const double theta_derivative = alpha * 4.0 * exp_minus_two_radius
+				/ (one_plus_exp * one_plus_exp);
+			double perpendicular_gradient_dot_direction = 0.0;
+			for (int i = 1; i < count; ++i)
+				perpendicular_gradient_dot_direction +=
+					physical_gradient[i] * coordinates[i] / direction_radius;
+			const double radial_response =
+				-physical_gradient[0] * sin_theta
+				+ perpendicular_gradient_dot_direction * cos_theta;
+			const double tangential_scale = sin_theta / direction_radius;
+			for (int i = 1; i < count; ++i) {
+				const double direction_component =
+					coordinates[i] / direction_radius;
+				coordinate_gradient[i] = norm * (
+					theta_derivative * radial_response * direction_component
+					+ tangential_scale * (
+						physical_gradient[i]
+						- perpendicular_gradient_dot_direction * direction_component));
+			}
 		}
 		for (int i = 0; i < count; ++i)
 			if (!std::isfinite(coordinate_gradient[i]))

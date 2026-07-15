@@ -92,7 +92,7 @@ bool RunAllTestsDev(bool is_parallel)
 
 TEST("radial weight-normalization chart and gradient") {
 	const int count = 5;
-	double physical[count] = {2.0, -3.0, 0.5, 4.0, -1.25};
+	double physical[count] = {0.01, -3.0, 0.5, 4.0, -1.25};
 	double coordinates[count] = {};
 	double reconstructed[count] = {};
 	if (!sus2::RadialWeightNormChart::Pack(physical, count, coordinates))
@@ -138,6 +138,26 @@ TEST("radial weight-normalization chart and gradient") {
 		const double scale = std::max(1.0, std::abs(finite_difference));
 		if (std::abs(finite_difference - coordinate_gradient[coord]) > 2.0e-8 * scale)
 			FAIL("radial weight-normalization gradient mismatch")
+	}
+
+	double axial_physical[count] = {2.0, 0.0, 0.0, 0.0, 0.0};
+	double axial_coordinates[count] = {};
+	double axial_gradient[count] = {0.5, -1.0, 2.0, -3.0, 4.0};
+	double axial_coordinate_gradient[count] = {};
+	if (!sus2::RadialWeightNormChart::Pack(
+	        axial_physical, count, axial_coordinates)
+	    || !sus2::RadialWeightNormChart::PullbackGradient(
+	        axial_physical,
+	        axial_coordinates,
+	        axial_gradient,
+	        count,
+	        axial_coordinate_gradient))
+		FAIL("axial radial weight-normalization pullback failed")
+	const double half_pi = 1.57079632679489661923;
+	for (int i = 1; i < count; ++i) {
+		const double expected = axial_physical[0] * half_pi * axial_gradient[i];
+		if (std::abs(axial_coordinate_gradient[i] - expected) > 1.0e-13)
+			FAIL("radial weight-normalization axial gradient limit mismatch")
 	}
 } END_TEST;
 
