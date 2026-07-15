@@ -91,6 +91,7 @@ public:
 	bool freeze_scal_coeffs = false;
 	std::string optimizer_kind = "bfgs";
 	std::string bfgs_line_search = "wolfe";
+	std::string radial_parameterization = "physical";
 	int lbfgs_history_size = 20;
 	double lbfgs_curvature_tolerance = 1.0e-10;
 	double lbfgs_damping_threshold = 0.2;

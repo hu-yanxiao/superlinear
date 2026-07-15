@@ -15,6 +15,7 @@
 #include "../../src/mlp/calc_errors.h"
 #include "../mtpr.h" 
 #include "../mtpr_trainer.h" 
+#include "../radial_weight_norm.h"
 #include "../sh_model_init.h"
 #ifdef MLIP_MPI
 #include <mpi.h>
@@ -355,6 +356,77 @@ public:
 		const double scale = std::max(1.0e-14,
 			std::max(std::abs(result.analytic), std::abs(result.finite_difference)));
 		result.rel_err = result.abs_err / scale;
+		return result;
+	}
+
+	Result CheckRadialWeightNorm(std::vector<Configuration>& configs,
+	                             double displacement,
+	                             int mu)
+	{
+		Result result;
+		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
+		if (mtpr == nullptr)
+			ERROR("Radial weight-normalization gradient check requires MLMTPR.");
+		if (mu < 0 || mu >= mtpr->radial_func_count)
+			ERROR("--mu is outside the outer radial row range.");
+		const int row_size = mtpr->p_RadialBasis->rb_size;
+		const int row_begin =
+			mtpr->RadialCoeffOffset() + mu * mtpr->RadialCoeffBlockSize();
+		std::vector<double> original(row_size, 0.0);
+		std::copy(mtpr->Coeff() + row_begin,
+		          mtpr->Coeff() + row_begin + row_size,
+		          original.begin());
+		std::vector<double> coordinates(row_size, 0.0);
+		if (!sus2::RadialWeightNormChart::Pack(
+		        original.data(), row_size, coordinates.data()))
+			ERROR("Cannot pack the selected outer radial row into weight-normalization coordinates.");
+
+		CalcObjectiveFunctionGrad(configs);
+		std::vector<double> coordinate_gradient(row_size, 0.0);
+		if (!sus2::RadialWeightNormChart::PullbackGradient(
+		        original.data(),
+		        coordinates.data(),
+		        &loss_grad_[row_begin],
+		        row_size,
+		        coordinate_gradient.data()))
+			ERROR("Cannot pull back the selected outer radial row gradient.");
+		result.base_loss = ObjectiveFunction(configs);
+
+		std::vector<double> trial_coordinates = coordinates;
+		std::vector<double> trial_physical(row_size, 0.0);
+		for (int coord = 0; coord < row_size; ++coord) {
+			trial_coordinates = coordinates;
+			trial_coordinates[coord] += displacement;
+			if (!sus2::RadialWeightNormChart::Unpack(
+			        trial_coordinates.data(), row_size, trial_physical.data()))
+				ERROR("Invalid positive radial weight-normalization finite-difference trial.");
+			std::copy(trial_physical.begin(), trial_physical.end(),
+			          mtpr->Coeff() + row_begin);
+			const double loss_plus = ObjectiveFunction(configs);
+
+			trial_coordinates[coord] -= 2.0 * displacement;
+			if (!sus2::RadialWeightNormChart::Unpack(
+			        trial_coordinates.data(), row_size, trial_physical.data()))
+				ERROR("Invalid negative radial weight-normalization finite-difference trial.");
+			std::copy(trial_physical.begin(), trial_physical.end(),
+			          mtpr->Coeff() + row_begin);
+			const double loss_minus = ObjectiveFunction(configs);
+			std::copy(original.begin(), original.end(), mtpr->Coeff() + row_begin);
+
+			const double fd = (loss_plus - loss_minus) / (2.0 * displacement);
+			const double abs_err = std::abs(coordinate_gradient[coord] - fd);
+			const double scale = std::max(
+				1.0e-14, std::max(std::abs(coordinate_gradient[coord]), std::abs(fd)));
+			const double rel_err = abs_err / scale;
+			++result.checked_count;
+			if (abs_err > result.worst_abs_err) {
+				result.worst_abs_err = abs_err;
+				result.worst_rel_err = rel_err;
+				result.worst_index = coord;
+				result.worst_analytic = coordinate_gradient[coord];
+				result.worst_fd = fd;
+			}
+		}
 		return result;
 	}
 };
@@ -1604,6 +1676,72 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		if (result.abs_err > abs_tolerance
 		    && result.rel_err > rel_tolerance)
+			exit(1);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("check-radial-weight-norm-gradient-dev",
+		"checks the outer radial weight-normalization loss gradient",
+		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 check-radial-weight-norm-gradient-dev: model and cfg arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		std::ifstream ifs(args[1], std::ios::binary);
+		if (!ifs)
+			ERROR("Cannot open configuration file for radial weight-normalization gradient check.");
+
+		const int max_configs = ParseDevIntOption(opts, "max-configs", 1);
+		std::vector<Configuration> configs;
+		Configuration cfg;
+		while ((max_configs <= 0 || static_cast<int>(configs.size()) < max_configs)
+		       && cfg.Load(ifs))
+			configs.push_back(cfg);
+		if (configs.empty())
+			ERROR("No configurations loaded for radial weight-normalization gradient check.");
+
+		const double energy_weight = ParseDevDoubleOption(opts, "energy-weight", 1.0);
+		const double force_weight = ParseDevDoubleOption(opts, "force-weight", 1.0);
+		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
+		const double displacement = ParseDevDoubleOption(opts, "displacement", 1.0e-6);
+		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
+		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
+		const int mu = ParseDevIntOption(opts, "mu", 0);
+		if (displacement <= 0.0)
+			ERROR("--displacement should be positive.");
+
+		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		probe.radial_smooth_regularization =
+			ParseDevDoubleOption(opts, "radial-smooth", 0.0);
+		probe.radial_smooth_grid =
+			ParseDevIntOption(opts, "radial-smooth-grid", 128);
+		probe.scalar_head_l2_regularization =
+			ParseDevDoubleOption(opts, "scalar-head-l2", 0.0);
+		probe.gate_scalar_l2_regularization =
+			ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
+		probe.gate_mix_l2_regularization =
+			ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
+		probe.gate_full_l2_regularization =
+			ParseDevDoubleOption(opts, "gate-full-l2", 0.0);
+		probe.gate_x_l2_regularization =
+			ParseDevDoubleOption(opts, "gate-x-l2", 1.0e-4);
+		DevLossGradientProbe::Result result =
+			probe.CheckRadialWeightNorm(configs, displacement, mu);
+		if (mpi_rank == 0) {
+			std::cout << std::setprecision(12)
+			          << "mu=" << mu
+			          << " checked_coords=" << result.checked_count
+			          << " base_loss=" << result.base_loss
+			          << " worst_coord=" << result.worst_index
+			          << " analytic=" << result.worst_analytic
+			          << " finite_difference=" << result.worst_fd
+			          << " abs_err=" << result.worst_abs_err
+			          << " rel_err=" << result.worst_rel_err
+			          << std::endl;
+		}
+		if (result.worst_abs_err > abs_tolerance
+		    && result.worst_rel_err > rel_tolerance)
 			exit(1);
 	} END_COMMAND;
 

@@ -36,6 +36,7 @@
 //#include "../coul_qeq.h"
 //#include "../mult_trainer.h"
 #include "../mtpr_trainer.h"
+#include "../radial_weight_norm.h"
 //#include "../mtpr_trainer2.h"
 #include "../../src/mlip_wrapper.h"
 #include "../../src/mlp/self_test.h"
@@ -88,6 +89,57 @@ bool RunAllTestsDev(bool is_parallel)
 	std::string curr_test_name;
 {} // this tricks MSVS not to create an extra tab
 //
+
+TEST("radial weight-normalization chart and gradient") {
+	const int count = 5;
+	double physical[count] = {2.0, -3.0, 0.5, 4.0, -1.25};
+	double coordinates[count] = {};
+	double reconstructed[count] = {};
+	if (!sus2::RadialWeightNormChart::Pack(physical, count, coordinates))
+		FAIL("pack failed")
+	if (!sus2::RadialWeightNormChart::Unpack(coordinates, count, reconstructed))
+		FAIL("unpack failed")
+	for (int i = 0; i < count; ++i)
+		if (std::abs(reconstructed[i] - physical[i]) > 1.0e-13)
+			FAIL("pack/unpack changed the physical radial row")
+
+	double physical_gradient[count] = {};
+	for (int i = 0; i < count; ++i)
+		physical_gradient[i] = (i + 1.0) * physical[i] + std::cos(physical[i]);
+	double coordinate_gradient[count] = {};
+	if (!sus2::RadialWeightNormChart::PullbackGradient(
+	        physical, coordinates, physical_gradient, count, coordinate_gradient))
+		FAIL("gradient pullback failed")
+
+	auto loss = [&](const double* values) {
+		double result = 0.0;
+		for (int i = 0; i < count; ++i)
+			result += 0.5 * (i + 1.0) * values[i] * values[i]
+			        + std::sin(values[i]);
+		return result;
+	};
+	const double diff_step = 1.0e-6;
+	for (int coord = 0; coord < count; ++coord) {
+		double plus_coordinates[count];
+		double minus_coordinates[count];
+		std::copy(coordinates, coordinates + count, plus_coordinates);
+		std::copy(coordinates, coordinates + count, minus_coordinates);
+		plus_coordinates[coord] += diff_step;
+		minus_coordinates[coord] -= diff_step;
+		double plus_physical[count] = {};
+		double minus_physical[count] = {};
+		if (!sus2::RadialWeightNormChart::Unpack(
+		        plus_coordinates, count, plus_physical)
+		    || !sus2::RadialWeightNormChart::Unpack(
+		        minus_coordinates, count, minus_physical))
+			FAIL("finite-difference unpack failed")
+		const double finite_difference =
+			(loss(plus_physical) - loss(minus_physical)) / (2.0 * diff_step);
+		const double scale = std::max(1.0, std::abs(finite_difference));
+		if (std::abs(finite_difference - coordinate_gradient[coord]) > 2.0e-8 * scale)
+			FAIL("radial weight-normalization gradient mismatch")
+	}
+} END_TEST;
 
 TEST("EAMSimple CalcEnergyGrad test by finite difference") {
 	Configuration cfg, cfg1, cfg2;

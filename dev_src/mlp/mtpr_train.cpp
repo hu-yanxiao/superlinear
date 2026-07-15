@@ -1763,6 +1763,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		optimizer_kind = opts["optimizer"];
 	if (optimizer_kind != "bfgs" && optimizer_kind != "lbfgs")
 		ERROR("--optimizer should be 'bfgs' or 'lbfgs'");
+	string radial_parameterization = "physical";
+	if (opts["radial-parameterization"] != "")
+		radial_parameterization = opts["radial-parameterization"];
+	if (radial_parameterization != "physical"
+	    && radial_parameterization != "weight-norm")
+		ERROR("--radial-parameterization should be 'physical' or 'weight-norm'");
 
 	double bfgs_conv_tol = 1e-3;
 	if (opts["optimizer-conv-tol"] != "")
@@ -2203,6 +2209,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.linstop = bfgs_conv_tol;	//if in 100 iterations loss decreases less than this, BFGS is finished
 	trainer.optimizer_kind = optimizer_kind;
 	trainer.bfgs_line_search = bfgs_line_search;
+	trainer.radial_parameterization = radial_parameterization;
 	trainer.curr_pot_name = curr_fnm;
 	trainer.bfgs_trace_file = optimizer_trace_fnm;
 	trainer.lbfgs_history_size = lbfgs_history_size;
@@ -2695,6 +2702,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "Optimizer iterations count set to " << trainer.max_step_count << std::endl;
 			std::cout << "Optimizer convergence tolerance set to " << bfgs_conv_tol << std::endl;
 			std::cout << "Optimizer line search: " << trainer.bfgs_line_search << std::endl;
+			std::cout << "Radial parameterization: "
+			          << trainer.radial_parameterization << std::endl;
 			if (trainer.optimizer_kind == "lbfgs") {
 				std::cout << "L-BFGS settings: history=" << trainer.lbfgs_history_size
 				          << " curvature_tol=" << trainer.lbfgs_curvature_tolerance

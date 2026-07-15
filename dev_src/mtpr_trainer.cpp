@@ -9,6 +9,7 @@
 #endif
 
 #include "mtpr_trainer.h"
+#include "radial_weight_norm.h"
 
 #ifdef ALGLIB
 #	include "alglib/optimization.h"
@@ -970,7 +971,8 @@ void MTPR_trainer::TrainLinear(int prank,
 	const std::string prefix = context.empty() ? "TrainLinear" : "TrainLinear[" + context + "]";
 	const int full_n = p_mlmtpr->LinearEquationCount();		// Full linear component count
 
-	p_mlmtpr->Orthogonalize();
+	if (radial_parameterization != "weight-norm")
+		p_mlmtpr->Orthogonalize();
 
 	ClearSLAE();
 	int n = LinearSolveColumnCount();		// Active matrix size
@@ -1211,9 +1213,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
+	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
 	const std::string optimizer_log_name = use_lbfgs_optimizer ? "L-BFGS" : "BFGS";
 	if (!use_lbfgs_optimizer && optimizer_kind != "bfgs")
 		ERROR("MTPR_trainer::Train(): unknown optimizer " + optimizer_kind);
+	if (!use_radial_weight_norm && radial_parameterization != "physical")
+		ERROR("MTPR_trainer::Train(): unknown radial parameterization "
+		      + radial_parameterization);
 	if (use_lbfgs_optimizer && bfgs_line_search != "armijo-value")
 		ERROR("MTPR_trainer::Train(): L-BFGS requires armijo-value line search");
 	if (use_lbfgs_optimizer) {
@@ -1339,6 +1345,40 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	const int opt_n = static_cast<int>(active_coeff_indices.size());
 	if (opt_n <= 0)
 		ERROR("MTPR_trainer::Train(): no active optimizer coordinates.");
+	struct RadialWeightNormRow {
+		int full_begin;
+		int active_begin;
+		RadialWeightNormRow(int full_begin_, int active_begin_)
+			: full_begin(full_begin_), active_begin(active_begin_) {}
+	};
+	std::vector<RadialWeightNormRow> radial_weight_norm_rows;
+	std::vector<int> radial_weight_norm_role(n, -1);
+	if (use_radial_weight_norm && p_mlmtpr->p_RadialBasis == nullptr)
+		ERROR("MTPR_trainer::Train(): radial weight normalization requires an initialized radial basis.");
+	const int radial_weight_norm_row_size =
+		p_mlmtpr->p_RadialBasis == nullptr ? 0 : p_mlmtpr->p_RadialBasis->rb_size;
+	if (use_radial_weight_norm) {
+		const int radial_begin = p_mlmtpr->RadialCoeffOffset();
+		const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
+		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu) {
+			const int row_begin = radial_begin + mu * radial_stride;
+			int active_count = 0;
+			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi)
+				active_count += full_to_active_index[row_begin + xi] >= 0 ? 1 : 0;
+			if (active_count == 0)
+				continue;
+			if (active_count != radial_weight_norm_row_size)
+				ERROR("MTPR_trainer::Train(): radial weight normalization requires a complete active radial row.");
+			const int active_begin = full_to_active_index[row_begin];
+			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi) {
+				if (full_to_active_index[row_begin + xi] != active_begin + xi)
+					ERROR("MTPR_trainer::Train(): radial weight-normalization coordinates are not contiguous.");
+				radial_weight_norm_role[row_begin + xi] = xi;
+			}
+			radial_weight_norm_rows.push_back(
+				RadialWeightNormRow(row_begin, active_begin));
+		}
+	}
 	const int redundant_radial_species_count =
 		n - p_mlmtpr->ActiveCoeffCount(false);
 
@@ -1353,15 +1393,25 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			return p_mlmtpr->RadialFirstCoeffRawToValue(opt_value);
 		return opt_value;
 	};
-	auto optimizer_gradient_value = [&](int full_idx) {
+	auto physical_coordinate_gradient_value = [&](int full_idx) {
 		double grad = loss_grad_[full_idx];
 		if (p_mlmtpr->IsRadialFirstCoeff(full_idx))
 			grad *= p_mlmtpr->RadialFirstCoeffDerivativeFromValue(x[full_idx]);
 		return grad;
 	};
 	auto pack_active_coeffs = [&]() {
-		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-			active_coeffs[active_idx] = full_to_optimizer_value(active_coeff_indices[active_idx]);
+		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
+			const int full_idx = active_coeff_indices[active_idx];
+			if (radial_weight_norm_role[full_idx] < 0)
+				active_coeffs[active_idx] = full_to_optimizer_value(full_idx);
+		}
+		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
+			if (!sus2::RadialWeightNormChart::Pack(
+			        x + row.full_begin,
+			        radial_weight_norm_row_size,
+			        active_coeffs.data() + row.active_begin))
+				ERROR("MTPR_trainer::Train(): cannot pack outer radial weight-normalization coordinates.");
+		}
 	};
 	auto optimizer_set_x = [&](const double* values, int count) {
 		if (use_lbfgs_optimizer)
@@ -1434,9 +1484,38 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	auto copy_optimizer_x_to_full_coeffs = [&]() {
 		const double* opt_x = optimizer_data();
-		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-			x[active_coeff_indices[active_idx]] =
-				optimizer_to_full_value(active_coeff_indices[active_idx], opt_x[active_idx]);
+		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
+			const int full_idx = active_coeff_indices[active_idx];
+			if (radial_weight_norm_role[full_idx] < 0)
+				x[full_idx] = optimizer_to_full_value(full_idx, opt_x[active_idx]);
+		}
+		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
+			if (!sus2::RadialWeightNormChart::Unpack(
+			        opt_x + row.active_begin,
+			        radial_weight_norm_row_size,
+			        x + row.full_begin))
+				ERROR("MTPR_trainer::Train(): invalid outer radial weight-normalization trial coordinates.");
+		}
+	};
+	std::vector<double> optimizer_gradient_cache(opt_n, 0.0);
+	std::vector<double> radial_log_norm_reference(radial_weight_norm_rows.size(), 0.0);
+	auto pack_optimizer_gradient = [&]() {
+		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
+			const int full_idx = active_coeff_indices[active_idx];
+			if (radial_weight_norm_role[full_idx] < 0)
+				optimizer_gradient_cache[active_idx] =
+					physical_coordinate_gradient_value(full_idx);
+		}
+		const double* opt_x = optimizer_data();
+		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
+			if (!sus2::RadialWeightNormChart::PullbackGradient(
+			        x + row.full_begin,
+			        opt_x + row.active_begin,
+			        &loss_grad_[row.full_begin],
+			        radial_weight_norm_row_size,
+			        optimizer_gradient_cache.data() + row.active_begin))
+				ERROR("MTPR_trainer::Train(): cannot pull back outer radial weight-normalization gradient.");
+		}
 	};
 	auto full_inv_hess_diag_value = [&](int full_idx) {
 		double value = 1.0;
@@ -1531,6 +1610,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		          << " redundant_count=" << redundant_radial_species_count
 		          << " active_count=" << opt_n
 		          << " full_count=" << n << std::endl;
+	}
+	if (prank == 0 && use_radial_weight_norm) {
+		std::cout << "[" << CurrentTimestamp() << "] "
+		          << "outer radial weight-normalization coordinates enabled"
+		          << " rows=" << radial_weight_norm_rows.size()
+		          << " row_size=" << radial_weight_norm_row_size
+		          << " model_format=physical"
+		          << std::endl;
 	}
 	if (prank == 0 && p_mlmtpr->TwoLayerResidualEnabled()
 	    && two_layer_residual_stage != kResidualStageFull) {
@@ -1760,12 +1847,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				mean_3 /= K;
 				for (int i = 0; i < n; i++)
 					loss_grad_[i] /= K;
+				pack_optimizer_gradient();
 
 	#ifdef MLIP_MPI
 				optimizer_reduce_local[0] = loss_;
 				for (int active_idx = 0; active_idx < opt_n; ++active_idx)
 					optimizer_reduce_local[kOptimizerReducePrefix + active_idx] =
-						optimizer_gradient_value(active_coeff_indices[active_idx]);
+						optimizer_gradient_cache[active_idx];
 				MPI_Reduce(optimizer_reduce_local.data(),
 				           prank == 0 ? optimizer_reduce_global.data() : optimizer_reduce_local.data(),
 				           opt_n + kOptimizerReducePrefix,
@@ -1783,7 +1871,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	#else
 				bfgs_f = loss_;
 				for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-					bfgs_g[active_idx] = optimizer_gradient_value(active_coeff_indices[active_idx]);
+					bfgs_g[active_idx] = optimizer_gradient_cache[active_idx];
 	#endif
 				if (freeze_species_coeffs) {
 					for (int idx : species_coeff_active_indices)
@@ -1925,6 +2013,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			if (!armijo_value_trial_rejected
 				    && (optimizer_replicated || prank == 0) && !converge) {
 					auto run_optimizer_iterate = [&]() {
+						for (size_t row_idx = 0;
+						     row_idx < radial_weight_norm_rows.size();
+						     ++row_idx) {
+							const RadialWeightNormRow& row = radial_weight_norm_rows[row_idx];
+							if (!sus2::RadialWeightNormChart::Pack(
+							        x + row.full_begin,
+							        radial_weight_norm_row_size,
+							        active_coeffs.data() + row.active_begin))
+								ERROR("MTPR_trainer::Train(): cannot record the current radial log norm.");
+							radial_log_norm_reference[row_idx] =
+								active_coeffs[row.active_begin];
+						}
 						mask_frozen_coordinates(freeze_species_coeffs);
 						if (use_lbfgs_optimizer)
 							lbfgs.IterateArmijoWithGradient(bfgs_f, bfgs_g);
@@ -1947,14 +2047,44 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 							break;
 						}
 					}
-					if (scaling_step_too_large) {
-							optimizer_reduce_step(0.25);
-						if (++scaling_step_reductions > 64)
-								ERROR(optimizer_log_name + " could not reduce scaling-coefficient step below the safety limit.");
+						if (scaling_step_too_large) {
+								optimizer_reduce_step(0.25);
+							if (++scaling_step_reductions > 64)
+									ERROR(optimizer_log_name + " could not reduce scaling-coefficient step below the safety limit.");
+						}
 					}
-				}
-					RequireFiniteArray(optimizer_data(), opt_n, "optimizer proposed coefficients");
-				};
+
+					const double radial_log_norm_min =
+						std::log(std::numeric_limits<double>::min()) + 2.0;
+					const double radial_log_norm_max =
+						std::log(std::numeric_limits<double>::max()) - 2.0;
+					int radial_step_reductions = 0;
+					bool radial_step_too_large = true;
+					while (radial_step_too_large) {
+						radial_step_too_large = false;
+						for (size_t row_idx = 0;
+						     row_idx < radial_weight_norm_rows.size();
+						     ++row_idx) {
+							const double trial_log_norm = optimizer_x(
+								radial_weight_norm_rows[row_idx].active_begin);
+							if (!std::isfinite(trial_log_norm)
+							    || trial_log_norm < radial_log_norm_min
+							    || trial_log_norm > radial_log_norm_max
+							    || std::abs(trial_log_norm
+							                - radial_log_norm_reference[row_idx]) > 1.0) {
+								radial_step_too_large = true;
+								break;
+							}
+						}
+						if (radial_step_too_large) {
+							optimizer_reduce_step(0.25);
+							if (++radial_step_reductions > 64)
+								ERROR(optimizer_log_name
+								      + " could not reduce radial log-norm step below the safety limit.");
+						}
+					}
+						RequireFiniteArray(optimizer_data(), opt_n, "optimizer proposed coefficients");
+					};
 					auto try_recover_optimizer_from_ascent_direction = [&](const std::string& first_reason) {
 					if (!is_ascent_direction_failure(first_reason) || !optimizer_state_is_finite())
 						return false;

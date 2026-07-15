@@ -570,6 +570,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --optimizer-trace-file=<string>: generic alias for --bfgs-trace-file\n"
 			"    --optimizer-line-search=<wolfe|armijo-value>: generic line-search selector.\n"
 			"        L-BFGS supports armijo-value only.\n"
+			"    --radial-parameterization=<physical|weight-norm>: optimizer coordinates for\n"
+			"        outer radial rows. weight-norm keeps the model file unchanged. Default=physical\n"
 			"    --bfgs-conv-tol=<double>: stop if error dropped by a factor smaller than this\n"
 			"                              over 50 BFGS iterations. Default=1e-3\n"
 			"    --bfgs-trace-file=<string>: optional CSV trace file for accepted BFGS steps\n"

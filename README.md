@@ -122,6 +122,7 @@ Common training options:
 | `--optimizer-conv-tol=<double>` | Generic alias for `--bfgs-conv-tol`. |
 | `--optimizer-trace-file=<path>` | Generic alias for `--bfgs-trace-file`. L-BFGS traces include curvature/history diagnostics. |
 | `--optimizer-line-search=wolfe|armijo-value` | Generic line-search selector. L-BFGS supports value-only Armijo; BFGS retains its historical Wolfe default. |
+| `--radial-parameterization=physical|weight-norm` | Optimizer coordinates for outer radial coefficient rows. Default `physical` preserves the release3 path; `weight-norm` separates each row's log norm from its direction without changing the saved model format. |
 | `--bfgs-conv-tol=<double>` | Stop when improvement over 50 BFGS iterations is below this factor, default `1e-3`. |
 | `--bfgs-trace-file=<path>` | Optional CSV trace of accepted BFGS steps. |
 | `--lbfgs-history=<int>` | Accepted curvature-pair history size, default `20`. |
