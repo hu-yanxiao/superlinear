@@ -8,6 +8,7 @@ mkdir -p "$tmp_dir"
 
 initial_model="$tmp_dir/initial.mtp"
 seed_model="$tmp_dir/seed.mtp"
+negative_gate_model="$tmp_dir/negative_gate_seed.mtp"
 untrained_weight_norm_model="$tmp_dir/untrained_weight_norm.mtp"
 train_cfg="$tmp_dir/one.cfg"
 physical_model="$tmp_dir/physical_step0.mtp"
@@ -45,6 +46,7 @@ awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
   --radial-smooth=0 >"$tmp_dir/untrained_weight_norm.log" 2>&1
 grep -q "outer radial weight-normalization coordinates enabled" \
   "$tmp_dir/untrained_weight_norm.log"
+grep -Eq "gate1_rows=[1-9][0-9]*" "$tmp_dir/untrained_weight_norm.log"
 
 ./bin/mlp-sus2 check-radial-weight-norm-roundtrip-dev \
   "$untrained_weight_norm_model" \
@@ -66,6 +68,7 @@ grep -q "outer radial weight-normalization coordinates enabled" \
 for mu in 0 3; do
   ./bin/mlp-sus2 check-radial-weight-norm-gradient-dev \
     "$seed_model" "$train_cfg" \
+    --radial-block=outer \
     --mu="$mu" \
     --max-configs=1 \
     --energy-weight=1 \
@@ -80,7 +83,59 @@ for mu in 0 3; do
     --displacement=1e-6 \
     --abs-tolerance=2e-5 \
     --rel-tolerance=2e-4 >"$tmp_dir/gradient_mu${mu}.log"
+
+  ./bin/mlp-sus2 check-radial-weight-norm-gradient-dev \
+    "$seed_model" "$train_cfg" \
+    --radial-block=gate1 \
+    --mu="$mu" \
+    --max-configs=1 \
+    --energy-weight=1 \
+    --force-weight=0.1 \
+    --stress-weight=0.01 \
+    --radial-smooth=1e-6 \
+    --scalar-head-l2=1e-5 \
+    --gate-scalar-l2=1e-4 \
+    --gate-mix-l2=1e-5 \
+    --gate-full-l2=1e-4 \
+    --gate-x-l2=1e-4 \
+    --displacement=1e-3 \
+    --abs-tolerance=2e-4 \
+    --rel-tolerance=2e-4 >"$tmp_dir/gradient_gate1_mu${mu}.log"
 done
+
+# A continued gate model may have either sign in every radial row. Verify that
+# the trainer selects a signed chart without changing the serialized values.
+python3 - "$seed_model" "$negative_gate_model" <<'PY'
+import pathlib
+import re
+import sys
+
+source, target = map(pathlib.Path, sys.argv[1:])
+text = source.read_text()
+pattern = re.compile(r"(two_layer_gate_radial_coeffs\s*=\s*\{)([^,}]+)")
+match = pattern.search(text)
+if not match:
+    raise SystemExit("missing gate1 radial coefficient block")
+first = float(match.group(2))
+replacement = match.group(1) + f"{-abs(first):.15e}"
+target.write_text(text[: match.start()] + replacement + text[match.end() :])
+PY
+
+./bin/mlp-sus2 check-radial-weight-norm-roundtrip-dev \
+  "$negative_gate_model" \
+  --abs-tolerance=2e-12 \
+  --rel-tolerance=2e-12 >"$tmp_dir/negative_gate_roundtrip.log"
+
+./bin/mlp-sus2 train "$negative_gate_model" "$train_cfg" \
+  --radial-parameterization=weight-norm \
+  --trained-pot-name="$tmp_dir/negative_gate_trained.mtp" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0.1 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$tmp_dir/negative_gate_train.log" 2>&1
+grep -Eq "gate1_rows=[1-9][0-9]*" "$tmp_dir/negative_gate_train.log"
 
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
   --radial-parameterization=physical \
@@ -108,6 +163,7 @@ done
 
 grep -q "Radial parameterization: weight-norm" "$tmp_dir/weight_norm.log"
 grep -q "outer radial weight-normalization coordinates enabled" "$tmp_dir/weight_norm.log"
+grep -Eq "gate1_rows=[1-9][0-9]*" "$tmp_dir/weight_norm.log"
 if grep -q "radial_parameterization\|weight_norm" "$weight_norm_model"; then
   echo "weight-normalization training state leaked into the model file" >&2
   exit 1
@@ -175,6 +231,14 @@ def outer_radial(path):
     ]
 
 
+def named_vector(path, name):
+    text = path.read_text()
+    match = re.search(rf"\b{name}\s*=\s*\{{([^}}]+)\}}", text)
+    if not match:
+        raise SystemExit(f"cannot find {name} in {path}")
+    return [float(value.strip()) for value in match.group(1).split(",")]
+
+
 seed_rows = outer_radial(seed_model)
 do_lin_rows = outer_radial(do_lin_model)
 if len(seed_rows) != len(do_lin_rows):
@@ -191,6 +255,20 @@ if max_radial_error > 2.0e-13:
     raise SystemExit(
         f"weight-norm TrainLinear refresh changed outer radial coefficients: "
         f"{max_radial_error}"
+    )
+
+seed_gate_radial = named_vector(seed_model, "two_layer_gate_radial_coeffs")
+do_lin_gate_radial = named_vector(do_lin_model, "two_layer_gate_radial_coeffs")
+if len(seed_gate_radial) != len(do_lin_gate_radial):
+    raise SystemExit("TrainLinear changed gate1 radial coefficient count")
+max_gate_radial_error = max(
+    abs(lhs - rhs)
+    for lhs, rhs in zip(seed_gate_radial, do_lin_gate_radial)
+)
+if max_gate_radial_error > 2.0e-13:
+    raise SystemExit(
+        f"weight-norm TrainLinear refresh changed gate1 radial coefficients: "
+        f"{max_gate_radial_error}"
     )
 PY
 

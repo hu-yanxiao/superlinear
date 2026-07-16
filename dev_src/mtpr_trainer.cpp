@@ -1348,25 +1348,32 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	struct RadialWeightNormRow {
 		int full_begin;
 		int active_begin;
-		RadialWeightNormRow(int full_begin_, int active_begin_)
-			: full_begin(full_begin_), active_begin(active_begin_) {}
+		int pivot;
+		double pivot_sign;
+		RadialWeightNormRow(int full_begin_,
+		                    int active_begin_,
+		                    int pivot_,
+		                    double pivot_sign_)
+			: full_begin(full_begin_),
+			  active_begin(active_begin_),
+			  pivot(pivot_),
+			  pivot_sign(pivot_sign_) {}
 	};
 	std::vector<RadialWeightNormRow> radial_weight_norm_rows;
 	std::vector<int> radial_weight_norm_role(n, -1);
+	int outer_radial_weight_norm_row_count = 0;
+	int gate1_radial_weight_norm_row_count = 0;
 	if (use_radial_weight_norm && p_mlmtpr->p_RadialBasis == nullptr)
 		ERROR("MTPR_trainer::Train(): radial weight normalization requires an initialized radial basis.");
 	const int radial_weight_norm_row_size =
 		p_mlmtpr->p_RadialBasis == nullptr ? 0 : p_mlmtpr->p_RadialBasis->rb_size;
 	if (use_radial_weight_norm) {
-		const int radial_begin = p_mlmtpr->RadialCoeffOffset();
-		const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
-		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu) {
-			const int row_begin = radial_begin + mu * radial_stride;
+		auto add_radial_weight_norm_row = [&](int row_begin, bool is_gate1) {
 			int active_count = 0;
 			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi)
 				active_count += full_to_active_index[row_begin + xi] >= 0 ? 1 : 0;
 			if (active_count == 0)
-				continue;
+				return;
 			if (active_count != radial_weight_norm_row_size)
 				ERROR("MTPR_trainer::Train(): radial weight normalization requires a complete active radial row.");
 			const int active_begin = full_to_active_index[row_begin];
@@ -1375,8 +1382,35 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					ERROR("MTPR_trainer::Train(): radial weight-normalization coordinates are not contiguous.");
 				radial_weight_norm_role[row_begin + xi] = xi;
 			}
+
+			int pivot = 0;
+			double pivot_sign = 1.0;
+			if (is_gate1
+			    && !sus2::RadialWeightNormChart::SelectSignedPivot(
+				    x + row_begin,
+				    radial_weight_norm_row_size,
+				    pivot,
+				    pivot_sign))
+				ERROR("MTPR_trainer::Train(): cannot select a gate1 radial weight-normalization pivot.");
 			radial_weight_norm_rows.push_back(
-				RadialWeightNormRow(row_begin, active_begin));
+				RadialWeightNormRow(
+					row_begin, active_begin, pivot, pivot_sign));
+			if (is_gate1)
+				++gate1_radial_weight_norm_row_count;
+			else
+				++outer_radial_weight_norm_row_count;
+		};
+
+		const int radial_begin = p_mlmtpr->RadialCoeffOffset();
+		const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
+		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+			add_radial_weight_norm_row(radial_begin + mu * radial_stride, false);
+
+		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
+			const int gate1_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
+			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+				add_radial_weight_norm_row(
+					gate1_radial_begin + mu * radial_weight_norm_row_size, true);
 		}
 	}
 	const int redundant_radial_species_count =
@@ -1406,11 +1440,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				active_coeffs[active_idx] = full_to_optimizer_value(full_idx);
 		}
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
-			if (!sus2::RadialWeightNormChart::Pack(
+			if (!sus2::RadialWeightNormChart::PackWithPivot(
 			        x + row.full_begin,
 			        radial_weight_norm_row_size,
+			        row.pivot,
+			        row.pivot_sign,
 			        active_coeffs.data() + row.active_begin))
-				ERROR("MTPR_trainer::Train(): cannot pack outer radial weight-normalization coordinates.");
+				ERROR("MTPR_trainer::Train(): cannot pack radial weight-normalization coordinates.");
 		}
 	};
 	auto optimizer_set_x = [&](const double* values, int count) {
@@ -1490,11 +1526,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				x[full_idx] = optimizer_to_full_value(full_idx, opt_x[active_idx]);
 		}
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
-			if (!sus2::RadialWeightNormChart::Unpack(
+			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
 			        opt_x + row.active_begin,
 			        radial_weight_norm_row_size,
+			        row.pivot,
+			        row.pivot_sign,
 			        x + row.full_begin))
-				ERROR("MTPR_trainer::Train(): invalid outer radial weight-normalization trial coordinates.");
+				ERROR("MTPR_trainer::Train(): invalid radial weight-normalization trial coordinates.");
 		}
 	};
 	std::vector<double> optimizer_gradient_cache(opt_n, 0.0);
@@ -1508,13 +1546,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		}
 		const double* opt_x = optimizer_data();
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
-			if (!sus2::RadialWeightNormChart::PullbackGradient(
+			if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
 			        x + row.full_begin,
 			        opt_x + row.active_begin,
 			        &loss_grad_[row.full_begin],
 			        radial_weight_norm_row_size,
+			        row.pivot,
+			        row.pivot_sign,
 			        optimizer_gradient_cache.data() + row.active_begin))
-				ERROR("MTPR_trainer::Train(): cannot pull back outer radial weight-normalization gradient.");
+				ERROR("MTPR_trainer::Train(): cannot pull back radial weight-normalization gradient.");
 		}
 	};
 	auto full_inv_hess_diag_value = [&](int full_idx) {
@@ -1614,7 +1654,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	if (prank == 0 && use_radial_weight_norm) {
 		std::cout << "[" << CurrentTimestamp() << "] "
 		          << "outer radial weight-normalization coordinates enabled"
-		          << " rows=" << radial_weight_norm_rows.size()
+		          << " outer_rows=" << outer_radial_weight_norm_row_count
+		          << " gate1_rows=" << gate1_radial_weight_norm_row_count
+		          << " total_rows=" << radial_weight_norm_rows.size()
 		          << " row_size=" << radial_weight_norm_row_size
 		          << " model_format=physical"
 		          << std::endl;
@@ -2017,9 +2059,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 						     row_idx < radial_weight_norm_rows.size();
 						     ++row_idx) {
 							const RadialWeightNormRow& row = radial_weight_norm_rows[row_idx];
-							if (!sus2::RadialWeightNormChart::Pack(
+							if (!sus2::RadialWeightNormChart::PackWithPivot(
 							        x + row.full_begin,
 							        radial_weight_norm_row_size,
+							        row.pivot,
+							        row.pivot_sign,
 							        active_coeffs.data() + row.active_begin))
 								ERROR("MTPR_trainer::Train(): cannot record the current radial log norm.");
 							radial_log_norm_reference[row_idx] =

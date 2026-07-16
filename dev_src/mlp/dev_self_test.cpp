@@ -159,6 +159,113 @@ TEST("radial weight-normalization chart and gradient") {
 		if (std::abs(axial_coordinate_gradient[i] - expected) > 1.0e-13)
 			FAIL("radial weight-normalization axial gradient limit mismatch")
 	}
+
+	double signed_physical[count] = {-0.25, 0.75, -3.0, 1.5, 0.2};
+	int signed_pivot = -1;
+	double signed_pivot_sign = 0.0;
+	if (!sus2::RadialWeightNormChart::SelectSignedPivot(
+	        signed_physical, count, signed_pivot, signed_pivot_sign))
+		FAIL("signed radial weight-normalization pivot selection failed")
+	if (signed_pivot != 2 || signed_pivot_sign != -1.0)
+		FAIL("signed radial weight-normalization selected the wrong pivot")
+	double signed_coordinates[count] = {};
+	double signed_reconstructed[count] = {};
+	if (!sus2::RadialWeightNormChart::PackWithPivot(
+	        signed_physical,
+	        count,
+	        signed_pivot,
+	        signed_pivot_sign,
+	        signed_coordinates)
+	    || !sus2::RadialWeightNormChart::UnpackWithPivot(
+	        signed_coordinates,
+	        count,
+	        signed_pivot,
+	        signed_pivot_sign,
+	        signed_reconstructed))
+		FAIL("signed radial weight-normalization round trip failed")
+	for (int i = 0; i < count; ++i)
+		if (std::abs(signed_reconstructed[i] - signed_physical[i]) > 1.0e-13)
+			FAIL("signed radial weight-normalization changed the physical row")
+
+	// Gate rows are not restricted to the initial pivot hemisphere. A finite
+	// direction coordinate can cross c_p=0 while retaining the same chart.
+	double crossing_coordinates[count] = {};
+	crossing_coordinates[0] = signed_coordinates[0];
+	crossing_coordinates[1] = 1.3862943611198906;  // 2 * atanh(0.6)
+	double crossing_physical[count] = {};
+	if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+	        crossing_coordinates,
+	        count,
+	        signed_pivot,
+	        signed_pivot_sign,
+	        crossing_physical))
+		FAIL("signed full-sphere radial chart unpack failed")
+	if (signed_pivot_sign * crossing_physical[signed_pivot] >= 0.0)
+		FAIL("signed full-sphere radial chart cannot cross the pivot equator")
+	double crossing_repacked[count] = {};
+	if (!sus2::RadialWeightNormChart::PackWithPivot(
+	        crossing_physical,
+	        count,
+	        signed_pivot,
+	        signed_pivot_sign,
+	        crossing_repacked))
+		FAIL("signed full-sphere radial chart repack failed")
+	for (int i = 0; i < count; ++i)
+		if (std::abs(crossing_repacked[i] - crossing_coordinates[i]) > 1.0e-13)
+			FAIL("signed full-sphere radial chart changed crossing coordinates")
+
+	double* signed_check_physical[] = {signed_physical, crossing_physical};
+	double* signed_check_coordinates[] = {signed_coordinates, crossing_coordinates};
+	for (int check = 0; check < 2; ++check) {
+		double signed_physical_gradient[count] = {};
+		for (int i = 0; i < count; ++i)
+			signed_physical_gradient[i] =
+				(i + 1.0) * signed_check_physical[check][i]
+				+ std::cos(signed_check_physical[check][i]);
+		double signed_coordinate_gradient[count] = {};
+		if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
+		        signed_check_physical[check],
+		        signed_check_coordinates[check],
+		        signed_physical_gradient,
+		        count,
+		        signed_pivot,
+		        signed_pivot_sign,
+		        signed_coordinate_gradient))
+			FAIL("signed radial weight-normalization gradient pullback failed")
+		for (int coord = 0; coord < count; ++coord) {
+			double plus_coordinates[count];
+			double minus_coordinates[count];
+			std::copy(signed_check_coordinates[check],
+			          signed_check_coordinates[check] + count,
+			          plus_coordinates);
+			std::copy(signed_check_coordinates[check],
+			          signed_check_coordinates[check] + count,
+			          minus_coordinates);
+			plus_coordinates[coord] += diff_step;
+			minus_coordinates[coord] -= diff_step;
+			double plus_physical[count] = {};
+			double minus_physical[count] = {};
+			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+			        plus_coordinates,
+			        count,
+			        signed_pivot,
+			        signed_pivot_sign,
+			        plus_physical)
+			    || !sus2::RadialWeightNormChart::UnpackWithPivot(
+			        minus_coordinates,
+			        count,
+			        signed_pivot,
+			        signed_pivot_sign,
+			        minus_physical))
+				FAIL("signed finite-difference unpack failed")
+			const double finite_difference =
+				(loss(plus_physical) - loss(minus_physical)) / (2.0 * diff_step);
+			const double scale = std::max(1.0, std::abs(finite_difference));
+			if (std::abs(finite_difference - signed_coordinate_gradient[coord])
+			    > 2.0e-8 * scale)
+				FAIL("signed radial weight-normalization gradient mismatch")
+		}
+	}
 } END_TEST;
 
 TEST("EAMSimple CalcEnergyGrad test by finite difference") {

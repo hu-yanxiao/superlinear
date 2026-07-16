@@ -361,35 +361,47 @@ public:
 
 	Result CheckRadialWeightNorm(std::vector<Configuration>& configs,
 	                             double displacement,
-	                             int mu)
+	                             int mu,
+	                             bool gate1)
 	{
 		Result result;
 		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
 		if (mtpr == nullptr)
 			ERROR("Radial weight-normalization gradient check requires MLMTPR.");
 		if (mu < 0 || mu >= mtpr->radial_func_count)
-			ERROR("--mu is outside the outer radial row range.");
+			ERROR("--mu is outside the radial row range.");
+		if (gate1 && !mtpr->TwoLayerGateUsesSharedRadial())
+			ERROR("Gate1 radial weight-normalization gradient check requires an independent gate1 radial table.");
 		const int row_size = mtpr->p_RadialBasis->rb_size;
-		const int row_begin =
-			mtpr->RadialCoeffOffset() + mu * mtpr->RadialCoeffBlockSize();
+		const int row_begin = gate1
+			? mtpr->TwoLayerGateRadialCoeffOffset() + mu * row_size
+			: mtpr->RadialCoeffOffset() + mu * mtpr->RadialCoeffBlockSize();
 		std::vector<double> original(row_size, 0.0);
 		std::copy(mtpr->Coeff() + row_begin,
 		          mtpr->Coeff() + row_begin + row_size,
 		          original.begin());
+		int pivot = 0;
+		double pivot_sign = 1.0;
+		if (gate1
+		    && !sus2::RadialWeightNormChart::SelectSignedPivot(
+			    original.data(), row_size, pivot, pivot_sign))
+			ERROR("Cannot select a pivot for the gate1 radial weight-normalization row.");
 		std::vector<double> coordinates(row_size, 0.0);
-		if (!sus2::RadialWeightNormChart::Pack(
-		        original.data(), row_size, coordinates.data()))
-			ERROR("Cannot pack the selected outer radial row into weight-normalization coordinates.");
+		if (!sus2::RadialWeightNormChart::PackWithPivot(
+		        original.data(), row_size, pivot, pivot_sign, coordinates.data()))
+			ERROR("Cannot pack the selected radial row into weight-normalization coordinates.");
 
 		CalcObjectiveFunctionGrad(configs);
 		std::vector<double> coordinate_gradient(row_size, 0.0);
-		if (!sus2::RadialWeightNormChart::PullbackGradient(
+		if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
 		        original.data(),
 		        coordinates.data(),
 		        &loss_grad_[row_begin],
 		        row_size,
+		        pivot,
+		        pivot_sign,
 		        coordinate_gradient.data()))
-			ERROR("Cannot pull back the selected outer radial row gradient.");
+			ERROR("Cannot pull back the selected radial row gradient.");
 		result.base_loss = ObjectiveFunction(configs);
 
 		std::vector<double> trial_coordinates = coordinates;
@@ -397,16 +409,24 @@ public:
 		for (int coord = 0; coord < row_size; ++coord) {
 			trial_coordinates = coordinates;
 			trial_coordinates[coord] += displacement;
-			if (!sus2::RadialWeightNormChart::Unpack(
-			        trial_coordinates.data(), row_size, trial_physical.data()))
+			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+			        trial_coordinates.data(),
+			        row_size,
+			        pivot,
+			        pivot_sign,
+			        trial_physical.data()))
 				ERROR("Invalid positive radial weight-normalization finite-difference trial.");
 			std::copy(trial_physical.begin(), trial_physical.end(),
 			          mtpr->Coeff() + row_begin);
 			const double loss_plus = ObjectiveFunction(configs);
 
 			trial_coordinates[coord] -= 2.0 * displacement;
-			if (!sus2::RadialWeightNormChart::Unpack(
-			        trial_coordinates.data(), row_size, trial_physical.data()))
+			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+			        trial_coordinates.data(),
+			        row_size,
+			        pivot,
+			        pivot_sign,
+			        trial_physical.data()))
 				ERROR("Invalid negative radial weight-normalization finite-difference trial.");
 			std::copy(trial_physical.begin(), trial_physical.end(),
 			          mtpr->Coeff() + row_begin);
@@ -1680,7 +1700,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-radial-weight-norm-roundtrip-dev",
-		"checks all outer radial weight-normalization coordinate round trips",
+		"checks outer and gate1 radial weight-normalization coordinate round trips",
 		"mlp-sus2 check-radial-weight-norm-roundtrip-dev model.mtp --abs-tolerance=1e-12 --rel-tolerance=1e-12\n"
 	) {
 		if (args.size() != 1) {
@@ -1702,16 +1722,24 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		double max_direction_radius = 0.0;
 		int worst_mu = -1;
 		int worst_xi = -1;
+		bool worst_is_gate1 = false;
 		bool tolerance_failed = false;
-		for (int mu = 0; mu < mtpr.radial_func_count; ++mu) {
-			const int row_begin =
-				mtpr.RadialCoeffOffset() + mu * mtpr.RadialCoeffBlockSize();
-			const double* physical = mtpr.Coeff() + row_begin;
-			if (!sus2::RadialWeightNormChart::Pack(
-			        physical, row_size, coordinates.data())
-			    || !sus2::RadialWeightNormChart::Unpack(
-			        coordinates.data(), row_size, reconstructed.data()))
-				ERROR("Cannot round-trip an outer radial weight-normalization row.");
+		auto check_row = [&](const double* physical, int mu, bool is_gate1) {
+			int pivot = 0;
+			double pivot_sign = 1.0;
+			if (is_gate1
+			    && !sus2::RadialWeightNormChart::SelectSignedPivot(
+				    physical, row_size, pivot, pivot_sign))
+				ERROR("Cannot select a gate1 radial weight-normalization pivot.");
+			if (!sus2::RadialWeightNormChart::PackWithPivot(
+			        physical, row_size, pivot, pivot_sign, coordinates.data())
+			    || !sus2::RadialWeightNormChart::UnpackWithPivot(
+			        coordinates.data(),
+			        row_size,
+			        pivot,
+			        pivot_sign,
+			        reconstructed.data()))
+				ERROR("Cannot round-trip a radial weight-normalization row.");
 			double direction_radius_sq = 0.0;
 			for (int xi = 1; xi < row_size; ++xi)
 				direction_radius_sq += coordinates[xi] * coordinates[xi];
@@ -1729,14 +1757,29 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					worst_abs_err = abs_err;
 					worst_mu = mu;
 					worst_xi = xi;
+					worst_is_gate1 = is_gate1;
 				}
 			}
+		};
+		for (int mu = 0; mu < mtpr.radial_func_count; ++mu) {
+			const int row_begin =
+				mtpr.RadialCoeffOffset() + mu * mtpr.RadialCoeffBlockSize();
+			check_row(mtpr.Coeff() + row_begin, mu, false);
+		}
+		int gate1_row_count = 0;
+		if (mtpr.TwoLayerGateUsesSharedRadial()) {
+			gate1_row_count = mtpr.radial_func_count;
+			const int gate1_begin = mtpr.TwoLayerGateRadialCoeffOffset();
+			for (int mu = 0; mu < mtpr.radial_func_count; ++mu)
+				check_row(mtpr.Coeff() + gate1_begin + mu * row_size, mu, true);
 		}
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
-			          << "rows=" << mtpr.radial_func_count
+			          << "outer_rows=" << mtpr.radial_func_count
+			          << " gate1_rows=" << gate1_row_count
 			          << " row_size=" << row_size
 			          << " max_direction_radius=" << max_direction_radius
+			          << " worst_block=" << (worst_is_gate1 ? "gate1" : "outer")
 			          << " worst_mu=" << worst_mu
 			          << " worst_xi=" << worst_xi
 			          << " max_abs_err=" << worst_abs_err
@@ -1748,8 +1791,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-radial-weight-norm-gradient-dev",
-		"checks the outer radial weight-normalization loss gradient",
-		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
+		"checks an outer or gate1 radial weight-normalization loss gradient",
+		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --radial-block=outer|gate1 --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-radial-weight-norm-gradient-dev: model and cfg arguments are required\n";
@@ -1776,6 +1819,12 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double abs_tolerance = ParseDevDoubleOption(opts, "abs-tolerance", 1.0e-5);
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-4);
 		const int mu = ParseDevIntOption(opts, "mu", 0);
+		std::string radial_block = opts["radial-block"];
+		if (radial_block.empty())
+			radial_block = "outer";
+		if (radial_block != "outer" && radial_block != "gate1")
+			ERROR("--radial-block should be 'outer' or 'gate1'.");
+		const bool gate1 = radial_block == "gate1";
 		if (displacement <= 0.0)
 			ERROR("--displacement should be positive.");
 
@@ -1795,10 +1844,11 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		probe.gate_x_l2_regularization =
 			ParseDevDoubleOption(opts, "gate-x-l2", 1.0e-4);
 		DevLossGradientProbe::Result result =
-			probe.CheckRadialWeightNorm(configs, displacement, mu);
+			probe.CheckRadialWeightNorm(configs, displacement, mu, gate1);
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
-			          << "mu=" << mu
+			          << "radial_block=" << radial_block
+			          << " mu=" << mu
 			          << " checked_coords=" << result.checked_count
 			          << " base_loss=" << result.base_loss
 			          << " worst_coord=" << result.worst_index
