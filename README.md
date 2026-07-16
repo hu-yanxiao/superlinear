@@ -123,6 +123,9 @@ Common training options:
 | `--optimizer-trace-file=<path>` | Generic alias for `--bfgs-trace-file`. L-BFGS traces include curvature/history diagnostics. |
 | `--optimizer-line-search=wolfe|armijo-value` | Generic line-search selector. L-BFGS supports value-only Armijo; BFGS retains its historical Wolfe default. |
 | `--radial-parameterization=physical|weight-norm` | Optimizer coordinates for outer and independent gate1 radial coefficient rows. Default `physical` preserves the release3 path; `weight-norm` separates each row's log norm from its direction without changing the saved model format or inference path. |
+| `--bfgs-coordinate-normalization=none|efs-gn` | Optional fixed diagonal BFGS coordinates for `species_coeffs`, scalar heads, and gate additive/mixing weights. `efs-gn` estimates the E/F/S generalized Gauss-Newton diagonal once per training stage; the default `none` preserves the previous path. |
+| `--bfgs-coordinate-probes=<int>` | Deterministic Hutchinson probe count used by `efs-gn`, default `4`. |
+| `--bfgs-coordinate-floor=<double>` | Per-block relative curvature floor for `efs-gn`, default `1e-6`. |
 | `--bfgs-conv-tol=<double>` | Stop when improvement over 50 BFGS iterations is below this factor, default `1e-3`. |
 | `--bfgs-trace-file=<path>` | Optional CSV trace of accepted BFGS steps. |
 | `--lbfgs-history=<int>` | Accepted curvature-pair history size, default `20`. |

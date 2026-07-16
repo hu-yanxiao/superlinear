@@ -30,15 +30,22 @@ int main()
                   9.0, 1.0e-14, "l2 loss");
     require_close(ForceResidualGrad(3.0, ForceLossKind::L2, scale),
                   6.0, 1.0e-14, "l2 grad");
+    require_close(ForceResidualCurvature(3.0, ForceLossKind::L2, scale),
+                  2.0, 1.0e-14, "l2 curvature");
 
     const double residual = 4.0;
     const double x = residual / scale;
     const double expected_loss = scale * scale * std::log(std::cosh(x));
     const double expected_grad = scale * std::tanh(x);
+    const double expected_curvature =
+        1.0 - std::tanh(x) * std::tanh(x);
     require_close(ForceResidualLoss(residual, ForceLossKind::LogCosh, scale),
                   expected_loss, 1.0e-13, "log-cosh loss");
     require_close(ForceResidualGrad(residual, ForceLossKind::LogCosh, scale),
                   expected_grad, 1.0e-13, "log-cosh grad");
+    require_close(ForceResidualCurvature(
+                      residual, ForceLossKind::LogCosh, scale),
+                  expected_curvature, 1.0e-13, "log-cosh curvature");
     require_close(ForceResidualGrad(100.0, ForceLossKind::LogCosh, scale),
                   scale, 1.0e-12, "log-cosh positive saturation");
     require_close(ForceResidualGrad(-100.0, ForceLossKind::LogCosh, scale),

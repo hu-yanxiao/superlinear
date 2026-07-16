@@ -92,6 +92,9 @@ public:
 	std::string optimizer_kind = "bfgs";
 	std::string bfgs_line_search = "wolfe";
 	std::string radial_parameterization = "physical";
+	std::string bfgs_coordinate_normalization = "none";
+	int bfgs_coordinate_probes = 4;
+	double bfgs_coordinate_floor = 1.0e-6;
 	int lbfgs_history_size = 20;
 	double lbfgs_curvature_tolerance = 1.0e-10;
 	double lbfgs_damping_threshold = 0.2;

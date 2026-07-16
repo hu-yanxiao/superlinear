@@ -1769,6 +1769,30 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_parameterization != "physical"
 	    && radial_parameterization != "weight-norm")
 		ERROR("--radial-parameterization should be 'physical' or 'weight-norm'");
+	string bfgs_coordinate_normalization = "none";
+	if (opts["bfgs-coordinate-normalization"] != "")
+		bfgs_coordinate_normalization =
+			opts["bfgs-coordinate-normalization"];
+	if (bfgs_coordinate_normalization != "none"
+	    && bfgs_coordinate_normalization != "efs-gn")
+		ERROR("--bfgs-coordinate-normalization should be 'none' or 'efs-gn'");
+	if (optimizer_kind != "bfgs"
+	    && bfgs_coordinate_normalization != "none")
+		ERROR("--bfgs-coordinate-normalization requires --optimizer=bfgs");
+	int bfgs_coordinate_probes = 4;
+	if (opts["bfgs-coordinate-probes"] != "")
+		bfgs_coordinate_probes =
+			stoi(opts["bfgs-coordinate-probes"]);
+	if (bfgs_coordinate_probes <= 0)
+		ERROR("--bfgs-coordinate-probes should be > 0");
+	double bfgs_coordinate_floor = 1.0e-6;
+	if (opts["bfgs-coordinate-floor"] != "")
+		bfgs_coordinate_floor =
+			stod(opts["bfgs-coordinate-floor"]);
+	if (!std::isfinite(bfgs_coordinate_floor)
+	    || bfgs_coordinate_floor < 0.0
+	    || bfgs_coordinate_floor > 1.0)
+		ERROR("--bfgs-coordinate-floor should be finite and in [0,1]");
 
 	double bfgs_conv_tol = 1e-3;
 	if (opts["optimizer-conv-tol"] != "")
@@ -2210,6 +2234,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.optimizer_kind = optimizer_kind;
 	trainer.bfgs_line_search = bfgs_line_search;
 	trainer.radial_parameterization = radial_parameterization;
+	trainer.bfgs_coordinate_normalization =
+		bfgs_coordinate_normalization;
+	trainer.bfgs_coordinate_probes = bfgs_coordinate_probes;
+	trainer.bfgs_coordinate_floor = bfgs_coordinate_floor;
 	trainer.curr_pot_name = curr_fnm;
 	trainer.bfgs_trace_file = optimizer_trace_fnm;
 	trainer.lbfgs_history_size = lbfgs_history_size;
@@ -2704,6 +2732,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "Optimizer line search: " << trainer.bfgs_line_search << std::endl;
 			std::cout << "Radial parameterization: "
 			          << trainer.radial_parameterization << std::endl;
+			std::cout << "BFGS coordinate normalization: "
+			          << trainer.bfgs_coordinate_normalization;
+			if (trainer.bfgs_coordinate_normalization == "efs-gn") {
+				std::cout << " probes=" << trainer.bfgs_coordinate_probes
+				          << " floor=" << trainer.bfgs_coordinate_floor;
+			}
+			std::cout << std::endl;
 			if (trainer.optimizer_kind == "lbfgs") {
 				std::cout << "L-BFGS settings: history=" << trainer.lbfgs_history_size
 				          << " curvature_tol=" << trainer.lbfgs_curvature_tolerance

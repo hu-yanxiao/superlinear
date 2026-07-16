@@ -9,6 +9,7 @@
 #endif
 
 #include "mtpr_trainer.h"
+#include "diagonal_coordinate_scaling.h"
 #include "radial_weight_norm.h"
 
 #ifdef ALGLIB
@@ -24,10 +25,12 @@
 #endif
 
 #include <ctime>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <array>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <random>
@@ -53,6 +56,47 @@ constexpr int kOptimizerReducePrefix = 1;
 constexpr int kAcceptedDiagDoubleCount = 11;
 constexpr int kAcceptedDiagCountCount = 3;
 constexpr int kTraceFlushInterval = 16;
+constexpr std::uint64_t kCoordinateProbeSeed = 0x9e3779b97f4a7c15ULL;
+
+std::uint64_t SplitMix64(std::uint64_t value)
+{
+	value += 0x9e3779b97f4a7c15ULL;
+	value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+	value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+	return value ^ (value >> 31);
+}
+
+double CoordinateProbeSign(int probe,
+	                       int rank,
+	                       std::size_t configuration_index,
+	                       std::uint64_t output_index)
+{
+	std::uint64_t key = kCoordinateProbeSeed;
+	key = SplitMix64(key ^ static_cast<std::uint64_t>(probe + 1));
+	key = SplitMix64(key ^ static_cast<std::uint64_t>(rank + 1));
+	key = SplitMix64(key ^ static_cast<std::uint64_t>(configuration_index + 1));
+	key = SplitMix64(key ^ (output_index + 1));
+	return (key & 1ULL) == 0ULL ? -1.0 : 1.0;
+}
+
+double MedianPositive(std::vector<double> values)
+{
+	values.erase(
+		std::remove_if(
+			values.begin(),
+			values.end(),
+			[](double value) { return !std::isfinite(value) || value <= 0.0; }),
+		values.end());
+	if (values.empty())
+		return 0.0;
+	const std::size_t middle = values.size() / 2;
+	std::nth_element(values.begin(), values.begin() + middle, values.end());
+	const double upper = values[middle];
+	if ((values.size() & 1U) != 0U)
+		return upper;
+	std::nth_element(values.begin(), values.begin() + middle - 1, values.begin() + middle);
+	return 0.5 * (values[middle - 1] + upper);
+}
 
 std::size_t UpperTrianglePackedSize(int n)
 {
@@ -1214,12 +1258,26 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
 	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
+	const bool use_bfgs_coordinate_normalization =
+		bfgs_coordinate_normalization == "efs-gn";
 	const std::string optimizer_log_name = use_lbfgs_optimizer ? "L-BFGS" : "BFGS";
 	if (!use_lbfgs_optimizer && optimizer_kind != "bfgs")
 		ERROR("MTPR_trainer::Train(): unknown optimizer " + optimizer_kind);
 	if (!use_radial_weight_norm && radial_parameterization != "physical")
 		ERROR("MTPR_trainer::Train(): unknown radial parameterization "
 		      + radial_parameterization);
+	if (!use_bfgs_coordinate_normalization
+	    && bfgs_coordinate_normalization != "none")
+		ERROR("MTPR_trainer::Train(): unknown BFGS coordinate normalization "
+		      + bfgs_coordinate_normalization);
+	if (use_bfgs_coordinate_normalization && use_lbfgs_optimizer)
+		ERROR("MTPR_trainer::Train(): --bfgs-coordinate-normalization requires --optimizer=bfgs");
+	if (bfgs_coordinate_probes <= 0)
+		ERROR("MTPR_trainer::Train(): BFGS coordinate probe count should be positive");
+	if (!std::isfinite(bfgs_coordinate_floor)
+	    || bfgs_coordinate_floor < 0.0
+	    || bfgs_coordinate_floor > 1.0)
+		ERROR("MTPR_trainer::Train(): BFGS coordinate floor should be finite and in [0,1]");
 	if (use_lbfgs_optimizer && bfgs_line_search != "armijo-value")
 		ERROR("MTPR_trainer::Train(): L-BFGS requires armijo-value line search");
 	if (use_lbfgs_optimizer) {
@@ -1416,22 +1474,119 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	const int redundant_radial_species_count =
 		n - p_mlmtpr->ActiveCoeffCount(false);
 
+	struct CoordinateNormalizationBlock {
+		std::string name;
+		std::vector<int> full_indices;
+	};
+	std::vector<CoordinateNormalizationBlock> coordinate_normalization_blocks;
+	std::vector<int> coordinate_normalization_block_by_full(n, -1);
+	std::vector<double> coordinate_scale_by_full(n, 1.0);
+	std::vector<double> coordinate_reference_by_full(n, 0.0);
+	bool coordinate_normalization_initialized =
+		!use_bfgs_coordinate_normalization;
+	auto add_coordinate_normalization_block =
+		[&](const std::string& name, int begin, int count) {
+			if (count <= 0)
+				return;
+			if (begin < 0 || begin + count > n)
+				ERROR("MTPR_trainer::Train(): invalid coordinate-normalization block " + name);
+			CoordinateNormalizationBlock block;
+			block.name = name;
+			for (int local = 0; local < count; ++local) {
+				const int full_idx = begin + local;
+				if (full_to_active_index[full_idx] < 0
+				    || radial_weight_norm_role[full_idx] >= 0)
+					continue;
+				if (coordinate_normalization_block_by_full[full_idx] >= 0)
+					ERROR("MTPR_trainer::Train(): overlapping coordinate-normalization blocks.");
+				block.full_indices.push_back(full_idx);
+			}
+			if (block.full_indices.empty())
+				return;
+			const int block_index =
+				static_cast<int>(coordinate_normalization_blocks.size());
+			for (int full_idx : block.full_indices)
+				coordinate_normalization_block_by_full[full_idx] = block_index;
+			coordinate_normalization_blocks.push_back(block);
+		};
+	if (use_bfgs_coordinate_normalization) {
+		const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+		add_coordinate_normalization_block(
+			"species-prefactor", linear_begin, p_mlmtpr->species_count);
+		add_coordinate_normalization_block(
+			"scalar-head",
+			linear_begin + p_mlmtpr->species_count,
+			p_mlmtpr->alpha_scalar_moments);
+		add_coordinate_normalization_block(
+			"residual-e0-head",
+			p_mlmtpr->TwoLayerResidualE0CoeffOffset(),
+			p_mlmtpr->TwoLayerResidualE0CoeffCount());
+		add_coordinate_normalization_block(
+			"gate1-additive",
+			p_mlmtpr->TwoLayerGateAdditiveCoeffOffset(),
+			p_mlmtpr->TwoLayerGateAdditiveCoeffCount());
+		add_coordinate_normalization_block(
+			"gate1-weight",
+			p_mlmtpr->TwoLayerGateWeightOffset(),
+			p_mlmtpr->TwoLayerGateWeightCount());
+		add_coordinate_normalization_block(
+			"gate1-body-mix",
+			p_mlmtpr->TwoLayerGateBodyMixWeightOffset(),
+			p_mlmtpr->TwoLayerGateBodyMixWeightCount());
+		add_coordinate_normalization_block(
+			"gate1-edge-l1",
+			p_mlmtpr->TwoLayerGateEdgeL1WeightOffset(),
+			p_mlmtpr->TwoLayerGateEdgeL1WeightCount());
+		add_coordinate_normalization_block(
+			"gate2-additive",
+			p_mlmtpr->SecondLayerGateAdditiveCoeffOffset(),
+			p_mlmtpr->SecondLayerGateAdditiveCoeffCount());
+		add_coordinate_normalization_block(
+			"gate2-weight",
+			p_mlmtpr->SecondLayerGateWeightOffset(),
+			p_mlmtpr->SecondLayerGateWeightCount());
+		add_coordinate_normalization_block(
+			"gate2-body-mix",
+			p_mlmtpr->SecondLayerGateBodyMixWeightOffset(),
+			p_mlmtpr->SecondLayerGateBodyMixWeightCount());
+		if (coordinate_normalization_blocks.empty())
+			ERROR("MTPR_trainer::Train(): no active parameter block supports BFGS coordinate normalization.");
+	}
+
 	std::vector<double> active_coeffs(opt_n, 0.0);
 	auto full_to_optimizer_value = [&](int full_idx) {
+		double base_value = x[full_idx];
 		if (p_mlmtpr->IsRadialFirstCoeff(full_idx))
-			return p_mlmtpr->RadialFirstCoeffValueToRaw(x[full_idx]);
-		return x[full_idx];
+			base_value = p_mlmtpr->RadialFirstCoeffValueToRaw(base_value);
+		const double scale = coordinate_scale_by_full[full_idx];
+		if (!sus2::DiagonalCoordinateScaling::IsValidScale(scale))
+			ERROR("MTPR_trainer::Train(): invalid optimizer coordinate scale.");
+		return sus2::DiagonalCoordinateScaling::PackCentered(
+			base_value,
+			coordinate_reference_by_full[full_idx],
+			scale);
 	};
 	auto optimizer_to_full_value = [&](int full_idx, double opt_value) {
+		const double scale = coordinate_scale_by_full[full_idx];
+		if (!sus2::DiagonalCoordinateScaling::IsValidScale(scale))
+			ERROR("MTPR_trainer::Train(): invalid optimizer coordinate scale.");
+		const double base_value =
+			sus2::DiagonalCoordinateScaling::UnpackCentered(
+				opt_value,
+				coordinate_reference_by_full[full_idx],
+				scale);
 		if (p_mlmtpr->IsRadialFirstCoeff(full_idx))
-			return p_mlmtpr->RadialFirstCoeffRawToValue(opt_value);
-		return opt_value;
+			return p_mlmtpr->RadialFirstCoeffRawToValue(base_value);
+		return base_value;
 	};
 	auto physical_coordinate_gradient_value = [&](int full_idx) {
 		double grad = loss_grad_[full_idx];
 		if (p_mlmtpr->IsRadialFirstCoeff(full_idx))
 			grad *= p_mlmtpr->RadialFirstCoeffDerivativeFromValue(x[full_idx]);
-		return grad;
+		const double scale = coordinate_scale_by_full[full_idx];
+		if (!sus2::DiagonalCoordinateScaling::IsValidScale(scale))
+			ERROR("MTPR_trainer::Train(): invalid optimizer coordinate scale.");
+		return sus2::DiagonalCoordinateScaling::PullbackGradient(grad, scale);
 	};
 	auto pack_active_coeffs = [&]() {
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
@@ -1557,8 +1712,382 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				ERROR("MTPR_trainer::Train(): cannot pull back radial weight-normalization gradient.");
 		}
 	};
+	auto initialize_bfgs_coordinate_normalization = [&]() {
+		if (coordinate_normalization_initialized)
+			return;
+		if (K <= 0)
+			ERROR("MTPR_trainer::Train(): BFGS coordinate normalization requires training configurations.");
+		const std::vector<double> physical_coeff_reference(x, x + n);
+
+		std::vector<int> selected_full_indices;
+		for (const CoordinateNormalizationBlock& block :
+		     coordinate_normalization_blocks)
+			selected_full_indices.insert(
+				selected_full_indices.end(),
+				block.full_indices.begin(),
+				block.full_indices.end());
+		if (selected_full_indices.empty())
+			ERROR("MTPR_trainer::Train(): BFGS coordinate normalization has no active coordinates.");
+
+		double build_start = 0.0;
+#ifdef MLIP_MPI
+		build_start = MPI_Wtime();
+#else
+		build_start = static_cast<double>(std::clock()) / CLOCKS_PER_SEC;
+#endif
+
+		Array1D probe_gradient(n);
+		std::vector<double> selected_diagonal_local(
+			selected_full_indices.size(), 0.0);
+		std::vector<double> selected_diagonal_global(
+			selected_full_indices.size(), 0.0);
+
+		const double inv_global_count = 1.0 / static_cast<double>(K);
+		auto sqrt_curvature = [&](double curvature,
+		                          const std::string& output_name) {
+			if (!std::isfinite(curvature) || curvature < 0.0)
+				ERROR("MTPR_trainer::Train(): invalid " + output_name
+				      + " curvature in BFGS coordinate normalization.");
+			return std::sqrt(curvature * inv_global_count);
+		};
+
+		for (std::size_t cfg_index = 0;
+		     cfg_index < training_set.size();
+		     ++cfg_index) {
+			const Configuration& original = training_set[cfg_index];
+			if (original.size() == 0)
+				continue;
+			Configuration evaluated = original;
+			const Neighborhoods* cfg_neighborhoods =
+				cache_training_neighborhoods
+					? &training_neighborhoods[cfg_index]
+					: nullptr;
+			EvaluateTrainingConfiguration(
+				original, evaluated, cfg_neighborhoods, true);
+
+			double average_force_sq = 0.0;
+			if (original.has_forces()) {
+				for (int atom = 0; atom < original.size(); ++atom)
+					average_force_sq += original.force(atom).NormSq()
+						/ static_cast<double>(original.size());
+			}
+			const double force_normalization =
+				0.1 / (0.1 + norm_by_forces * average_force_sq);
+
+			double energy_weight = wgt_eqtn_energy;
+			double stress_weight = wgt_eqtn_stress;
+			if (weighting == "structures") {
+				energy_weight /= original.size();
+				stress_weight /= original.size();
+			} else if (weighting == "molecules") {
+				energy_weight *= original.size();
+				stress_weight *= original.size();
+			}
+
+			for (int probe = 0; probe < bfgs_coordinate_probes; ++probe) {
+				std::fill(
+					&probe_gradient[0], &probe_gradient[0] + n, 0.0);
+				std::vector<double> energy_weights(original.size(), 0.0);
+				std::vector<Vector3> force_weights(
+					original.size(), Vector3(0.0, 0.0, 0.0));
+				Matrix3 stress_weights(
+					0.0, 0.0, 0.0,
+					0.0, 0.0, 0.0,
+					0.0, 0.0, 0.0);
+				bool has_nonzero_output_weight = false;
+				std::uint64_t output_index = 0;
+
+				if (energy_weight != 0.0 && original.has_energy()) {
+					const double magnitude = sqrt_curvature(
+						2.0 * energy_weight * force_normalization
+							/ static_cast<double>(original.size()),
+						"energy");
+					const double weight = magnitude * CoordinateProbeSign(
+						probe, prank, cfg_index, output_index);
+					std::fill(
+						energy_weights.begin(), energy_weights.end(), weight);
+					has_nonzero_output_weight =
+						has_nonzero_output_weight || magnitude != 0.0;
+				}
+				++output_index;
+
+				if (wgt_eqtn_forces != 0.0 && original.has_forces()) {
+					for (int atom = 0; atom < original.size(); ++atom) {
+						double force_weight = wgt_rel_forces <= 0.0
+							? wgt_eqtn_forces
+							: wgt_eqtn_forces * wgt_rel_forces
+								/ (original.force(atom).NormSq()
+								   + wgt_rel_forces);
+						if (weighting == "structures")
+							force_weight /= original.size();
+						const double force_scale =
+							force_weight * force_normalization;
+						for (int component = 0; component < 3; ++component) {
+							const double residual =
+								evaluated.force(atom, component)
+								- original.force(atom, component);
+							const double magnitude = sqrt_curvature(
+								force_scale * ForceResidualCurvature(
+									residual,
+									force_loss_kind,
+									force_log_cosh_scale),
+								"force");
+							force_weights[atom][component] =
+								magnitude * CoordinateProbeSign(
+									probe,
+									prank,
+									cfg_index,
+									output_index);
+							has_nonzero_output_weight =
+								has_nonzero_output_weight || magnitude != 0.0;
+							++output_index;
+						}
+					}
+				} else {
+					output_index +=
+						static_cast<std::uint64_t>(3 * original.size());
+				}
+
+				if (stress_weight != 0.0 && original.has_stresses()) {
+					const double magnitude = sqrt_curvature(
+						2.0 * stress_weight
+							/ static_cast<double>(original.size()),
+						"stress");
+					for (int a = 0; a < 3; ++a) {
+						for (int b = 0; b < 3; ++b) {
+							stress_weights[a][b] =
+								magnitude * CoordinateProbeSign(
+									probe,
+									prank,
+									cfg_index,
+									output_index);
+							++output_index;
+						}
+					}
+					has_nonzero_output_weight =
+						has_nonzero_output_weight || magnitude != 0.0;
+				}
+
+				if (!has_nonzero_output_weight)
+					continue;
+				if (NeedPositionDerivativeTerms(original)) {
+					if (cfg_neighborhoods != nullptr) {
+						p_mlmtpr->AccumulateEFSCombinationGrad(
+							evaluated,
+							energy_weights,
+							force_weights,
+							stress_weights,
+							probe_gradient,
+							*cfg_neighborhoods);
+					} else {
+						p_mlmtpr->AccumulateEFSCombinationGrad(
+							evaluated,
+							energy_weights,
+							force_weights,
+							stress_weights,
+							probe_gradient);
+					}
+				} else if (cfg_neighborhoods != nullptr) {
+					p_mlmtpr->AccumulateEnergyCombinationGrad(
+						evaluated,
+						energy_weights,
+						probe_gradient,
+						*cfg_neighborhoods);
+				} else {
+					p_mlmtpr->AccumulateEnergyCombinationGrad(
+						evaluated,
+						energy_weights,
+						probe_gradient);
+				}
+				for (std::size_t selected = 0;
+				     selected < selected_full_indices.size();
+				     ++selected) {
+					const double value =
+						probe_gradient[selected_full_indices[selected]];
+					if (!std::isfinite(value))
+						ERROR("MTPR_trainer::Train(): non-finite BFGS coordinate probe gradient.");
+					selected_diagonal_local[selected] +=
+						value * value
+						/ static_cast<double>(bfgs_coordinate_probes);
+				}
+			}
+		}
+
+		std::vector<double> diagonal(n, 0.0);
+#ifdef MLIP_MPI
+		MPI_Allreduce(
+			selected_diagonal_local.data(),
+			selected_diagonal_global.data(),
+			static_cast<int>(selected_diagonal_local.size()),
+			MPI_DOUBLE,
+			MPI_SUM,
+			train_comm);
+#else
+		selected_diagonal_global = selected_diagonal_local;
+#endif
+		for (std::size_t selected = 0;
+		     selected < selected_full_indices.size();
+		     ++selected) {
+			const double value = selected_diagonal_global[selected];
+			if (!std::isfinite(value) || value < 0.0)
+				ERROR("MTPR_trainer::Train(): invalid reduced BFGS coordinate diagonal.");
+			diagonal[selected_full_indices[selected]] = value;
+		}
+
+		if (!fixed_atomic_energies.empty()
+		    && fixed_atomic_energy_weight != 0.0) {
+			const double curvature =
+				2.0 * fixed_atomic_energy_weight
+				/ static_cast<double>(p_mlmtpr->species_count);
+			const int species_begin = p_mlmtpr->LinearCoeffOffset();
+			for (int type = 0; type < p_mlmtpr->species_count; ++type)
+				diagonal[species_begin + type] += curvature;
+		}
+		if (scalar_head_l2_regularization != 0.0
+		    && p_mlmtpr->alpha_scalar_moments > 0) {
+			const int scalar_begin =
+				p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
+			const double base_curvature =
+				2.0 * scalar_head_l2_regularization
+				/ static_cast<double>(p_mlmtpr->alpha_scalar_moments);
+			for (int q = 0; q < p_mlmtpr->alpha_scalar_moments; ++q) {
+				const double mult =
+					q < static_cast<int>(p_mlmtpr->linear_mults.size())
+						? p_mlmtpr->linear_mults[q]
+						: 1.0;
+				diagonal[scalar_begin + q] +=
+					base_curvature * mult * mult;
+			}
+		}
+		if (p_mlmtpr->TwoLayerGateUsesBodyLinearCombo()) {
+			const int scalar_count = p_mlmtpr->TwoLayerGateWeightCount();
+			if (gate_scalar_l2_regularization != 0.0
+			    && scalar_count > 0) {
+				const double curvature =
+					2.0 * gate_scalar_l2_regularization
+					/ static_cast<double>(scalar_count);
+				const int offset = p_mlmtpr->TwoLayerGateWeightOffset();
+				for (int i = 0; i < scalar_count; ++i)
+					diagonal[offset + i] += curvature;
+			}
+			const int mix_count =
+				p_mlmtpr->TwoLayerGateBodyMixWeightCount();
+			if (gate_mix_l2_regularization != 0.0 && mix_count > 0) {
+				const double curvature =
+					2.0 * gate_mix_l2_regularization
+					/ static_cast<double>(mix_count);
+				const int offset =
+					p_mlmtpr->TwoLayerGateBodyMixWeightOffset();
+				for (int i = 0; i < mix_count; ++i)
+					diagonal[offset + i] += curvature;
+			}
+		} else if (p_mlmtpr->TwoLayerGateUsesFullScalarWeights()) {
+			const int count = p_mlmtpr->TwoLayerGateWeightCount();
+			if (gate_full_l2_regularization != 0.0 && count > 0) {
+				const double curvature =
+					2.0 * gate_full_l2_regularization
+					/ static_cast<double>(count);
+				const int offset = p_mlmtpr->TwoLayerGateWeightOffset();
+				for (int i = 0; i < count; ++i)
+					diagonal[offset + i] += curvature;
+			}
+		}
+
+		for (int full_idx = 0; full_idx < n; ++full_idx) {
+			if (x[full_idx] != physical_coeff_reference[full_idx])
+				ERROR("MTPR_trainer::Train(): BFGS coordinate scale construction "
+				      "modified physical coefficient " + std::to_string(full_idx));
+		}
+
+		const double scale_min_limit = 1.0e-8;
+		const double scale_max_limit = 1.0e8;
+		for (const CoordinateNormalizationBlock& block :
+		     coordinate_normalization_blocks) {
+			std::vector<double> positive_diagonal;
+			positive_diagonal.reserve(block.full_indices.size());
+			for (int full_idx : block.full_indices) {
+				const double value = diagonal[full_idx];
+				if (!std::isfinite(value) || value < 0.0)
+					ERROR("MTPR_trainer::Train(): invalid BFGS coordinate diagonal.");
+				if (value > 0.0)
+					positive_diagonal.push_back(value);
+			}
+			const double median = MedianPositive(positive_diagonal);
+			double raw_min = std::numeric_limits<double>::infinity();
+			double raw_max = 0.0;
+			double scale_min = std::numeric_limits<double>::infinity();
+			double scale_max = 0.0;
+			int floored_count = 0;
+			int identity_count = 0;
+			const double block_floor = bfgs_coordinate_floor * median;
+			const double reference_curvature =
+				median > 0.0 ? std::min(median, 1.0) : 1.0;
+			for (int full_idx : block.full_indices) {
+				const double raw = diagonal[full_idx];
+				raw_min = std::min(raw_min, raw);
+				raw_max = std::max(raw_max, raw);
+				if (median > 0.0 && raw < block_floor)
+					++floored_count;
+				double scale =
+					sus2::DiagonalCoordinateScaling::ScaleFromCurvature(
+						raw, median, bfgs_coordinate_floor);
+				if (median == 0.0
+				    || (raw == 0.0 && bfgs_coordinate_floor == 0.0))
+					++identity_count;
+				scale = std::max(
+					scale_min_limit,
+					std::min(scale, scale_max_limit));
+				if (!sus2::DiagonalCoordinateScaling::IsValidScale(scale))
+					ERROR("MTPR_trainer::Train(): invalid stabilized BFGS coordinate scale.");
+				coordinate_scale_by_full[full_idx] = scale;
+				coordinate_reference_by_full[full_idx] = x[full_idx];
+				scale_min = std::min(scale_min, scale);
+				scale_max = std::max(scale_max, scale);
+			}
+			if (prank == 0) {
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "BFGS coordinate normalization block"
+				          << " name=" << block.name
+				          << " count=" << block.full_indices.size()
+				          << " h_min=" << raw_min
+				          << " h_median=" << median
+				          << " h_max=" << raw_max
+				          << " h_reference=" << reference_curvature
+				          << " scale_min=" << scale_min
+				          << " scale_max=" << scale_max
+				          << " floored=" << floored_count
+				          << " identity=" << identity_count
+				          << std::endl;
+			}
+		}
+		coordinate_normalization_initialized = true;
+
+		double build_seconds = 0.0;
+#ifdef MLIP_MPI
+		build_seconds = MPI_Wtime() - build_start;
+#else
+		build_seconds =
+			static_cast<double>(std::clock()) / CLOCKS_PER_SEC - build_start;
+#endif
+		if (prank == 0) {
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "BFGS coordinate normalization initialized"
+			          << " mode=efs-gn"
+			          << " probes=" << bfgs_coordinate_probes
+			          << " selected_count=" << selected_full_indices.size()
+			          << " floor=" << bfgs_coordinate_floor
+			          << " seconds=" << build_seconds
+			          << " stage=fixed"
+			          << " physical_reference=exact"
+			          << " model_format=physical"
+			          << std::endl;
+		}
+	};
 	auto full_inv_hess_diag_value = [&](int full_idx) {
 		double value = 1.0;
+		if (coordinate_normalization_initialized
+		    && coordinate_normalization_block_by_full[full_idx] >= 0)
+			return value;
 		if (p_mlmtpr->TwoLayerResidualEnabled()) {
 			const int e0_begin = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
 			const int e0_end = e0_begin + p_mlmtpr->TwoLayerResidualE0CoeffCount();
@@ -1576,8 +2105,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	set_optimizer_x_from_full_coeffs();
 	Array1D inv_hess_diag(opt_n, 1.0);
-	for (int active_idx = 0; active_idx < opt_n; ++active_idx)
-		inv_hess_diag[active_idx] = full_inv_hess_diag_value(active_coeff_indices[active_idx]);
+	auto refresh_inv_hess_diag = [&]() {
+		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
+			inv_hess_diag[active_idx] =
+				full_inv_hess_diag_value(active_coeff_indices[active_idx]);
+	};
+	refresh_inv_hess_diag();
 	optimizer_set_inv_hess_diag(inv_hess_diag);
 	const int species_coeff_begin = n - nlin;
 	std::vector<int> species_coeff_active_indices;
@@ -1817,6 +2350,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			if (optimizer_replicated && external_x_needs_broadcast)
 				MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
 #endif
+			if (!coordinate_normalization_initialized) {
+				initialize_bfgs_coordinate_normalization();
+				refresh_inv_hess_diag();
+				reset_optimizer_state();
+				mask_frozen_coordinates(freeze_species_coeffs);
+			}
 			if (external_x_modified) {
 				if (optimizer_replicated || prank == 0)
 					set_optimizer_x_from_full_coeffs();

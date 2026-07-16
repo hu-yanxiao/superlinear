@@ -1,6 +1,7 @@
 #ifndef MLIP_FORCE_LOSS_H
 #define MLIP_FORCE_LOSS_H
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -63,6 +64,20 @@ inline double ForceResidualGrad(double residual, ForceLossKind kind, double log_
 	case ForceLossKind::LogCosh:
 		ValidateForceLogCoshScale(log_cosh_scale);
 		return log_cosh_scale * std::tanh(residual / log_cosh_scale);
+	}
+	throw std::invalid_argument("unknown force loss kind");
+}
+
+inline double ForceResidualCurvature(double residual, ForceLossKind kind, double log_cosh_scale)
+{
+	switch (kind) {
+	case ForceLossKind::L2:
+		return 2.0;
+	case ForceLossKind::LogCosh: {
+		ValidateForceLogCoshScale(log_cosh_scale);
+		const double tangent = std::tanh(residual / log_cosh_scale);
+		return std::max(0.0, 1.0 - tangent * tangent);
+	}
 	}
 	throw std::invalid_argument("unknown force loss kind");
 }

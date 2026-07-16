@@ -36,6 +36,7 @@
 //#include "../coul_qeq.h"
 //#include "../mult_trainer.h"
 #include "../mtpr_trainer.h"
+#include "../diagonal_coordinate_scaling.h"
 #include "../radial_weight_norm.h"
 //#include "../mtpr_trainer2.h"
 #include "../../src/mlip_wrapper.h"
@@ -89,6 +90,71 @@ bool RunAllTestsDev(bool is_parallel)
 	std::string curr_test_name;
 {} // this tricks MSVS not to create an extra tab
 //
+
+TEST("fixed diagonal optimizer coordinates and gradient") {
+	const int count = 4;
+	const double physical[count] = {2.0, -0.25, 4.5, -3.0};
+	const double references[count] = {1.75, -1.0, 4.5, 2.0};
+	const double scales[count] = {0.2, 3.0, 11.0, 0.75};
+	double coordinates[count] = {};
+	double reconstructed[count] = {};
+	for (int i = 0; i < count; ++i) {
+		if (!sus2::DiagonalCoordinateScaling::IsValidScale(scales[i]))
+			FAIL("valid diagonal scale rejected")
+		coordinates[i] =
+			sus2::DiagonalCoordinateScaling::PackCentered(
+				physical[i], references[i], scales[i]);
+		reconstructed[i] =
+			sus2::DiagonalCoordinateScaling::UnpackCentered(
+				coordinates[i], references[i], scales[i]);
+		if (std::abs(reconstructed[i] - physical[i]) > 1.0e-14)
+			FAIL("diagonal coordinate round trip changed the physical parameter")
+	}
+
+	auto loss = [&](const double* values) {
+		double result = 0.0;
+		for (int i = 0; i < count; ++i)
+			result += 0.5 * (i + 1.0) * values[i] * values[i]
+			        + std::sin(values[i]);
+		return result;
+	};
+	double coordinate_gradient[count] = {};
+	for (int i = 0; i < count; ++i) {
+		const double physical_gradient =
+			(i + 1.0) * physical[i] + std::cos(physical[i]);
+		coordinate_gradient[i] =
+			sus2::DiagonalCoordinateScaling::PullbackGradient(
+				physical_gradient, scales[i]);
+	}
+	const double diff_step = 1.0e-6;
+	for (int coordinate = 0; coordinate < count; ++coordinate) {
+		double plus_physical[count] = {};
+		double minus_physical[count] = {};
+		for (int i = 0; i < count; ++i) {
+			double plus_coordinate = coordinates[i];
+			double minus_coordinate = coordinates[i];
+			if (i == coordinate) {
+				plus_coordinate += diff_step;
+				minus_coordinate -= diff_step;
+			}
+			plus_physical[i] =
+				sus2::DiagonalCoordinateScaling::UnpackCentered(
+					plus_coordinate, references[i], scales[i]);
+			minus_physical[i] =
+				sus2::DiagonalCoordinateScaling::UnpackCentered(
+					minus_coordinate, references[i], scales[i]);
+		}
+		const double finite_difference =
+			(loss(plus_physical) - loss(minus_physical))
+			/ (2.0 * diff_step);
+		const double comparison_scale =
+			std::max(1.0, std::abs(finite_difference));
+		if (std::abs(finite_difference - coordinate_gradient[coordinate])
+		    > 2.0e-8 * comparison_scale)
+			FAIL("diagonal coordinate gradient pullback mismatch")
+	}
+}
+END_TEST;
 
 TEST("radial weight-normalization chart and gradient") {
 	const int count = 5;
