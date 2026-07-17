@@ -382,10 +382,9 @@ public:
 		          original.begin());
 		int pivot = 0;
 		double pivot_sign = 1.0;
-		if (gate1
-		    && !sus2::RadialWeightNormChart::SelectSignedPivot(
-			    original.data(), row_size, pivot, pivot_sign))
-			ERROR("Cannot select a pivot for the gate1 radial weight-normalization row.");
+		if (!sus2::RadialWeightNormChart::SelectSignedPivot(
+		        original.data(), row_size, pivot, pivot_sign))
+			ERROR("Cannot select a pivot for the radial weight-normalization row.");
 		std::vector<double> coordinates(row_size, 0.0);
 		if (!sus2::RadialWeightNormChart::PackWithPivot(
 		        original.data(), row_size, pivot, pivot_sign, coordinates.data()))
@@ -1727,10 +1726,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		auto check_row = [&](const double* physical, int mu, bool is_gate1) {
 			int pivot = 0;
 			double pivot_sign = 1.0;
-			if (is_gate1
-			    && !sus2::RadialWeightNormChart::SelectSignedPivot(
-				    physical, row_size, pivot, pivot_sign))
-				ERROR("Cannot select a gate1 radial weight-normalization pivot.");
+			if (!sus2::RadialWeightNormChart::SelectSignedPivot(
+			        physical, row_size, pivot, pivot_sign))
+				ERROR("Cannot select a radial weight-normalization pivot.");
 			if (!sus2::RadialWeightNormChart::PackWithPivot(
 			        physical, row_size, pivot, pivot_sign, coordinates.data())
 			    || !sus2::RadialWeightNormChart::UnpackWithPivot(

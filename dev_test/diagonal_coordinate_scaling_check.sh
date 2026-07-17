@@ -95,9 +95,18 @@ int main()
             4.0, 4.0, floor);
     if (std::abs(median_scale - 1.0) > 1.0e-14
         || std::abs(stiff_scale - 2.0) > 1.0e-14
-        || std::abs(floored_scale - std::sqrt(floor)) > 1.0e-14
+        || std::abs(floored_scale - 1.0) > 1.0e-14
         || std::abs(high_block_scale - 2.0) > 1.0e-14) {
         std::cerr << "curvature scale stabilization mismatch" << std::endl;
+        return 1;
+    }
+
+    const double tiny_scale =
+        sus2::DiagonalCoordinateScaling::ScaleFromCurvature(
+            1.0e-20, 10.0, floor);
+    if (tiny_scale < 1.0 || 1.0 / (tiny_scale * tiny_scale) > 1.0) {
+        std::cerr << "coordinate scale amplified the physical BFGS step"
+                  << std::endl;
         return 1;
     }
 

@@ -8,12 +8,13 @@ mkdir -p "$tmp_dir"
 
 initial_model="$tmp_dir/initial.mtp"
 seed_model="$tmp_dir/seed.mtp"
-negative_gate_model="$tmp_dir/negative_gate_seed.mtp"
+signed_resume_model="$tmp_dir/signed_resume_seed.mtp"
+signed_resume_trace="$tmp_dir/signed_resume.csv"
+signed_resume_none_trace="$tmp_dir/signed_resume_none.csv"
 untrained_weight_norm_model="$tmp_dir/untrained_weight_norm.mtp"
 train_cfg="$tmp_dir/one.cfg"
 physical_model="$tmp_dir/physical_step0.mtp"
 weight_norm_model="$tmp_dir/weight_norm_step0.mtp"
-do_lin_model="$tmp_dir/weight_norm_do_lin_step0.mtp"
 physical_trace="$tmp_dir/physical.csv"
 weight_norm_trace="$tmp_dir/weight_norm.csv"
 rm -f "$tmp_dir"/*.mtp "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
@@ -103,39 +104,113 @@ for mu in 0 3; do
     --rel-tolerance=2e-4 >"$tmp_dir/gradient_gate1_mu${mu}.log"
 done
 
-# A continued gate model may have either sign in every radial row. Verify that
-# the trainer selects a signed chart without changing the serialized values.
-python3 - "$seed_model" "$negative_gate_model" <<'PY'
+# A continued physical model may have either sign in every radial row. Verify
+# that enabling both normalization layers converts outer and gate1 rows to
+# optimizer coordinates without changing the loaded physical coefficients.
+python3 - "$seed_model" "$signed_resume_model" <<'PY'
 import pathlib
 import re
 import sys
 
 source, target = map(pathlib.Path, sys.argv[1:])
 text = source.read_text()
-pattern = re.compile(r"(two_layer_gate_radial_coeffs\s*=\s*\{)([^,}]+)")
-match = pattern.search(text)
-if not match:
-    raise SystemExit("missing gate1 radial coefficient block")
-first = float(match.group(2))
-replacement = match.group(1) + f"{-abs(first):.15e}"
-target.write_text(text[: match.start()] + replacement + text[match.end() :])
+
+
+def negate_first(pattern, label, value):
+    match = pattern.search(value)
+    if not match:
+        raise SystemExit(f"missing {label} radial coefficient block")
+    first = float(match.group(2))
+    replacement = match.group(1) + f"{-abs(first):.15e}"
+    return value[: match.start()] + replacement + value[match.end() :]
+
+
+text = negate_first(
+    re.compile(
+        r"(\bradial_coeffs\b\s*\d+\s*-\s*\d+\s*\{\s*)"
+        r"([-+0-9.eE]+)",
+        re.S,
+    ),
+    "outer",
+    text,
+)
+text = negate_first(
+    re.compile(r"(two_layer_gate_radial_coeffs\s*=\s*\{)([^,}]+)"),
+    "gate1",
+    text,
+)
+target.write_text(text)
 PY
 
 ./bin/mlp-sus2 check-radial-weight-norm-roundtrip-dev \
-  "$negative_gate_model" \
+  "$signed_resume_model" \
   --abs-tolerance=2e-12 \
-  --rel-tolerance=2e-12 >"$tmp_dir/negative_gate_roundtrip.log"
+  --rel-tolerance=2e-12 >"$tmp_dir/signed_resume_roundtrip.log"
 
-./bin/mlp-sus2 train "$negative_gate_model" "$train_cfg" \
+./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
   --radial-parameterization=weight-norm \
-  --trained-pot-name="$tmp_dir/negative_gate_trained.mtp" \
+  --bfgs-coordinate-normalization=none \
+  --optimizer-trace-file="$signed_resume_none_trace" \
+  --trained-pot-name="$tmp_dir/signed_resume_none_trained.mtp" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
   --force-weight=0.1 \
   --stress-weight=0 \
-  --radial-smooth=0 >"$tmp_dir/negative_gate_train.log" 2>&1
-grep -Eq "gate1_rows=[1-9][0-9]*" "$tmp_dir/negative_gate_train.log"
+  --radial-smooth=0 >"$tmp_dir/signed_resume_none.log" 2>&1
+
+./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
+  --radial-parameterization=weight-norm \
+  --bfgs-coordinate-normalization=efs-gn \
+  --bfgs-coordinate-probes=2 \
+  --optimizer-trace-file="$signed_resume_trace" \
+  --trained-pot-name="$tmp_dir/signed_resume_trained.mtp" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0.1 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$tmp_dir/signed_resume_train.log" 2>&1
+grep -q "physical_load=roundtrip-verified" "$tmp_dir/signed_resume_train.log"
+grep -q "physical_reference=exact" "$tmp_dir/signed_resume_train.log"
+test -s "$signed_resume_trace"
+if grep -Eq "Repaired .*radial first|radial first-coeff sign repair" \
+  "$tmp_dir/signed_resume_train.log"; then
+  echo "weight-normalized resume unexpectedly repaired physical radial coefficients" >&2
+  exit 1
+fi
+
+python3 - "$tmp_dir/signed_resume_none.log" "$tmp_dir/signed_resume_train.log" <<'PY'
+import math
+import pathlib
+import re
+import sys
+
+pattern = re.compile(
+    r"optimizer physical startup objective total_loss=([0-9eE+.-]+)"
+)
+
+
+def startup_loss(path):
+    match = pattern.search(path.read_text())
+    if match is None:
+        raise SystemExit(f"missing startup physical objective in {path}")
+    value = float(match.group(1))
+    if not math.isfinite(value):
+        raise SystemExit(f"non-finite startup physical objective in {path}")
+    return value
+
+
+none_path, normalized_path = map(pathlib.Path, sys.argv[1:])
+none_loss = startup_loss(none_path)
+normalized_loss = startup_loss(normalized_path)
+scale = max(1.0, abs(none_loss), abs(normalized_loss))
+if abs(none_loss - normalized_loss) > 2.0e-12 * scale:
+    raise SystemExit(
+        "combined weight normalization and EFS-GN changed the loaded physical "
+        f"objective: none={none_loss:.17e} normalized={normalized_loss:.17e}"
+    )
+PY
 
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
   --radial-parameterization=physical \
@@ -176,7 +251,6 @@ fi
   --do-lin \
   --do-lin-steps=1 \
   --do-lin-freq=1 \
-  --curr-pot-name="$do_lin_model" \
   --trained-pot-name="$tmp_dir/do_lin_trained.mtp" \
   --max-iter=1 \
   --skip-preinit \
@@ -184,17 +258,14 @@ fi
   --force-weight=0.1 \
   --stress-weight=0 \
   --radial-smooth=0 >"$tmp_dir/do_lin.log" 2>&1
+grep -q "TrainLinear solve done" "$tmp_dir/do_lin.log"
 
-python3 - "$physical_trace" "$weight_norm_trace" \
-  "$seed_model" "$do_lin_model" <<'PY'
+python3 - "$physical_trace" "$weight_norm_trace" <<'PY'
 import csv
 import pathlib
-import re
 import sys
 
-physical_trace, weight_norm_trace, seed_model, do_lin_model = map(
-    pathlib.Path, sys.argv[1:]
-)
+physical_trace, weight_norm_trace = map(pathlib.Path, sys.argv[1:])
 
 
 def first_loss(path):
@@ -212,63 +283,6 @@ if abs(physical_loss - weight_norm_loss) > 1.0e-10 * loss_scale:
     raise SystemExit(
         f"weight-norm changed the initial physical objective: "
         f"{weight_norm_loss} vs {physical_loss}"
-    )
-
-
-def outer_radial(path):
-    text = path.read_text()
-    match = re.search(
-        r"\bradial_coeffs\s*(.*?)\balpha_moments_count\s*=",
-        text,
-        re.S,
-    )
-    if not match:
-        raise SystemExit(f"cannot find outer radial block in {path}")
-    rows = re.findall(r"\{([^{}]+)\}", match.group(1))
-    return [
-        [float(value.strip()) for value in row.split(",")]
-        for row in rows
-    ]
-
-
-def named_vector(path, name):
-    text = path.read_text()
-    match = re.search(rf"\b{name}\s*=\s*\{{([^}}]+)\}}", text)
-    if not match:
-        raise SystemExit(f"cannot find {name} in {path}")
-    return [float(value.strip()) for value in match.group(1).split(",")]
-
-
-seed_rows = outer_radial(seed_model)
-do_lin_rows = outer_radial(do_lin_model)
-if len(seed_rows) != len(do_lin_rows):
-    raise SystemExit("TrainLinear changed outer radial row count")
-max_radial_error = 0.0
-for seed_row, do_lin_row in zip(seed_rows, do_lin_rows):
-    # Type coefficients follow the primitive radial coefficients in the same
-    # serialized row. TrainLinear does not change either part.
-    if len(seed_row) != len(do_lin_row):
-        raise SystemExit("TrainLinear changed outer radial row width")
-    for lhs, rhs in zip(seed_row, do_lin_row):
-        max_radial_error = max(max_radial_error, abs(lhs - rhs))
-if max_radial_error > 2.0e-13:
-    raise SystemExit(
-        f"weight-norm TrainLinear refresh changed outer radial coefficients: "
-        f"{max_radial_error}"
-    )
-
-seed_gate_radial = named_vector(seed_model, "two_layer_gate_radial_coeffs")
-do_lin_gate_radial = named_vector(do_lin_model, "two_layer_gate_radial_coeffs")
-if len(seed_gate_radial) != len(do_lin_gate_radial):
-    raise SystemExit("TrainLinear changed gate1 radial coefficient count")
-max_gate_radial_error = max(
-    abs(lhs - rhs)
-    for lhs, rhs in zip(seed_gate_radial, do_lin_gate_radial)
-)
-if max_gate_radial_error > 2.0e-13:
-    raise SystemExit(
-        f"weight-norm TrainLinear refresh changed gate1 radial coefficients: "
-        f"{max_gate_radial_error}"
     )
 PY
 

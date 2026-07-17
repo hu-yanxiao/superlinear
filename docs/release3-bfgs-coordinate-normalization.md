@@ -157,7 +157,10 @@ is
 
 \[
 d_j=
-\sqrt{\frac{h_j^{\mathrm{stab}}}{h_B^{\mathrm{ref}}}}.
+\max\left(
+1,
+\sqrt{\frac{h_j^{\mathrm{stab}}}{h_B^{\mathrm{ref}}}}
+\right).
 \]
 
 Thus the transformed Hessian
@@ -166,24 +169,42 @@ Thus the transformed Hessian
 H_z=D^{-1}H_xD^{-1}
 \]
 
-has a nearly uniform diagonal within each selected block. When
-\(\widetilde h\ge 1\), the block is also damped by its absolute GN curvature.
-When \(\widetilde h<1\), the block median has \(d=1\): relative anisotropy is
-removed without making the entire low-curvature block take a larger first
-physical step than legacy BFGS. If a block has no positive estimated
-curvature, it retains identity coordinates.
+has a reduced diagonal spread in stiff directions. The lower bound \(d_j\ge1\)
+is a stability policy: with an identity inverse Hessian in optimizer
+coordinates, the initial physical direction is
+
+\[
+p_{x,j}=-\frac{1}{d_j^2}\frac{\partial L}{\partial x_j}.
+\]
+
+Consequently EFS-GN may damp a high-curvature direction, but it never takes a
+larger initial physical step than legacy BFGS in a low-curvature or noisy probe
+direction. Low-curvature coordinates that would require \(d_j<1\) retain the
+identity scale. If a block has no positive estimated curvature, the whole
+block retains identity coordinates.
 
 ## Stage and compatibility semantics
 
-- The scale is built once after the step-zero `TrainLinear` refresh, if that
-  refresh is enabled.
+- If a step-zero `TrainLinear` refresh is enabled, it runs first. The scale is
+  then built once from that physical model before BFGS receives its first
+  optimizer-coordinate vector.
 - It remains fixed for the rest of the `Train()` call. Later linear refreshes
   do not silently change the BFGS coordinate system.
-- Building the scale resets the BFGS state and starts the stage from the same
-  physical coefficients.
+- BFGS is initialized only after the fixed coordinate map exists. There is no
+  physical-coordinate BFGS state to restart or reinterpret.
 - Scale construction snapshots every physical coefficient and requires exact
   equality after all forward and reverse probes. Any probe path that modifies
   a model coefficient aborts training before BFGS starts.
+- Probe-only `linear_coeffs` and `max_linear` statistics are restored before
+  the first optimizer objective. Normal E/F/S evaluation owns and rebuilds its
+  transient gate and edge caches; the coordinate initializer does not clear
+  those buffers out of band.
+- After all radial and EFS-GN transforms are installed, the trainer performs a
+  complete physical-to-optimizer-to-physical round trip and aborts if any
+  coefficient changes beyond floating-point reconstruction tolerance.
+- The exact total objective at the loaded physical point is logged before the
+  first BFGS proposal. This is distinct from `step=0`, which is the first
+  accepted post-proposal point.
 - The estimator uses `--bfgs-coordinate-probes=4` by default.
 - The current scale estimator includes E/F/S and coefficient-only L2
   curvature. `std`, `stdd`, radial smoothness, gate-X, compression guards, and
@@ -212,3 +233,38 @@ accepted-step traces, and verifies coexistence with radial weight
 normalization and the unchanged model format. The same coordinate check is
 also compiled into `self-test-dev`; the standalone check does not depend on
 the historical public-test fixtures.
+
+### Physical-model resume validation (2026-07-17)
+
+An earlier implementation installed the EFS-GN coordinate map after dense
+BFGS had already received the physical-coordinate vector and initialized its
+state. Restarting BFGS inside the first training-loop iteration then mixed the
+old state sequence with the new coordinate chart. A trained physical model
+therefore started at a different objective even though an isolated coefficient
+round trip was accurate.
+
+The fixed sequence is:
+
+1. load the physical model;
+2. run the optional step-zero `TrainLinear` refresh, if explicitly enabled;
+3. construct and freeze the EFS-GN coordinate map;
+4. verify the complete physical-to-optimizer-to-physical round trip;
+5. initialize dense BFGS in optimizer coordinates;
+6. evaluate and log the unchanged physical startup objective.
+
+The final Intel/MPI binary had SHA256
+`be0f694b1f99cf1c3b1e08fb6bbe555370f45f2801fb3224daada086943cae0a`.
+Using the same trained physical model in both modes:
+
+- the one-configuration startup objective was exactly
+  `1.32790627180701410e-02` for both `none` and `efs-gn`;
+- the full 2307-configuration, 153483-atom, 288-rank startup objective was
+  exactly `2.56662650749638566e-01` for both modes;
+- the combined radial and EFS-GN physical round-trip maximum absolute error
+  was `6.66133814775093924e-16`;
+- both full-data jobs completed with exit code zero, and the EFS-GN scale
+  construction took `6.72 s` in that run.
+
+The full-data records are under
+`release3/2/1-layer/5bd/2/weight-norm/`
+`bfgs-coordinate-normalization-physical-resume-fix/clean-final-v2-full-ab`.

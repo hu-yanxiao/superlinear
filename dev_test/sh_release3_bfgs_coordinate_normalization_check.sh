@@ -17,6 +17,8 @@ normalized_repeat_trace="$tmp_dir/normalized_repeat.csv"
 normalized_model="$tmp_dir/normalized.mtp"
 normalized_repeat_model="$tmp_dir/normalized_repeat.mtp"
 combined_model="$tmp_dir/combined_weight_norm.mtp"
+linear_physical_log="$tmp_dir/linear_physical.log"
+linear_normalized_log="$tmp_dir/linear_normalized.log"
 rm -f "$tmp_dir"/*.mtp "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
 
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
@@ -97,6 +99,10 @@ grep -q "BFGS coordinate normalization block name=gate1-weight" \
 grep -q "BFGS coordinate normalization initialized mode=efs-gn" \
   "$tmp_dir/normalized.log"
 grep -q "physical_reference=exact" "$tmp_dir/normalized.log"
+grep -q "optimizer coordinate physical roundtrip verified" \
+  "$tmp_dir/normalized.log"
+grep -q "optimizer physical startup objective" "$tmp_dir/physical.log"
+grep -q "optimizer physical startup objective" "$tmp_dir/normalized.log"
 
 if grep -Eq \
   "bfgs_coordinate|coordinate_normalization|coordinate_scale|hutchinson" \
@@ -124,13 +130,52 @@ grep -q "outer radial weight-normalization coordinates enabled" \
 grep -q "BFGS coordinate normalization initialized mode=efs-gn" \
   "$tmp_dir/combined.log"
 
-python3 - "$physical_trace" "$normalized_trace" <<'PY'
+./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
+  "${common_train_args[@]}" \
+  --radial-parameterization=weight-norm \
+  --do-lin \
+  --do-lin-steps=1 \
+  --do-lin-freq=1 \
+  --bfgs-coordinate-normalization=none \
+  --trained-pot-name="$tmp_dir/linear_physical.mtp" \
+  >"$linear_physical_log" 2>&1
+
+./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
+  "${common_train_args[@]}" \
+  --radial-parameterization=weight-norm \
+  --do-lin \
+  --do-lin-steps=1 \
+  --do-lin-freq=1 \
+  --bfgs-coordinate-normalization=efs-gn \
+  --bfgs-coordinate-probes=2 \
+  --trained-pot-name="$tmp_dir/linear_normalized.mtp" \
+  >"$linear_normalized_log" 2>&1
+
+grep -q "TrainLinear solve done" "$linear_normalized_log"
+grep -q "BFGS coordinate normalization initialized mode=efs-gn" \
+  "$linear_normalized_log"
+
+python3 - \
+  "$physical_trace" \
+  "$normalized_trace" \
+  "$tmp_dir/physical.log" \
+  "$tmp_dir/normalized.log" \
+  "$linear_physical_log" \
+  "$linear_normalized_log" <<'PY'
 import csv
 import math
 import pathlib
+import re
 import sys
 
-physical_path, normalized_path = map(pathlib.Path, sys.argv[1:])
+(
+    physical_path,
+    normalized_path,
+    physical_log_path,
+    normalized_log_path,
+    linear_physical_log_path,
+    linear_normalized_log_path,
+) = map(pathlib.Path, sys.argv[1:])
 
 
 def read_losses(path):
@@ -144,8 +189,55 @@ def read_losses(path):
     return losses
 
 
-read_losses(physical_path)
-read_losses(normalized_path)
+physical_losses = read_losses(physical_path)
+normalized_losses = read_losses(normalized_path)
+
+
+def read_startup_loss(path):
+    pattern = re.compile(
+        r"optimizer physical startup objective total_loss=([0-9eE+.-]+)"
+    )
+    match = pattern.search(path.read_text())
+    if match is None:
+        raise SystemExit(f"missing startup physical objective in {path}")
+    value = float(match.group(1))
+    if not math.isfinite(value):
+        raise SystemExit(f"non-finite startup physical objective in {path}")
+    return value
+
+
+physical_start = read_startup_loss(physical_log_path)
+normalized_start = read_startup_loss(normalized_log_path)
+comparison_scale = max(1.0, abs(physical_start), abs(normalized_start))
+if abs(physical_start - normalized_start) > 2.0e-12 * comparison_scale:
+    raise SystemExit(
+        "EFS-GN changed the loaded physical objective: "
+        f"physical={physical_start:.17e} normalized={normalized_start:.17e}"
+    )
+
+if normalized_losses[0] > normalized_start + 2.0e-12 * comparison_scale:
+    raise SystemExit(
+        "EFS-GN first accepted point is above its physical startup objective: "
+        f"startup={normalized_start:.17e} accepted={normalized_losses[0]:.17e}"
+    )
+
+linear_physical_start = read_startup_loss(linear_physical_log_path)
+linear_normalized_start = read_startup_loss(linear_normalized_log_path)
+linear_scale = max(
+    1.0, abs(linear_physical_start), abs(linear_normalized_start)
+)
+if abs(linear_physical_start - linear_normalized_start) > 2.0e-12 * linear_scale:
+    raise SystemExit(
+        "EFS-GN changed the post-TrainLinear physical objective: "
+        f"physical={linear_physical_start:.17e} "
+        f"normalized={linear_normalized_start:.17e}"
+    )
+
+linear_log = linear_normalized_log_path.read_text()
+if linear_log.find("TrainLinear solve done") > linear_log.find(
+    "BFGS coordinate normalization initialized mode=efs-gn"
+):
+    raise SystemExit("EFS-GN coordinates were initialized before step-zero TrainLinear")
 PY
 
 ./bin/mlp-sus2 calc-efs \

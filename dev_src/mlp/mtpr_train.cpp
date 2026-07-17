@@ -2556,7 +2556,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 
 	int radial_first_coeff_repairs = 0;
-	if (maxits > 0 && mtpr.has_radial_coeffs) {
+	if (maxits > 0 && mtpr.has_radial_coeffs
+	    && radial_parameterization == "physical") {
 		if (prank == 0)
 			radial_first_coeff_repairs = mtpr.EnforcePositiveRadialFirstCoeffs();
 #ifdef MLIP_MPI

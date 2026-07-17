@@ -66,7 +66,12 @@ public:
 			return 1.0;
 		const double reference_curvature =
 			std::min(positive_block_median, 1.0);
-		return std::sqrt(stabilized / reference_curvature);
+		// Preserve the legacy physical step in low-curvature directions. The
+		// coordinate map may damp stiff directions, but it must not amplify an
+		// identity-BFGS step through a scale smaller than one.
+		return std::max(
+			1.0,
+			std::sqrt(stabilized / reference_curvature));
 	}
 };
 

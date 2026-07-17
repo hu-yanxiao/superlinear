@@ -1014,6 +1014,29 @@ void MTPR_trainer::TrainLinear(int prank,
 		local_atom_count += cfg.size();
 	const std::string prefix = context.empty() ? "TrainLinear" : "TrainLinear[" + context + "]";
 	const int full_n = p_mlmtpr->LinearEquationCount();		// Full linear component count
+	std::vector<int> preserved_radial_indices;
+	std::vector<double> preserved_radial_values;
+	if (radial_parameterization == "weight-norm") {
+		const int row_size = p_mlmtpr->p_RadialBasis->rb_size;
+		const int outer_begin = p_mlmtpr->RadialCoeffOffset();
+		const int outer_stride = p_mlmtpr->RadialCoeffBlockSize();
+		preserved_radial_indices.reserve(
+			2 * p_mlmtpr->radial_func_count * row_size);
+		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+			for (int xi = 0; xi < row_size; ++xi)
+				preserved_radial_indices.push_back(
+					outer_begin + mu * outer_stride + xi);
+		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
+			const int gate1_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
+			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+				for (int xi = 0; xi < row_size; ++xi)
+					preserved_radial_indices.push_back(
+						gate1_begin + mu * row_size + xi);
+		}
+		preserved_radial_values.reserve(preserved_radial_indices.size());
+		for (int coeff_index : preserved_radial_indices)
+			preserved_radial_values.push_back(p_mlmtpr->Coeff()[coeff_index]);
+	}
 
 	if (radial_parameterization != "weight-norm")
 		p_mlmtpr->Orthogonalize();
@@ -1149,6 +1172,11 @@ void MTPR_trainer::TrainLinear(int prank,
 		          << std::endl;
 	}
 #endif
+	for (std::size_t i = 0; i < preserved_radial_indices.size(); ++i) {
+		if (p_mlmtpr->Coeff()[preserved_radial_indices[i]]
+		    != preserved_radial_values[i])
+			ERROR(prefix + " changed a weight-normalized physical radial coefficient.");
+	}
 
 
 }
@@ -1278,6 +1306,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	    || bfgs_coordinate_floor < 0.0
 	    || bfgs_coordinate_floor > 1.0)
 		ERROR("MTPR_trainer::Train(): BFGS coordinate floor should be finite and in [0,1]");
+	auto require_live_coeff_pointer = [&](const std::string& context) {
+		if (p_mlmtpr->CoeffCount() != n || p_mlmtpr->Coeff() != x)
+			ERROR("MTPR_trainer::Train(): coefficient storage changed during " + context);
+	};
 	if (use_lbfgs_optimizer && bfgs_line_search != "armijo-value")
 		ERROR("MTPR_trainer::Train(): L-BFGS requires armijo-value line search");
 	if (use_lbfgs_optimizer) {
@@ -1421,11 +1453,16 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	std::vector<int> radial_weight_norm_role(n, -1);
 	int outer_radial_weight_norm_row_count = 0;
 	int gate1_radial_weight_norm_row_count = 0;
+	double radial_weight_norm_roundtrip_max_abs = 0.0;
 	if (use_radial_weight_norm && p_mlmtpr->p_RadialBasis == nullptr)
 		ERROR("MTPR_trainer::Train(): radial weight normalization requires an initialized radial basis.");
 	const int radial_weight_norm_row_size =
 		p_mlmtpr->p_RadialBasis == nullptr ? 0 : p_mlmtpr->p_RadialBasis->rb_size;
 	if (use_radial_weight_norm) {
+		std::vector<double> initial_coordinates(
+			radial_weight_norm_row_size, 0.0);
+		std::vector<double> reconstructed_physical(
+			radial_weight_norm_row_size, 0.0);
 		auto add_radial_weight_norm_row = [&](int row_begin, bool is_gate1) {
 			int active_count = 0;
 			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi)
@@ -1443,13 +1480,38 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 			int pivot = 0;
 			double pivot_sign = 1.0;
-			if (is_gate1
-			    && !sus2::RadialWeightNormChart::SelectSignedPivot(
-				    x + row_begin,
-				    radial_weight_norm_row_size,
-				    pivot,
-				    pivot_sign))
-				ERROR("MTPR_trainer::Train(): cannot select a gate1 radial weight-normalization pivot.");
+			if (!sus2::RadialWeightNormChart::SelectSignedPivot(
+			        x + row_begin,
+			        radial_weight_norm_row_size,
+			        pivot,
+			        pivot_sign))
+				ERROR("MTPR_trainer::Train(): cannot select a nonzero radial weight-normalization pivot.");
+
+			if (!sus2::RadialWeightNormChart::PackWithPivot(
+			        x + row_begin,
+			        radial_weight_norm_row_size,
+			        pivot,
+			        pivot_sign,
+			        initial_coordinates.data())
+			    || !sus2::RadialWeightNormChart::UnpackWithPivot(
+			        initial_coordinates.data(),
+			        radial_weight_norm_row_size,
+			        pivot,
+			        pivot_sign,
+			        reconstructed_physical.data()))
+				ERROR("MTPR_trainer::Train(): cannot convert a physical radial row to weight-normalization coordinates.");
+			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi) {
+				const double physical_value = x[row_begin + xi];
+				const double abs_error = std::abs(
+					reconstructed_physical[xi] - physical_value);
+				radial_weight_norm_roundtrip_max_abs = std::max(
+					radial_weight_norm_roundtrip_max_abs, abs_error);
+				const double tolerance = 64.0
+					* std::numeric_limits<double>::epsilon()
+					* std::max(1.0, std::abs(physical_value));
+				if (abs_error > tolerance)
+					ERROR("MTPR_trainer::Train(): radial weight-normalization changed a loaded physical coefficient.");
+			}
 			radial_weight_norm_rows.push_back(
 				RadialWeightNormRow(
 					row_begin, active_begin, pivot, pivot_sign));
@@ -1482,6 +1544,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	std::vector<int> coordinate_normalization_block_by_full(n, -1);
 	std::vector<double> coordinate_scale_by_full(n, 1.0);
 	std::vector<double> coordinate_reference_by_full(n, 0.0);
+	std::vector<double> coordinate_physical_reference;
 	bool coordinate_normalization_initialized =
 		!use_bfgs_coordinate_normalization;
 	auto add_coordinate_normalization_block =
@@ -1690,6 +1753,34 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				ERROR("MTPR_trainer::Train(): invalid radial weight-normalization trial coordinates.");
 		}
 	};
+	auto verify_optimizer_coordinate_roundtrip = [&]() {
+		const std::vector<double> physical_reference(x, x + n);
+		set_optimizer_x_from_full_coeffs();
+		copy_optimizer_x_to_full_coeffs();
+		double max_abs_error = 0.0;
+		for (int full_idx = 0; full_idx < n; ++full_idx) {
+			const double physical_value = physical_reference[full_idx];
+			const double abs_error = std::abs(x[full_idx] - physical_value);
+			max_abs_error = std::max(max_abs_error, abs_error);
+			const double tolerance = 64.0
+				* std::numeric_limits<double>::epsilon()
+				* std::max(1.0, std::abs(physical_value));
+			if (abs_error > tolerance)
+				ERROR("MTPR_trainer::Train(): optimizer coordinate round trip changed physical coefficient "
+				      + std::to_string(full_idx));
+		}
+		std::copy(physical_reference.begin(), physical_reference.end(), x);
+		set_optimizer_x_from_full_coeffs();
+		if (prank == 0) {
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "optimizer coordinate physical roundtrip verified"
+			          << " active_count=" << opt_n
+			          << " full_count=" << n
+			          << " max_abs_error=" << max_abs_error
+			          << " model_format=physical"
+			          << std::endl;
+		}
+	};
 	std::vector<double> optimizer_gradient_cache(opt_n, 0.0);
 	std::vector<double> radial_log_norm_reference(radial_weight_norm_rows.size(), 0.0);
 	auto pack_optimizer_gradient = [&]() {
@@ -1718,7 +1809,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (K <= 0)
 			ERROR("MTPR_trainer::Train(): BFGS coordinate normalization requires training configurations.");
 		const std::vector<double> physical_coeff_reference(x, x + n);
-
+		coordinate_physical_reference = physical_coeff_reference;
+		const std::vector<double> linear_coeffs_reference = p_mlmtpr->linear_coeffs;
+		const std::vector<double> linear_mults_reference = p_mlmtpr->linear_mults;
+		const std::vector<double> max_linear_reference = p_mlmtpr->max_linear;
 		std::vector<int> selected_full_indices;
 		for (const CoordinateNormalizationBlock& block :
 		     coordinate_normalization_blocks)
@@ -1993,6 +2087,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 		}
 
+		if (p_mlmtpr->linear_mults != linear_mults_reference)
+			ERROR("MTPR_trainer::Train(): BFGS coordinate scale construction modified linear multipliers.");
+		p_mlmtpr->max_linear = max_linear_reference;
+		p_mlmtpr->linear_coeffs = linear_coeffs_reference;
+		require_live_coeff_pointer("BFGS coordinate scale construction");
+		if (p_mlmtpr->linear_coeffs != linear_coeffs_reference)
+			ERROR("MTPR_trainer::Train(): BFGS coordinate scale construction modified the linear coefficient cache.");
+
 		for (int full_idx = 0; full_idx < n; ++full_idx) {
 			if (x[full_idx] != physical_coeff_reference[full_idx])
 				ERROR("MTPR_trainer::Train(): BFGS coordinate scale construction "
@@ -2079,6 +2181,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			          << " seconds=" << build_seconds
 			          << " stage=fixed"
 			          << " physical_reference=exact"
+			          << " coordinate_chart=centered"
 			          << " model_format=physical"
 			          << std::endl;
 		}
@@ -2103,7 +2206,34 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		}
 		return value;
 	};
-	set_optimizer_x_from_full_coeffs();
+	auto run_linear_refresh = [&](int step) {
+		const std::vector<Neighborhoods>* linear_neighborhoods =
+			cache_training_neighborhoods ? &training_neighborhoods : nullptr;
+		if (do_lin_rescale) {
+			if (prank == 0) {
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "optimizer do-lin rescale before full linear solve"
+				          << " step=" << step << std::endl;
+			}
+			Rescale(*this, *p_mlmtpr, linear_neighborhoods);
+		}
+		TrainLinear(
+			prank,
+			training_set,
+			linear_neighborhoods,
+			"bfgs refresh step " + std::to_string(step));
+		require_live_coeff_pointer("TrainLinear refresh");
+	};
+	const bool initial_train_linear_completed =
+		do_lin && do_lin_step_limit > 0;
+	if (initial_train_linear_completed)
+		run_linear_refresh(0);
+	if (!coordinate_normalization_initialized) {
+		initialize_bfgs_coordinate_normalization();
+		verify_optimizer_coordinate_roundtrip();
+	} else {
+		set_optimizer_x_from_full_coeffs();
+	}
 	Array1D inv_hess_diag(opt_n, 1.0);
 	auto refresh_inv_hess_diag = [&]() {
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx)
@@ -2191,6 +2321,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		          << " gate1_rows=" << gate1_radial_weight_norm_row_count
 		          << " total_rows=" << radial_weight_norm_rows.size()
 		          << " row_size=" << radial_weight_norm_row_size
+		          << " physical_load=roundtrip-verified"
+		          << " max_abs_error=" << radial_weight_norm_roundtrip_max_abs
 		          << " model_format=physical"
 		          << std::endl;
 	}
@@ -2213,6 +2345,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	std::array<long long, kAcceptedDiagCountCount> accepted_count_global{};
 
 		int num_step = 0;
+		bool startup_objective_logged = false;
 		int total_linesearch_restarts = 0;
 		const int max_total_linesearch_restarts = 3;
 
@@ -2313,35 +2446,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 			const bool run_train_linear = do_lin
 				&& num_step < do_lin_step_limit
-				&& (num_step % do_lin_frequency == 0);
-			if (run_train_linear)
-			{
-				/*
-				for (int i=n-nlin+p_mlmtpr->species_count;i<n;i++)
-					for (int j=n-nlin+p_mlmtpr->species_count;j<n;j++)
-									bfgs.inv_hess(i,j)*=p_mlmtpr->linear_mults[i-(n-nlin+p_mlmtpr->species_count)]*p_mlmtpr->linear_mults[j-(n-nlin+p_mlmtpr->species_count)];
-
-							p_mlmtpr->Perform_scaling();
-
-				for (int i=n-nlin+p_mlmtpr->species_count;i<n;i++)
-					for (int j=n-nlin+p_mlmtpr->species_count;j<n;j++)
-									bfgs.inv_hess(i,j)/=p_mlmtpr->linear_mults[i-(n-nlin+p_mlmtpr->species_count)]*p_mlmtpr->linear_mults[j-(n-nlin+p_mlmtpr->species_count)];
-
-				*/
-				const std::vector<Neighborhoods>* linear_neighborhoods =
-					cache_training_neighborhoods ? &training_neighborhoods : nullptr;
-				if (do_lin_rescale) {
-					if (prank == 0) {
-						std::cout << "[" << CurrentTimestamp() << "] "
-						          << "optimizer do-lin rescale before full linear solve"
-						          << " step=" << num_step << std::endl;
-					}
-					Rescale(*this, *p_mlmtpr, linear_neighborhoods);
-				}
-				TrainLinear(prank,
-						  training_set,
-						  linear_neighborhoods,
-						  "bfgs refresh step " + std::to_string(num_step));
+				&& (num_step % do_lin_frequency == 0)
+				&& !(initial_train_linear_completed && num_step == 0);
+			if (run_train_linear) {
+				run_linear_refresh(num_step);
 				external_x_modified = true;
 				external_x_needs_broadcast = false; // TrainLinear already broadcasts coeffs.
 			}
@@ -2350,12 +2458,6 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			if (optimizer_replicated && external_x_needs_broadcast)
 				MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
 #endif
-			if (!coordinate_normalization_initialized) {
-				initialize_bfgs_coordinate_normalization();
-				refresh_inv_hess_diag();
-				reset_optimizer_state();
-				mask_frozen_coordinates(freeze_species_coeffs);
-			}
 			if (external_x_modified) {
 				if (optimizer_replicated || prank == 0)
 					set_optimizer_x_from_full_coeffs();
@@ -2364,7 +2466,29 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			save_last_accepted_coeffs();
 		}
 
-			copy_optimizer_x_to_full_coeffs();
+				require_live_coeff_pointer("optimizer coordinate unpack");
+				copy_optimizer_x_to_full_coeffs();
+				if (!startup_objective_logged
+				    && !coordinate_physical_reference.empty()) {
+					double max_abs_delta = 0.0;
+					int max_abs_delta_index = -1;
+					for (int full_idx = 0; full_idx < n; ++full_idx) {
+						const double delta = std::abs(
+							x[full_idx] - coordinate_physical_reference[full_idx]);
+						if (delta > max_abs_delta) {
+							max_abs_delta = delta;
+							max_abs_delta_index = full_idx;
+						}
+					}
+					if (prank == 0) {
+						std::cout << "[" << CurrentTimestamp() << "] "
+						          << "optimizer pre-objective physical delta"
+						          << " max_abs=" << std::scientific
+						          << std::setprecision(17) << max_abs_delta
+						          << " index=" << max_abs_delta_index
+						          << std::defaultfloat << std::endl;
+					}
+				}
 			require_finite_coeffs_all(optimizer_log_name + " trial step " + std::to_string(num_step));
 
 			const std::vector<Neighborhoods>* objective_neighborhoods =
@@ -2453,7 +2577,25 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				bfgs_f = loss_;
 				for (int active_idx = 0; active_idx < opt_n; ++active_idx)
 					bfgs_g[active_idx] = optimizer_gradient_cache[active_idx];
-	#endif
+		#endif
+				if (!startup_objective_logged
+				    && !optimizer_is_in_linesearch()) {
+					if (prank == 0) {
+						std::ostringstream value;
+						value << std::scientific << std::setprecision(17)
+						      << bfgs_f;
+						std::cout << "[" << CurrentTimestamp() << "] "
+						          << "optimizer physical startup objective"
+						          << " total_loss=" << value.str()
+						          << " coordinate_mode="
+						          << bfgs_coordinate_normalization
+						          << " radial_parameterization="
+						          << radial_parameterization
+						          << " stage=before-first-proposal"
+						          << std::endl;
+					}
+					startup_objective_logged = true;
+				}
 				if (freeze_species_coeffs) {
 					for (int idx : species_coeff_active_indices)
 						bfgs_g[idx] = 0.0;
