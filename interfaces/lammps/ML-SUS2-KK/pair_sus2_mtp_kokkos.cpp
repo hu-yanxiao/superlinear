@@ -18,6 +18,7 @@
 #include "pair_sus2_mtp_kokkos.h"
 
 #include "sus2_mtp_gate_cache_layout.h"
+#include "sus2_mtp_rank_phase_layout.h"
 
 #include "atom_kokkos.h"
 #include "atom_masks.h"
@@ -534,6 +535,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
       base_narg, base_args);    // This also calls read_file which parses and loads the arrays in host
 
   SUS2GateCache::CompactLayout compact_gate_cache_layout;
+  SUS2RankPhase::CompactLayout rank_phase_layout;
 
   if (two_layer_gate_enabled) {
     if (env_gate_enabled)
@@ -556,8 +558,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   // ---------- Now we move arrays to device ----------
   // First we set up the index lists
   MemKK::realloc_kokkos(d_alpha_index_basic, "sus2mtp/kk:alpha_index_basic", alpha_index_basic_count,
-                        4);
-  MemKK::realloc_kokkos(d_alpha_index_times, "sus2mtp/kk:alpha_index_times", alpha_index_times_count,
                         4);
   MemKK::realloc_kokkos(d_alpha_times_a0, "sus2mtp/kk:alpha_times_a0",
                         alpha_index_times_count);
@@ -659,6 +659,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  two_layer_gate_kk_cache_slot_count = 0;
 	  two_layer_gate_kk_cache_product_end = 0;
 	  two_layer_gate_kk_compact_cache_enabled = 0;
+	  rank_phase_kk_gate_width = alpha_moment_count;
+	  rank_phase_kk_outer_width = alpha_moment_count;
+	  rank_phase_kk_work_width = alpha_moment_count;
+	  rank_phase_kk_outer_contracted_begin = outer_k_rank_basic_begin;
+	  rank_phase_kk_outer_product_count = alpha_index_times_count;
 	  if (outer_k_rank_enabled) {
 	    // Rank models serialize the gate graph as a closed prefix and the outer
 	    // graph as a closed suffix.  The Kokkos first-layer cache only needs the
@@ -751,6 +756,43 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	            "SUS2-SH Kokkos compact gate cache has no product operands.");
 	      two_layer_gate_kk_compact_cache_enabled = 1;
 	    }
+	    std::string phase_reason;
+	    if (!SUS2RankPhase::build_compact_layout(
+	            alpha_moment_count, alpha_index_basic_count,
+	            two_layer_gate_kk_active_moment_width,
+	            two_layer_gate_kk_cache_product_end,
+	            outer_k_rank_basic_begin, outer_k_rank_basic_count,
+	            outer_k_rank_product_begin, alpha_times_a0, alpha_times_a1,
+	            alpha_times_out, alpha_index_times_count,
+	            alpha_moment_mapping, alpha_scalar_count,
+	            outer_k_rank_raw_basic_indices.data(),
+	            static_cast<int>(outer_k_rank_raw_basic_indices.size()),
+	            rank_phase_layout, phase_reason))
+	      error->all(FLERR,
+	                 "SUS2-SH Kokkos rank phase layout is invalid: {}",
+	                 phase_reason);
+	    rank_phase_kk_gate_width = rank_phase_layout.gate_width;
+	    rank_phase_kk_outer_width = rank_phase_layout.outer_width;
+	    rank_phase_kk_work_width = rank_phase_layout.work_width;
+	    rank_phase_kk_outer_contracted_begin =
+	        rank_phase_layout.outer_contracted_begin;
+	    rank_phase_kk_outer_product_count =
+	        rank_phase_layout.outer_product_count;
+	  }
+	  if (outer_k_rank_enabled) {
+	    MemKK::realloc_kokkos(
+	        d_outer_alpha_times_a0, "sus2mtp/kk:outer_alpha_times_a0",
+	        std::max(1, rank_phase_kk_outer_product_count));
+	    MemKK::realloc_kokkos(
+	        d_outer_alpha_times_a1, "sus2mtp/kk:outer_alpha_times_a1",
+	        std::max(1, rank_phase_kk_outer_product_count));
+	    MemKK::realloc_kokkos(
+	        d_outer_alpha_times_out, "sus2mtp/kk:outer_alpha_times_out",
+	        std::max(1, rank_phase_kk_outer_product_count));
+	    MemKK::realloc_kokkos(
+	        d_outer_alpha_moment_mapping,
+	        "sus2mtp/kk:outer_alpha_moment_mapping",
+	        std::max(1, alpha_scalar_count));
 	  }
 	  MemKK::realloc_kokkos(
 	      d_two_layer_gate_cache_slot_to_moment,
@@ -768,9 +810,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	      std::max(1, two_layer_gate_kk_compact_cache_enabled
 	          ? two_layer_gate_kk_cache_product_end : 0));
 	  // We need to init these as very small views to begin with because the user might specify a very large chunk_size which is much more than inum. We will resize these as needed in compute.
-	  MemKK::realloc_kokkos(d_moment_tensor_vals, "sus2mtp/kk:moment_tensor_vals", 1, alpha_moment_count);
+	  MemKK::realloc_kokkos(d_moment_tensor_vals, "sus2mtp/kk:moment_tensor_vals", 1,
+	                        rank_phase_kk_work_width);
 	  MemKK::realloc_kokkos(d_nbh_energy_ders_wrt_moments, "sus2mtp/kk:nbh_energy_ders_wrt_moments", 1,
-	                        alpha_moment_count);
+	                        rank_phase_kk_work_width);
   MemKK::realloc_kokkos(d_env_gate_values, "sus2mtp/kk:env_gate_values", 1);
   MemKK::realloc_kokkos(d_env_gate_der_prefactors, "sus2mtp/kk:env_gate_der_prefactors", 1);
   MemKK::realloc_kokkos(d_env_gate_rho_chain_values, "sus2mtp/kk:env_gate_rho_chain_values", 1);
@@ -861,7 +904,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 
   //Declare host arrays
   auto h_alpha_index_basic = Kokkos::create_mirror_view(d_alpha_index_basic);
-  auto h_alpha_index_times = Kokkos::create_mirror_view(d_alpha_index_times);
   auto h_alpha_times_a0 = Kokkos::create_mirror_view(d_alpha_times_a0);
   auto h_alpha_times_a1 = Kokkos::create_mirror_view(d_alpha_times_a1);
   auto h_alpha_times_out = Kokkos::create_mirror_view(d_alpha_times_out);
@@ -932,8 +974,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   for (int j = 0; j < 4; j++) {
     for (int i = 0; i < alpha_index_basic_count; i++)
       h_alpha_index_basic(i, j) = alpha_index_basic[i][j];
-    for (int i = 0; i < alpha_index_times_count; i++)
-      h_alpha_index_times(i, j) = alpha_index_times[i][j];
   }
   for (int i = 0; i < alpha_scalar_count; i++) {
     h_alpha_moment_mapping(i) = alpha_moment_mapping[i];
@@ -949,6 +989,33 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
     h_alpha_times_a1(i) = alpha_index_times[i][1];
     h_alpha_times_out(i) = alpha_index_times[i][3];
   }
+	  if (outer_k_rank_enabled) {
+	    auto h_outer_alpha_times_a0 =
+	        Kokkos::create_mirror_view(d_outer_alpha_times_a0);
+	    auto h_outer_alpha_times_a1 =
+	        Kokkos::create_mirror_view(d_outer_alpha_times_a1);
+	    auto h_outer_alpha_times_out =
+	        Kokkos::create_mirror_view(d_outer_alpha_times_out);
+	    auto h_outer_alpha_moment_mapping =
+	        Kokkos::create_mirror_view(d_outer_alpha_moment_mapping);
+	    h_outer_alpha_times_a0(0) = 0;
+	    h_outer_alpha_times_a1(0) = 0;
+	    h_outer_alpha_times_out(0) = 0;
+	    h_outer_alpha_moment_mapping(0) = 0;
+	    for (int i = 0; i < rank_phase_kk_outer_product_count; ++i) {
+	      h_outer_alpha_times_a0(i) = rank_phase_layout.outer_product_a0[i];
+	      h_outer_alpha_times_a1(i) = rank_phase_layout.outer_product_a1[i];
+	      h_outer_alpha_times_out(i) = rank_phase_layout.outer_product_out[i];
+	    }
+	    for (int i = 0; i < alpha_scalar_count; ++i)
+	      h_outer_alpha_moment_mapping(i) =
+	          rank_phase_layout.outer_scalar_moments[i];
+	    Kokkos::deep_copy(d_outer_alpha_times_a0, h_outer_alpha_times_a0);
+	    Kokkos::deep_copy(d_outer_alpha_times_a1, h_outer_alpha_times_a1);
+	    Kokkos::deep_copy(d_outer_alpha_times_out, h_outer_alpha_times_out);
+	    Kokkos::deep_copy(d_outer_alpha_moment_mapping,
+	                      h_outer_alpha_moment_mapping);
+	  }
 	  h_two_layer_gate_cache_slot_to_moment(0) = 0;
 	  h_two_layer_gate_cache_packed_a0(0) = 0;
 	  h_two_layer_gate_cache_packed_a1(0) = 0;
@@ -1132,7 +1199,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 
   // Peform the copy from host to device
   Kokkos::deep_copy(d_alpha_index_basic, h_alpha_index_basic);
-  Kokkos::deep_copy(d_alpha_index_times, h_alpha_index_times);
   Kokkos::deep_copy(d_alpha_times_a0, h_alpha_times_a0);
   Kokkos::deep_copy(d_alpha_times_a1, h_alpha_times_a1);
   Kokkos::deep_copy(d_alpha_times_out, h_alpha_times_out);
@@ -2080,22 +2146,26 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
   auto trace_kokkos_moments = [&](const char *stage) {
     if (!trace_first_site || chunk_offset != 0 || chunk_size <= 0) return;
     Kokkos::fence();
+	    const int trace_width = outer_k_rank_enabled
+	        ? rank_phase_kk_work_width : alpha_moment_count;
     Kokkos::View<moment_buffer_value_type *, DeviceType> d_trace_moments(
-        "sus2mtp/kk:trace_first_moments", alpha_moment_count);
+	        "sus2mtp/kk:trace_first_moments", trace_width);
     auto d_moments = d_moment_tensor_vals;
     Kokkos::parallel_for(
         "SUS2MTPTraceFirstMoments",
-        typename Kokkos::RangePolicy<DeviceType>(0, alpha_moment_count),
+	        typename Kokkos::RangePolicy<DeviceType>(0, trace_width),
         KOKKOS_LAMBDA(const int k) { d_trace_moments(k) = d_moments(0, k); });
     auto h_moments = Kokkos::create_mirror_view_and_copy(
         Kokkos::HostSpace(), d_trace_moments);
+	    auto d_trace_mapping = outer_k_rank_enabled
+	        ? d_outer_alpha_moment_mapping : d_alpha_moment_mapping;
     auto h_mapping = Kokkos::create_mirror_view_and_copy(
-        Kokkos::HostSpace(), d_alpha_moment_mapping);
+	        Kokkos::HostSpace(), d_trace_mapping);
     std::ostringstream oss;
     oss.setf(std::ios::scientific);
     oss.precision(16);
     oss << "SUS2_SH_TRACE KOKKOS " << stage << " first_moments";
-    const int moment_limit = std::min(alpha_moment_count, 12);
+	    const int moment_limit = std::min(trace_width, 12);
     for (int k = 0; k < moment_limit; k++) oss << " m[" << k << "]=" << h_moments(k);
     oss << " mapped_scalars";
     const int scalar_limit = std::min(alpha_scalar_count, 8);
@@ -2176,12 +2246,33 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      alpha_moment_count <= 4000;
 
   // Resize the arrays to the chunksize if needed. Do not initialize values, we do so in the loop.
-  if ((int) d_moment_tensor_vals.extent(0) < chunk_size) {
-    Kokkos::realloc(Kokkos::WithoutInitializing, d_moment_tensor_vals, chunk_size,
-                    alpha_moment_count);
-    Kokkos::realloc(Kokkos::WithoutInitializing, d_nbh_energy_ders_wrt_moments, chunk_size,
-                    alpha_moment_count);
-  }
+	  if (outer_k_rank_enabled) {
+	    std::size_t moment_bytes = 0;
+	    std::size_t adjoint_bytes = 0;
+	    if (!SUS2RankPhase::checked_matrix_bytes(
+	            static_cast<std::size_t>(chunk_size),
+	            static_cast<std::size_t>(rank_phase_kk_work_width),
+	            sizeof(moment_buffer_value_type), moment_bytes) ||
+	        !SUS2RankPhase::checked_matrix_bytes(
+	            static_cast<std::size_t>(chunk_size),
+	            static_cast<std::size_t>(rank_phase_kk_work_width),
+	            sizeof(nbh_der_buffer_value_type), adjoint_bytes))
+	      error->all(FLERR,
+	                 "SUS2-SH Kokkos rank phase moment buffers overflow size_t.");
+	    if ((int) d_moment_tensor_vals.extent(0) < chunk_size ||
+	        (int) d_moment_tensor_vals.extent(1) < rank_phase_kk_work_width) {
+	      Kokkos::realloc(Kokkos::WithoutInitializing, d_moment_tensor_vals,
+	                      chunk_size, rank_phase_kk_work_width);
+	      Kokkos::realloc(Kokkos::WithoutInitializing,
+	                      d_nbh_energy_ders_wrt_moments, chunk_size,
+	                      rank_phase_kk_work_width);
+	    }
+	  } else if ((int) d_moment_tensor_vals.extent(0) < chunk_size) {
+	    Kokkos::realloc(Kokkos::WithoutInitializing, d_moment_tensor_vals, chunk_size,
+	                    alpha_moment_count);
+	    Kokkos::realloc(Kokkos::WithoutInitializing, d_nbh_energy_ders_wrt_moments, chunk_size,
+	                    alpha_moment_count);
+	  }
   if (env_gate_enabled && (int) d_env_gate_values.extent(0) < chunk_size) {
     Kokkos::realloc(Kokkos::WithoutInitializing, d_env_gate_values, chunk_size);
     Kokkos::realloc(Kokkos::WithoutInitializing, d_env_gate_der_prefactors, chunk_size);
@@ -2235,7 +2326,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		          ? std::max(1, inum) : nmax;
 		      const int gate_cache_width = use_compact_gate_cache
 		          ? two_layer_gate_kk_cache_slot_count
-		          : two_layer_gate_kk_moment_cache_width;
+		          : (outer_k_rank_enabled
+		                 ? rank_phase_kk_gate_width
+		                 : two_layer_gate_kk_moment_cache_width);
 		      if ((int) d_two_layer_gate_cached_moment_vals.extent(0) <
 		              gate_cache_rows ||
 		          (int) d_two_layer_gate_cached_moment_vals.extent(1) <
@@ -2374,7 +2467,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		        } else if (outer_k_rank_enabled) {
 		          const int local_chunk_size = chunk_size;
 		          const int local_gate_moment_cache_width =
-		              two_layer_gate_kk_moment_cache_width;
+		              rank_phase_kk_gate_width;
 		          auto d_local_ilist = d_ilist;
 		          auto d_local_moments = d_moment_tensor_vals;
 		          auto d_local_cache = d_two_layer_gate_cached_moment_vals;
@@ -2520,14 +2613,11 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		      if (chunk_size > inum - chunk_offset) chunk_size = inum - chunk_offset;
 		      profile_begin();
 		      if (outer_k_rank_enabled) {
-		        // The main rank graph consumes the raw SH basics and the closed
-		        // outer suffix.  The serialized gate-only interval between them is
-		        // not read by either the forward or transpose pass.
+		        // The rank-only physical layout packs the raw SH basics directly
+		        // before the closed outer suffix, so both buffers are one contiguous
+		        // phase-local range.
 		        const int local_chunk_size = chunk_size;
-		        const int raw_width = alpha_index_basic_count;
-		        const int suffix_begin = outer_k_rank_basic_begin;
-		        const int suffix_width = alpha_moment_count - suffix_begin;
-		        const int active_width = raw_width + suffix_width;
+		        const int active_width = rank_phase_kk_outer_width;
 		        auto d_local_moments = d_moment_tensor_vals;
 		        auto d_local_moment_ders = d_nbh_energy_ders_wrt_moments;
 		        using clear_policy = Kokkos::TeamPolicy<DeviceType>;
@@ -2536,10 +2626,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		            "ClearRankOuterMainBuffers",
 		            clear_policy(active_width, Kokkos::AUTO),
 		            KOKKOS_LAMBDA(const clear_member &team) {
-		              const int active_k = team.league_rank();
-		              const int k = active_k < raw_width
-		                  ? active_k
-		                  : suffix_begin + active_k - raw_width;
+		              const int k = team.league_rank();
 		              Kokkos::parallel_for(
 		                  Kokkos::TeamThreadRange(team, local_chunk_size),
 		                  [&](const int ii) {
@@ -2598,7 +2685,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		        auto d_local_shift_coeffs = d_shift_coeffs;
 		        auto d_local_linear_coeffs = d_linear_coeffs;
 		        auto d_local_moment_tensor_vals = d_moment_tensor_vals;
-		        auto d_local_alpha_moment_mapping = d_alpha_moment_mapping;
+		        auto d_local_alpha_moment_mapping = outer_k_rank_enabled
+		            ? d_outer_alpha_moment_mapping : d_alpha_moment_mapping;
 		        Kokkos::parallel_reduce(
 		            "ComputeGateEnergyOnly",
 		            typename Kokkos::RangePolicy<DeviceType>(0, chunk_size),
@@ -3228,7 +3316,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	                d_moment_tensor_vals(
 	                    ii, d_outer_k_rank_raw_basic_indices(raw_offset + k));
 	        }
-	        const int contracted = outer_k_rank_basic_begin +
+	        const int contracted = rank_phase_kk_outer_contracted_begin +
 	            outer_k_rank * shell_offset +
 	            (outer_k_rank - 1 - channel) * (2 * l + 1) + m + l;
 	        d_moment_tensor_vals(ii, contracted) = value;
@@ -3278,7 +3366,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      const int weight_offset =
 	          (l * outer_k_rank + channel) * sh_k_max;
 	      for (int m = -l; m <= l; m++) {
-	        const int contracted = outer_k_rank_basic_begin +
+	        const int contracted = rank_phase_kk_outer_contracted_begin +
 	            outer_k_rank * shell_offset +
 	            (outer_k_rank - 1 - channel) * (2 * l + 1) + m + l;
 	        const F_FLOAT adjoint =
@@ -4451,22 +4539,34 @@ template <class DeviceType>
 KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS2MTPComputeAlphaTimes,
                                                                   const int &ii) const
 {
-	  // Outer graph consumes the contracted channels, never the raw k channels.
-	  contract_outer_k_rank_values_kk(ii);
-	  // Traverse all edges in the alpha times compute graph
-	  const int product_begin =
-	      outer_k_rank_enabled ? outer_k_rank_product_begin : 0;
-	  for (int k = product_begin; k < alpha_index_times_count; k++) {
-    int a0 = d_alpha_times_a0(k);
-    int a1 = d_alpha_times_a1(k);
-    F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_times_out(k);
+	  if (outer_k_rank_enabled) {
+	    // All logical-to-physical mappings are prepared once during model init;
+	    // the hot product traversal contains no mapping branch.
+	    contract_outer_k_rank_values_kk(ii);
+	    for (int k = 0; k < rank_phase_kk_outer_product_count; k++) {
+	      const int a0 = d_outer_alpha_times_a0(k);
+	      const int a1 = d_outer_alpha_times_a1(k);
+	      const int a3 = d_outer_alpha_times_out(k);
+	      const F_FLOAT mult =
+	          d_alpha_times_coeff(outer_k_rank_product_begin + k);
+	      const F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
+	      const F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
+	      d_moment_tensor_vals(ii, a3) += mult * val0 * val1;
+	    }
+	  } else {
+	    // Preserve the original rank-off traversal and logical metadata.
+	    for (int k = 0; k < alpha_index_times_count; k++) {
+	      int a0 = d_alpha_times_a0(k);
+	      int a1 = d_alpha_times_a1(k);
+	      F_FLOAT mult = d_alpha_times_coeff(k);
+	      int a3 = d_alpha_times_out(k);
 
-    F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
-    F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
+	      F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
+	      F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
 
-    d_moment_tensor_vals(ii, a3) += mult * val0 * val1;
-  }
+	      d_moment_tensor_vals(ii, a3) += mult * val0 * val1;
+	    }
+	  }
 }
 
 // Sets the nbh energy ders as the linear coeffs
@@ -4476,7 +4576,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
 {
   const int i = d_ilist[ii + chunk_offset];
   const int itype = type[i] - 1;
-  d_nbh_energy_ders_wrt_moments(ii, d_alpha_moment_mapping(k)) =
+	  const int moment = outer_k_rank_enabled
+	      ? d_outer_alpha_moment_mapping(k) : d_alpha_moment_mapping(k);
+	  d_nbh_energy_ders_wrt_moments(ii, moment) =
       d_linear_coeffs(k) * d_species_coeffs[itype];
 }
 
@@ -4488,27 +4590,46 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(TagPairSUS
   const int itype = type[i] - 1;
   const F_FLOAT species_coeff = d_species_coeffs[itype];
 
-  for (int k = 0; k < alpha_scalar_count; k++) {
-    d_nbh_energy_ders_wrt_moments(ii, d_alpha_moment_mapping(k)) = d_linear_coeffs(k) * species_coeff;
-  }
+	  if (outer_k_rank_enabled) {
+	    for (int k = 0; k < alpha_scalar_count; k++)
+	      d_nbh_energy_ders_wrt_moments(
+	          ii, d_outer_alpha_moment_mapping(k)) =
+	          d_linear_coeffs(k) * species_coeff;
 
-	  const int product_begin =
-	      outer_k_rank_enabled ? outer_k_rank_product_begin : 0;
-	  for (int k = alpha_index_times_count - 1; k >= product_begin; k--) {
-    int a0 = d_alpha_times_a0(k);
-    int a1 = d_alpha_times_a1(k);
-    F_FLOAT mult = d_alpha_times_coeff(k);
-    int a3 = d_alpha_times_out(k);
+	    for (int k = rank_phase_kk_outer_product_count - 1; k >= 0; k--) {
+	      const int a0 = d_outer_alpha_times_a0(k);
+	      const int a1 = d_outer_alpha_times_a1(k);
+	      const int a3 = d_outer_alpha_times_out(k);
+	      const F_FLOAT mult =
+	          d_alpha_times_coeff(outer_k_rank_product_begin + k);
+	      const F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
+	      const F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
+	      const F_FLOAT val3 = d_nbh_energy_ders_wrt_moments(ii, a3);
+	      d_nbh_energy_ders_wrt_moments(ii, a1) += val3 * mult * val0;
+	      d_nbh_energy_ders_wrt_moments(ii, a0) += val3 * mult * val1;
+	    }
+	    // Push the outer adjoint through W_o^T before raw edge force contraction.
+	    backprop_outer_k_rank_adjoints_kk(ii);
+	  } else {
+	    // Preserve the original rank-off logical traversal.
+	    for (int k = 0; k < alpha_scalar_count; k++) {
+	      d_nbh_energy_ders_wrt_moments(ii, d_alpha_moment_mapping(k)) =
+	          d_linear_coeffs(k) * species_coeff;
+	    }
+	    for (int k = alpha_index_times_count - 1; k >= 0; k--) {
+	      int a0 = d_alpha_times_a0(k);
+	      int a1 = d_alpha_times_a1(k);
+	      F_FLOAT mult = d_alpha_times_coeff(k);
+	      int a3 = d_alpha_times_out(k);
 
-    F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
-    F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
-    F_FLOAT val3 = d_nbh_energy_ders_wrt_moments(ii, a3);
+	      F_FLOAT val0 = d_moment_tensor_vals(ii, a0);
+	      F_FLOAT val1 = d_moment_tensor_vals(ii, a1);
+	      F_FLOAT val3 = d_nbh_energy_ders_wrt_moments(ii, a3);
 
-	    d_nbh_energy_ders_wrt_moments(ii, a1) += val3 * mult * val0;
-	    d_nbh_energy_ders_wrt_moments(ii, a0) += val3 * mult * val1;
+	      d_nbh_energy_ders_wrt_moments(ii, a1) += val3 * mult * val0;
+	      d_nbh_energy_ders_wrt_moments(ii, a0) += val3 * mult * val1;
+	    }
 	  }
-	  // Push the outer adjoint through W_o^T before raw edge force contraction.
-	  backprop_outer_k_rank_adjoints_kk(ii);
 }
 
 template <class DeviceType>
@@ -4696,9 +4817,18 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 
 	  if (need_energy_tally) {
 	    F_FLOAT scalar_sum = 1.0;
-	    for (int k = 0; k < alpha_scalar_count; k++) {
-	      const int basis_member_index = d_alpha_moment_mapping(k);
-	      scalar_sum += d_linear_coeffs(k) * d_moment_tensor_vals(ii, basis_member_index);
+	    if (outer_k_rank_enabled) {
+	      for (int k = 0; k < alpha_scalar_count; k++) {
+	        const int basis_member_index = d_outer_alpha_moment_mapping(k);
+	        scalar_sum += d_linear_coeffs(k) *
+	                      d_moment_tensor_vals(ii, basis_member_index);
+	      }
+	    } else {
+	      for (int k = 0; k < alpha_scalar_count; k++) {
+	        const int basis_member_index = d_alpha_moment_mapping(k);
+	        scalar_sum += d_linear_coeffs(k) *
+	                      d_moment_tensor_vals(ii, basis_member_index);
+	      }
 	    }
 	    const F_FLOAT nbh_energy = species_coeff * scalar_sum + d_shift_coeffs[itype];
 	    if (eflag_global) ev.evdwl += nbh_energy;
@@ -5766,10 +5896,19 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
     F_FLOAT scalar_sum = 1.0;
 
     // Take the linear combination of the basis set and the learned coefficients.
-    for (int k = 0; k < alpha_scalar_count; k++) {
-      int basis_member_index = d_alpha_moment_mapping(k);
-      scalar_sum += d_linear_coeffs(k) * d_moment_tensor_vals(ii, basis_member_index);
-    }
+	    if (outer_k_rank_enabled) {
+	      for (int k = 0; k < alpha_scalar_count; k++) {
+	        const int basis_member_index = d_outer_alpha_moment_mapping(k);
+	        scalar_sum += d_linear_coeffs(k) *
+	                      d_moment_tensor_vals(ii, basis_member_index);
+	      }
+	    } else {
+	      for (int k = 0; k < alpha_scalar_count; k++) {
+	        int basis_member_index = d_alpha_moment_mapping(k);
+	        scalar_sum += d_linear_coeffs(k) *
+	                      d_moment_tensor_vals(ii, basis_member_index);
+	      }
+	    }
     F_FLOAT nbh_energy = species_coeff * scalar_sum + d_shift_coeffs[itype];
 
     // FIXED: Removed the duplicate multiplication that was causing energy explosion

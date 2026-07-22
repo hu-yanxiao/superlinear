@@ -51,8 +51,9 @@ The script copies:
 
 - `ML-SUS2/*.cpp` and `ML-SUS2/*.h` into both `LAMMPS_ROOT/src/ML-SUS2/`
   and `LAMMPS_ROOT/src/`.
-- `ML-SUS2-KK/pair_sus2_mtp_kokkos.{cpp,h}` and
-  `ML-SUS2-KK/sus2_mtp_gate_cache_layout.h` into
+- `ML-SUS2-KK/pair_sus2_mtp_kokkos.{cpp,h}`,
+  `ML-SUS2-KK/sus2_mtp_gate_cache_layout.h`, and
+  `ML-SUS2-KK/sus2_mtp_rank_phase_layout.h` into
   `LAMMPS_ROOT/src/KOKKOS/`.
 - `MAKE/OPTIONS/Makefile.ml_sus2_avx2` and
   `MAKE/OPTIONS/Makefile.ml_sus2_avx512_skx` into

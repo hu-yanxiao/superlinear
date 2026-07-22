@@ -383,10 +383,12 @@ namespace LAMMPS_NS {
   // ---------- Device Arrays  ----------
   // Alphas indicies
   Kokkos::View<int **, DeviceType> d_alpha_index_basic;      // For constructing of basic alphas.
-  Kokkos::View<int **, DeviceType> d_alpha_index_times;      // For combining alphas
   Kokkos::View<int *, DeviceType> d_alpha_times_a0;
   Kokkos::View<int *, DeviceType> d_alpha_times_a1;
   Kokkos::View<int *, DeviceType> d_alpha_times_out;
+	  Kokkos::View<int *, DeviceType> d_outer_alpha_times_a0;
+	  Kokkos::View<int *, DeviceType> d_outer_alpha_times_a1;
+	  Kokkos::View<int *, DeviceType> d_outer_alpha_times_out;
 	  Kokkos::View<int *, DeviceType>
 	      d_two_layer_gate_cache_slot_to_moment;
 	  Kokkos::View<int *, DeviceType>
@@ -394,6 +396,7 @@ namespace LAMMPS_NS {
 	  Kokkos::View<int *, DeviceType>
 	      d_two_layer_gate_cache_packed_a1;
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
+	  Kokkos::View<int *, DeviceType> d_outer_alpha_moment_mapping;
   Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index;     // Real-SH flat index for SUS2-SH basic alphas.
   Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficient for SH products.
 	  Kokkos::View<int *, DeviceType> d_outer_k_rank_raw_basic_indices;
@@ -516,6 +519,11 @@ namespace LAMMPS_NS {
 	  int two_layer_gate_kk_cache_slot_count = 0;
 	  int two_layer_gate_kk_cache_product_end = 0;
 	  int two_layer_gate_kk_compact_cache_enabled = 0;
+	  int rank_phase_kk_gate_width = 0;
+	  int rank_phase_kk_outer_width = 0;
+	  int rank_phase_kk_work_width = 0;
+	  int rank_phase_kk_outer_contracted_begin = 0;
+	  int rank_phase_kk_outer_product_count = 0;
 	  int outer_k_rank_kk_unit_weights = 0;
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;
