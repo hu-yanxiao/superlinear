@@ -2381,6 +2381,27 @@ void PairSUS2MTP::prepare_k_rank_layout()
        outer_k_rank_product_begin > alpha_index_times_count ||
        outer_k_rank_basic_begin + outer_k_rank_basic_count > alpha_moment_count))
     error->all(FLERR, "SUS2-SH outer k-rank product boundary is invalid.");
+  if (outer_k_rank_enabled) {
+    for (int k = 0; k < outer_k_rank_product_begin; k++)
+      if (alpha_times_a0[k] < 0 || alpha_times_a1[k] < 0 ||
+          alpha_times_out[k] < 0 ||
+          alpha_times_a0[k] >= outer_k_rank_basic_begin ||
+          alpha_times_a1[k] >= outer_k_rank_basic_begin ||
+          alpha_times_out[k] >= outer_k_rank_basic_begin)
+        error->all(FLERR, "SUS2-SH product prefix crosses the outer k-rank graph suffix.");
+    for (int k = outer_k_rank_product_begin; k < alpha_index_times_count; k++)
+      if (alpha_times_a0[k] < outer_k_rank_basic_begin ||
+          alpha_times_a1[k] < outer_k_rank_basic_begin ||
+          alpha_times_out[k] < outer_k_rank_basic_begin ||
+          alpha_times_a0[k] >= alpha_moment_count ||
+          alpha_times_a1[k] >= alpha_moment_count ||
+          alpha_times_out[k] >= alpha_moment_count)
+        error->all(FLERR, "SUS2-SH outer k-rank product graph is not a closed suffix.");
+    for (int k = 0; k < alpha_scalar_count; k++)
+      if (alpha_moment_mapping[k] < outer_k_rank_basic_begin ||
+          alpha_moment_mapping[k] >= alpha_moment_count)
+        error->all(FLERR, "SUS2-SH outer k-rank scalar is outside the outer graph suffix.");
+  }
   if (two_layer_gate_k_rank > 0 &&
       (!outer_k_rank_enabled || two_layer_gate_k_rank_product_begin != 0 ||
        two_layer_gate_k_rank_product_begin > two_layer_gate_k_rank_product_end ||
@@ -2393,7 +2414,6 @@ void PairSUS2MTP::prepare_k_rank_layout()
 
 void PairSUS2MTP::contract_outer_k_rank_values()
 {
-  if (!outer_k_rank_enabled) return;
   for (int l = 0; l <= sh_l_max; l++)
       for (int channel = 0; channel < outer_k_rank; channel++)
         for (int m = -l; m <= l; m++) {
@@ -5160,9 +5180,12 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const int direct_main_gate_dot_override =
       env_flag_override("SUS2_LAMMPS_GATE_DIRECT_MAIN_DOT",
                         "SUS2_SH_GATE_DIRECT_MAIN_DOT");
+  // Outer-rank reverse propagation has already applied W^T to the raw
+  // (k,l,m) adjoints before this edge dot.  It therefore uses the same exact
+  // direct main-layer path as rank-off models without storing edge Jacobians.
   const bool direct_main_gate_dot =
       !two_layer_gate_center_enabled && !use_compact_gate_raw &&
-      direct_main_gate_dot_override != 0 && !any_k_rank_active;
+      direct_main_gate_dot_override != 0 && !gate_k_rank_active;
   const int direct_identity_adjoint_override =
       env_flag_override("SUS2_LAMMPS_GATE_DIRECT_IDENTITY_ADJOINT",
                         "SUS2_SH_GATE_DIRECT_IDENTITY_ADJOINT");
@@ -5679,9 +5702,24 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     const size_t active_end = two_layer_gate_edge_offsets[ii + 1];
     const int active_count = static_cast<int>(active_end - active_begin);
     ensure_two_layer_edge_buffer(active_count);
-    std::fill(moment_tensor_vals, moment_tensor_vals + alpha_moment_count, 0.0);
-    std::fill(nbh_energy_ders_wrt_moments,
-              nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
+    if (outer_k_rank_enabled) {
+      // The raw SH basics and the contracted outer graph are disjoint active
+      // ranges.  The full-K graph between them is serialized for the gate
+      // layer only and is never read by the rank outer forward/reverse pass.
+      std::fill(moment_tensor_vals,
+                moment_tensor_vals + alpha_index_basic_count, 0.0);
+      std::fill(moment_tensor_vals + outer_k_rank_basic_begin,
+                moment_tensor_vals + alpha_moment_count, 0.0);
+      std::fill(nbh_energy_ders_wrt_moments,
+                nbh_energy_ders_wrt_moments + alpha_index_basic_count, 0.0);
+      std::fill(nbh_energy_ders_wrt_moments + outer_k_rank_basic_begin,
+                nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
+    } else {
+      std::fill(moment_tensor_vals,
+                moment_tensor_vals + alpha_moment_count, 0.0);
+      std::fill(nbh_energy_ders_wrt_moments,
+                nbh_energy_ders_wrt_moments + alpha_moment_count, 0.0);
+    }
     const bool use_static_fixed_gate_main_cache =
         static_fixed_basic_cache_enabled && is_sh_model &&
         !eflag && !vflag && is_static_fixed_type(itype) &&
@@ -5830,7 +5868,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     }
 
 	    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
-	    contract_outer_k_rank_values();
+	    if (outer_k_rank_enabled) contract_outer_k_rank_values();
 	    forward_sh_products();
 
     double nbh_energy = 0.0;
