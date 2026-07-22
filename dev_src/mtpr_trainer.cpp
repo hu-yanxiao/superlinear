@@ -9,6 +9,7 @@
 #endif
 
 #include "mtpr_trainer.h"
+#include "optimizer_accepted_state.h"
 #include "diagonal_coordinate_scaling.h"
 #include "radial_weight_norm.h"
 
@@ -420,7 +421,7 @@ bool MTPR_trainer::LinearColumnActiveForStage(int column) const
 	}
 }
 
-void MTPR_trainer::PrepareLinearSolveColumns()
+void MTPR_trainer::PrepareLinearSolveColumns(bool readout_residual_only)
 {
 	if (p_mlmtpr == nullptr)
 		p_mlmtpr = dynamic_cast<MLMTPR*>(p_mlip);
@@ -428,9 +429,17 @@ void MTPR_trainer::PrepareLinearSolveColumns()
 		ERROR("MTPR_trainer::PrepareLinearSolveColumns requires an MLMTPR potential");
 
 	const int full_n = p_mlmtpr->LinearEquationCount();
+	const int readout_begin = p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+	const int readout_count = p_mlmtpr->TwoLayerGateReadoutCoeffCount();
+	if (readout_residual_only && readout_count <= 0)
+		ERROR("Readout-only linear solve requires an enabled gate readout");
 	linear_solve_columns_.clear();
 	linear_solve_full_to_active_.assign(full_n, -1);
 	for (int column = 0; column < full_n; ++column) {
+		if (readout_residual_only
+		    && (column < readout_begin
+		        || column >= readout_begin + readout_count))
+			continue;
 		if (!LinearColumnActiveForStage(column))
 			continue;
 		const int active_index = static_cast<int>(linear_solve_columns_.size());
@@ -560,12 +569,19 @@ double MTPR_trainer::LinearColumnCurrentCoeff(int column) const
 
 	const int e0_index = column - linear_count;
 	const int e0_begin = p_mlmtpr->TwoLayerResidualE0CoeffOffset();
-	double value = 0.0;
-	if (e0_index >= 0 && e0_index < p_mlmtpr->TwoLayerResidualE0CoeffCount())
-		value = p_mlmtpr->regression_coeffs[e0_begin + e0_index];
-	if (e0_index >= 0 && e0_index < static_cast<int>(p_mlmtpr->linear_mults.size()))
-		value *= p_mlmtpr->linear_mults[e0_index];
-	return value;
+	if (e0_index >= 0 && e0_index < p_mlmtpr->TwoLayerResidualE0CoeffCount()) {
+		double value = p_mlmtpr->regression_coeffs[e0_begin + e0_index];
+		if (e0_index < static_cast<int>(p_mlmtpr->linear_mults.size()))
+			value *= p_mlmtpr->linear_mults[e0_index];
+		return value;
+	}
+	const int readout_index =
+		column - p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+	if (readout_index >= 0
+	    && readout_index < p_mlmtpr->TwoLayerGateReadoutCoeffCount())
+		return p_mlmtpr->TwoLayerGateReadoutCoeff(readout_index);
+	ERROR("MTPR linear column is out of range");
+	return 0.0;
 }
 
 void MTPR_trainer::ProjectLinearRowToActive(const double* full_row,
@@ -589,16 +605,42 @@ void MTPR_trainer::ProjectLinearRowToActive(const double* full_row,
 	}
 }
 
+void MTPR_trainer::BuildReadoutResidualRow(
+	const double* full_row,
+	int full_stride,
+	double reference_value,
+	double predicted_value,
+	double& rhs,
+	double* active_row) const
+{
+	rhs = reference_value - predicted_value;
+	const int readout_begin = p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+	const int readout_end =
+		readout_begin + p_mlmtpr->TwoLayerGateReadoutCoeffCount();
+	const int active_n = LinearSolveColumnCount();
+	for (int active_index = 0; active_index < active_n; ++active_index) {
+		const int column = linear_solve_columns_[active_index];
+		if (column < readout_begin || column >= readout_end)
+			ERROR("Readout residual row contains a non-readout active column");
+		const double value = full_row[column * full_stride];
+		active_row[active_index] = value;
+		// P_current = P_frozen + X * phi_current.  Move the current
+		// readout contribution back to the right-hand side so the solve
+		// returns the absolute optimum phi, not merely a correction.
+		rhs += value * LinearColumnCurrentCoeff(column);
+	}
+}
 
 
-void MTPR_trainer::ClearSLAE()
+
+void MTPR_trainer::ClearSLAE(bool readout_residual_only)
 {
 	if (p_mlmtpr == nullptr)
 		p_mlmtpr = dynamic_cast<MLMTPR*>(p_mlip);
 	if (p_mlmtpr == nullptr)
 		ERROR("MTPR_trainer::ClearSLAE requires an MLMTPR potential");
 
-	PrepareLinearSolveColumns();
+	PrepareLinearSolveColumns(readout_residual_only);
 	int n = LinearSolveColumnCount();	// Active matrix size
 
 	if (quad_opt_allocated_n != n || quad_opt_vec == nullptr || quad_opt_matr == nullptr) {
@@ -694,6 +736,7 @@ void MTPR_trainer::SolveSLAE()
 
 	const int linear_count = p_mlmtpr->LinearCoeffCount();
 	const int e0_count = p_mlmtpr->TwoLayerResidualE0CoeffCount();
+	const int readout_count = p_mlmtpr->TwoLayerGateReadoutCoeffCount();
 	if (static_cast<int>(p_mlmtpr->linear_coeffs.size()) != linear_count)
 		p_mlmtpr->linear_coeffs.resize(linear_count);
 	for (int active_index = 0; active_index < n; ++active_index) {
@@ -706,8 +749,22 @@ void MTPR_trainer::SolveSLAE()
 			p_mlmtpr->two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
 		for (int active_index = 0; active_index < n; ++active_index) {
 			const int column = linear_solve_columns_[active_index];
-			if (column >= linear_count)
+			if (column >= linear_count && column < linear_count + e0_count)
 				p_mlmtpr->two_layer_residual_e0_coeffs_[column - linear_count] =
+					quad_opt_vec[active_index];
+		}
+	}
+	if (readout_count > 0) {
+		if (static_cast<int>(p_mlmtpr->two_layer_gate_readout_coeffs_.size())
+		    != readout_count)
+			p_mlmtpr->two_layer_gate_readout_coeffs_.assign(readout_count, 0.0);
+		const int readout_column_offset =
+			p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+		for (int active_index = 0; active_index < n; ++active_index) {
+			const int readout_index =
+				linear_solve_columns_[active_index] - readout_column_offset;
+			if (readout_index >= 0 && readout_index < readout_count)
+				p_mlmtpr->two_layer_gate_readout_coeffs_[readout_index] =
 					quad_opt_vec[active_index];
 		}
 	}
@@ -745,6 +802,15 @@ void MTPR_trainer::SolveSLAE()
 		p_mlmtpr->regression_coeffs[e0_offset + i] =
 			p_mlmtpr->two_layer_residual_e0_coeffs_[i];
 	}
+	const int readout_offset = p_mlmtpr->TwoLayerGateReadoutCoeffOffset();
+	const int readout_column_offset =
+		p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+	for (int i = 0; i < readout_count; ++i) {
+		if (!LinearSolveColumnActive(readout_column_offset + i))
+			continue;
+		p_mlmtpr->regression_coeffs[readout_offset + i] =
+			p_mlmtpr->two_layer_gate_readout_coeffs_[i];
+	}
 	const int linear_offset = p_mlmtpr->LinearCoeffOffset();
 	for (int i = 0; i < linear_count; i++) {
 		if (!LinearSolveColumnActive(i))
@@ -763,7 +829,10 @@ void MTPR_trainer::SolveSLAE()
 }
 
 
-void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborhoods* neighborhoods)
+void MTPR_trainer::AddToSLAE(Configuration& cfg,
+	                         double weight,
+	                         const Neighborhoods* neighborhoods,
+	                         bool readout_residual_only)
 {
 	if (cfg.size() == 0)				// 
 		return;
@@ -777,11 +846,42 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	double wgt_stress = wgt_eqtn_stress / cfg.size();
 	const bool need_forces = (wgt_eqtn_forces > 0) && cfg.has_forces();
 	const bool need_stress = (wgt_eqtn_stress > 0) && cfg.has_stresses();
+	Configuration readout_prediction;
+	if (readout_residual_only) {
+		if (!p_mlmtpr->TwoLayerGateReadoutEnabled())
+			ERROR("Readout residual linear solve requires an enabled gate readout");
+		if (force_loss_kind != ForceLossKind::L2)
+			ERROR("Readout residual linear solve requires --force-loss=l2");
+		readout_prediction = cfg;
+		if (need_forces || need_stress) {
+			if (neighborhoods != nullptr)
+				p_mlmtpr->CalcEFS(readout_prediction, *neighborhoods);
+			else
+				p_mlmtpr->CalcEFS(readout_prediction);
+		} else {
+			if (neighborhoods != nullptr)
+				p_mlmtpr->CalcEnergyAndSiteEnergies(
+					readout_prediction, *neighborhoods);
+			else
+				p_mlmtpr->CalcEnergyAndSiteEnergies(readout_prediction);
+		}
+	}
 
-	if (neighborhoods != nullptr)
-		p_mlmtpr->CalcEFSComponents(cfg, *neighborhoods, need_forces, need_stress);
-	else
-		p_mlmtpr->CalcEFSComponents(cfg, need_forces, need_stress);
+	if (neighborhoods != nullptr) {
+		if (readout_residual_only)
+			p_mlmtpr->CalcEFSComponents(
+				cfg, *neighborhoods, need_forces, need_stress, true);
+		else
+			p_mlmtpr->CalcEFSComponents(
+				cfg, *neighborhoods, need_forces, need_stress);
+	} else {
+		if (readout_residual_only) {
+			Neighborhoods local_neighborhoods(cfg, p_mlmtpr->CutOff());
+			p_mlmtpr->CalcEFSComponents(
+				cfg, local_neighborhoods, need_forces, need_stress, true);
+		} else
+			p_mlmtpr->CalcEFSComponents(cfg, need_forces, need_stress);
+	}
 	if (HasFixedAtomicEnergies())
 		ValidateFixedAtomicEnergies();
 //        int w=p_mlmtpr->energy_cmpnts.size();
@@ -815,17 +915,32 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 	{
 		const double alpha = weight * wgt_energy * d / (d + fn*avef);
 		const double* energy_cmpnts = p_mlmtpr->energy_cmpnts;
-		double energy_rhs = cfg.energy;
-		if (HasFixedAtomicEnergies()) {
+		double energy_rhs = 0.0;
+		if (readout_residual_only) {
+			lin_active_row_.resize(n);
+			BuildReadoutResidualRow(energy_cmpnts,
+			                        1,
+			                        cfg.energy,
+			                        readout_prediction.energy,
+			                        energy_rhs,
+			                        lin_active_row_.data());
+			energy_cmpnts = lin_active_row_.data();
+		} else if (HasFixedAtomicEnergies()) {
+			energy_rhs = cfg.energy;
 			lin_energy_cmpnts_.assign(p_mlmtpr->energy_cmpnts, p_mlmtpr->energy_cmpnts + full_n);
 			for (int type = 0; type < p_mlmtpr->species_count; ++type)
 				lin_energy_cmpnts_[type] = 0.0;
 			energy_cmpnts = lin_energy_cmpnts_.data();
 			energy_rhs -= FixedAtomicEnergySum(cfg);
+		} else {
+			energy_rhs = cfg.energy;
 		}
-		lin_active_row_.resize(n);
-		ProjectLinearRowToActive(energy_cmpnts, 1, energy_rhs, lin_active_row_.data());
-		energy_cmpnts = lin_active_row_.data();
+		if (!readout_residual_only) {
+			lin_active_row_.resize(n);
+			ProjectLinearRowToActive(
+				energy_cmpnts, 1, energy_rhs, lin_active_row_.data());
+			energy_cmpnts = lin_active_row_.data();
+		}
 		cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
 			CBLAS_UPLO::CblasUpper,
 			n,
@@ -850,11 +965,22 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 			for (int ind = 0; ind < cfg.size(); ind++) {
 				for (int a = 0; a < 3; a++) {
 					const int row = 3 * ind + a;
-					lin_force_rhs_[row] = cfg.force(ind, a);
-					ProjectLinearRowToActive(&p_mlmtpr->forces_cmpnts(ind, 0, a),
-					                         3,
-					                         lin_force_rhs_[row],
-					                         &lin_force_block_[static_cast<size_t>(row) * n]);
+					if (readout_residual_only)
+						BuildReadoutResidualRow(
+							&p_mlmtpr->forces_cmpnts(ind, 0, a),
+							3,
+							cfg.force(ind, a),
+							readout_prediction.force(ind, a),
+							lin_force_rhs_[row],
+							&lin_force_block_[static_cast<size_t>(row) * n]);
+					else {
+						lin_force_rhs_[row] = cfg.force(ind, a);
+						ProjectLinearRowToActive(
+							&p_mlmtpr->forces_cmpnts(ind, 0, a),
+							3,
+							lin_force_rhs_[row],
+							&lin_force_block_[static_cast<size_t>(row) * n]);
+					}
 				}
 			}
 			cblas_dsyrk(CBLAS_ORDER::CblasRowMajor,
@@ -882,9 +1008,20 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 				double force_rhs_sq_sum = 0.0;
 				for (int a = 0; a < 3; a++) {
 					double* force_cmp = &p_mlmtpr->forces_cmpnts(ind, 0, a);
-					double force_rhs = cfg.force(ind, a);
+					double force_rhs = 0.0;
 					lin_projected_row_.resize(n);
-					ProjectLinearRowToActive(force_cmp, 3, force_rhs, lin_projected_row_.data());
+					if (readout_residual_only)
+						BuildReadoutResidualRow(force_cmp,
+						                        3,
+						                        cfg.force(ind, a),
+						                        readout_prediction.force(ind, a),
+						                        force_rhs,
+						                        lin_projected_row_.data());
+					else {
+						force_rhs = cfg.force(ind, a);
+						ProjectLinearRowToActive(
+							force_cmp, 3, force_rhs, lin_projected_row_.data());
+					}
 					const double* force_row = lin_projected_row_.data();
 					const int force_stride = 1;
 					cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
@@ -916,12 +1053,23 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 			int row = 0;
 			for (int a = 0; a < 3; a++)
 				for (int b = 0; b < 3; b++) {
-					lin_stress_rhs_[row] = cfg.stresses[a][b];
 					double* stress_cmp = &p_mlmtpr->stress_cmpnts[0][a][b];
-					ProjectLinearRowToActive(stress_cmp,
-					                         9,
-					                         lin_stress_rhs_[row],
-					                         &lin_stress_block_[static_cast<size_t>(row) * n]);
+					if (readout_residual_only)
+						BuildReadoutResidualRow(
+							stress_cmp,
+							9,
+							cfg.stresses[a][b],
+							readout_prediction.stresses[a][b],
+							lin_stress_rhs_[row],
+							&lin_stress_block_[static_cast<size_t>(row) * n]);
+					else {
+						lin_stress_rhs_[row] = cfg.stresses[a][b];
+						ProjectLinearRowToActive(
+							stress_cmp,
+							9,
+							lin_stress_rhs_[row],
+							&lin_stress_block_[static_cast<size_t>(row) * n]);
+					}
 					row++;
 				}
 			cblas_dsyrk(CBLAS_ORDER::CblasRowMajor,
@@ -946,9 +1094,20 @@ void MTPR_trainer::AddToSLAE(Configuration& cfg, double weight, const Neighborho
 			for (int a = 0; a < 3; a++)
 				for (int b = 0; b < 3; b++) {
 					double* stress_cmp = &p_mlmtpr->stress_cmpnts[0][a][b];
-					double stress_rhs = cfg.stresses[a][b];
+					double stress_rhs = 0.0;
 					lin_projected_row_.resize(n);
-					ProjectLinearRowToActive(stress_cmp, 9, stress_rhs, lin_projected_row_.data());
+					if (readout_residual_only)
+						BuildReadoutResidualRow(stress_cmp,
+						                        9,
+						                        cfg.stresses[a][b],
+						                        readout_prediction.stresses[a][b],
+						                        stress_rhs,
+						                        lin_projected_row_.data());
+					else {
+						stress_rhs = cfg.stresses[a][b];
+						ProjectLinearRowToActive(
+							stress_cmp, 9, stress_rhs, lin_projected_row_.data());
+					}
 					const double* stress_row = lin_projected_row_.data();
 					const int stress_stride = 1;
 					cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
@@ -998,7 +1157,8 @@ double* MTPR_trainer::ConstructLinHessian()
 void MTPR_trainer::TrainLinear(int prank,
 								   vector<Configuration>& training_set,
 								   const std::vector<Neighborhoods>* neighborhoods,
-								   const std::string& context)
+								   const std::string& context,
+								   bool readout_residual_only)
 {
 #ifdef MLIP_MPI
 	if (!train_rank_active_)
@@ -1014,6 +1174,9 @@ void MTPR_trainer::TrainLinear(int prank,
 		local_atom_count += cfg.size();
 	const std::string prefix = context.empty() ? "TrainLinear" : "TrainLinear[" + context + "]";
 	const int full_n = p_mlmtpr->LinearEquationCount();		// Full linear component count
+	const std::vector<double> coeffs_before =
+		readout_residual_only ? p_mlmtpr->regression_coeffs
+		                      : std::vector<double>();
 	std::vector<int> preserved_radial_indices;
 	std::vector<double> preserved_radial_values;
 	if (radial_parameterization == "weight-norm") {
@@ -1038,11 +1201,14 @@ void MTPR_trainer::TrainLinear(int prank,
 			preserved_radial_values.push_back(p_mlmtpr->Coeff()[coeff_index]);
 	}
 
-	if (radial_parameterization != "weight-norm")
+	if (!readout_residual_only && radial_parameterization != "weight-norm")
 		p_mlmtpr->Orthogonalize();
 
-	ClearSLAE();
+	ClearSLAE(readout_residual_only);
 	int n = LinearSolveColumnCount();		// Active matrix size
+	if (readout_residual_only
+	    && n != p_mlmtpr->TwoLayerGateReadoutCoeffCount())
+		ERROR(prefix + " did not select exactly the readout coefficient block");
 
 	double build_start = 0.0;
 #ifdef MLIP_MPI
@@ -1051,13 +1217,116 @@ void MTPR_trainer::TrainLinear(int prank,
 	build_start = static_cast<double>(clock()) / CLOCKS_PER_SEC;
 #endif
 	for (size_t i = 0; i < training_set.size(); ++i)
-		AddToSLAE(training_set[i], 1.0, neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i]);
+		AddToSLAE(training_set[i],
+		          1.0,
+		          neighborhoods == nullptr ? nullptr : &(*neighborhoods)[i],
+		          readout_residual_only);
 	double build_seconds = 0.0;
 #ifdef MLIP_MPI
 	build_seconds = MPI_Wtime() - build_start;
 #else
 	build_seconds = static_cast<double>(clock()) / CLOCKS_PER_SEC - build_start;
 #endif
+	long long global_cfg_count = local_cfg_count;
+#ifdef MLIP_MPI
+	// The scalar-head regularizer is defined once per global training
+	// configuration.  Its normal-equation diagonal therefore needs the global
+	// count for the full linear solve too.  Keep the historical zero-L2 full
+	// solve free of this extra collective.
+	if (readout_residual_only || scalar_head_l2_regularization != 0.0)
+		MPI_Allreduce(&local_cfg_count,
+		              &global_cfg_count,
+		              1,
+		              MPI_LONG_LONG_INT,
+		              MPI_SUM,
+		              train_comm);
+#endif
+	double readout_ridge_diagonal = 0.0;
+	std::vector<double> readout_objective_matrix;
+	std::vector<double> readout_objective_rhs;
+	double readout_objective_before = 0.0;
+	auto add_scalar_head_ridge = [&]() {
+		if (!std::isfinite(scalar_head_l2_regularization)
+		    || scalar_head_l2_regularization < 0.0)
+			ERROR("--scalar-head-l2 should be finite and >= 0");
+		if (scalar_head_l2_regularization == 0.0)
+			return;
+
+		const int scalar_begin = p_mlmtpr->species_count;
+		const int scalar_end = scalar_begin + p_mlmtpr->alpha_scalar_moments;
+		const int readout_count = p_mlmtpr->TwoLayerGateReadoutCoeffCount();
+		const int readout_begin =
+			p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+		const double global_scale = static_cast<double>(global_cfg_count)
+			* scalar_head_l2_regularization;
+		for (int active_index = 0; active_index < n; ++active_index) {
+			const int column = linear_solve_columns_[active_index];
+			double ridge = 0.0;
+			if (column >= scalar_begin && column < scalar_end) {
+				// The full normal equation solves for the physical scalar-head
+				// coefficient.  linear_mults is applied only when the solved value
+				// is stored back into regression_coeffs, so it must not appear here.
+				ridge = global_scale
+					/ static_cast<double>(p_mlmtpr->alpha_scalar_moments);
+			} else if (readout_count > 0
+			           && column >= readout_begin
+			           && column < readout_begin + readout_count) {
+				ridge = global_scale / static_cast<double>(readout_count);
+				readout_ridge_diagonal = ridge;
+			}
+			quad_opt_matr[active_index * n + active_index] += ridge;
+		}
+	};
+	auto readout_quadratic_value = [&](const std::vector<double>& phi) {
+		double linear = 0.0;
+		double quadratic = 0.0;
+		for (int i = 0; i < n; ++i) {
+			linear += readout_objective_rhs[i] * phi[i];
+			for (int j = 0; j < n; ++j)
+				quadratic += phi[i]
+					* readout_objective_matrix[i * n + j] * phi[j];
+		}
+		return quad_opt_scalar - 2.0 * linear + quadratic;
+	};
+	auto capture_readout_objective = [&]() {
+		if (!readout_residual_only)
+			return;
+		SymmetrizeSLAE();
+		readout_objective_matrix.assign(
+			quad_opt_matr, quad_opt_matr + static_cast<size_t>(n) * n);
+		readout_objective_rhs.assign(quad_opt_vec, quad_opt_vec + n);
+		std::vector<double> phi_before(n, 0.0);
+		for (int i = 0; i < n; ++i)
+			phi_before[i] = LinearColumnCurrentCoeff(linear_solve_columns_[i]);
+		readout_objective_before = readout_quadratic_value(phi_before);
+	};
+	auto validate_readout_objective = [&]() {
+		if (!readout_residual_only)
+			return true;
+		std::vector<double> phi_after(n, 0.0);
+		for (int i = 0; i < n; ++i)
+			phi_after[i] = LinearColumnCurrentCoeff(linear_solve_columns_[i]);
+		const double objective_after = readout_quadratic_value(phi_after);
+		const double tolerance =
+			1.0e-10 * std::max(1.0, std::abs(readout_objective_before));
+		if (mpi_rank == 0) {
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "readout-only linear objective"
+			          << " cfg_global=" << global_cfg_count
+			          << " active_columns=" << n
+			          << " full_columns=" << full_n
+			          << " head_l2=" << scalar_head_l2_regularization
+			          << " ridge_diagonal=" << readout_ridge_diagonal
+			          << " before=" << readout_objective_before
+			          << " after=" << objective_after
+			          << " decrease="
+			          << (readout_objective_before - objective_after)
+			          << std::endl;
+		}
+		return std::isfinite(readout_objective_before)
+		    && std::isfinite(objective_after)
+		    && objective_after <= readout_objective_before + tolerance;
+	};
 
 #ifdef MLIP_MPI
 
@@ -1072,6 +1341,8 @@ void MTPR_trainer::TrainLinear(int prank,
 	if (mpi_rank == 0) {
 		std::cout << "[" << CurrentTimestamp() << "] TrainLinear build done"
 		          << " ctx=" << prefix
+		          << " scope="
+		          << (readout_residual_only ? "readout-residual-only" : "full")
 		          << " n=" << n
 		          << " full_n=" << full_n
 		          << " cfg_local=" << local_cfg_count
@@ -1095,6 +1366,8 @@ void MTPR_trainer::TrainLinear(int prank,
 		std::cout << "[" << CurrentTimestamp() << "] TrainLinear reduce done"
 		          << " ctx=" << prefix
 		          << " reduce_s=" << reduce_seconds << std::endl;
+		add_scalar_head_ridge();
+		capture_readout_objective();
 		const double solve_start = MPI_Wtime();
 		const int bad_matrix = FirstNonFinite(quad_opt_matr, n*n);
 		const int bad_rhs = FirstNonFinite(quad_opt_vec, n);
@@ -1128,6 +1401,14 @@ void MTPR_trainer::TrainLinear(int prank,
 				linear_error = NonFiniteMessage(prefix + " solved coefficients", bad_coeff);
 			}
 		}
+		if (linear_status == 0 && !validate_readout_objective()) {
+			linear_status = 1;
+			linear_error = prefix + " increased the fixed-feature readout objective";
+			std::copy(coeffs_before.begin(),
+			          coeffs_before.end(),
+			          p_mlmtpr->regression_coeffs.begin());
+			p_mlmtpr->LinCoeff();
+		}
 		const double solve_seconds = MPI_Wtime() - solve_start;
 		if (linear_status == 0) {
 			std::cout << "[" << CurrentTimestamp() << "] TrainLinear solve done"
@@ -1152,10 +1433,19 @@ void MTPR_trainer::TrainLinear(int prank,
 	}
 
 #else
+	add_scalar_head_ridge();
+	capture_readout_objective();
 	RequireFiniteArray(quad_opt_matr, n*n, prefix + " normal matrix");
 	RequireFiniteArray(quad_opt_vec, n, prefix + " right-hand side");
 	SolveSLAE();
 	RequireFiniteArray(p_mlmtpr->Coeff(), p_mlmtpr->CoeffCount(), prefix + " solved coefficients");
+	if (!validate_readout_objective()) {
+		std::copy(coeffs_before.begin(),
+		          coeffs_before.end(),
+		          p_mlmtpr->regression_coeffs.begin());
+		p_mlmtpr->LinCoeff();
+		ERROR(prefix + " increased the fixed-feature readout objective");
+	}
 #endif
 #ifdef MLIP_MPI
 	double bcast_start = MPI_Wtime();
@@ -1176,6 +1466,21 @@ void MTPR_trainer::TrainLinear(int prank,
 		if (p_mlmtpr->Coeff()[preserved_radial_indices[i]]
 		    != preserved_radial_values[i])
 			ERROR(prefix + " changed a weight-normalized physical radial coefficient.");
+	}
+	if (readout_residual_only) {
+		const int readout_begin = p_mlmtpr->TwoLayerGateReadoutCoeffOffset();
+		const int readout_end =
+			readout_begin + p_mlmtpr->TwoLayerGateReadoutCoeffCount();
+		if (coeffs_before.size() != p_mlmtpr->regression_coeffs.size())
+			ERROR(prefix + " changed the coefficient layout");
+		for (int i = 0; i < p_mlmtpr->CoeffCount(); ++i) {
+			if (i >= readout_begin && i < readout_end)
+				continue;
+			if (std::memcmp(&coeffs_before[i],
+			                &p_mlmtpr->regression_coeffs[i],
+			                sizeof(double)) != 0)
+				ERROR(prefix + " changed a frozen non-readout coefficient");
+		}
 	}
 
 
@@ -1435,35 +1740,69 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	const int opt_n = static_cast<int>(active_coeff_indices.size());
 	if (opt_n <= 0)
 		ERROR("MTPR_trainer::Train(): no active optimizer coordinates.");
+	if (prank == 0) {
+		const char* execution_mode = use_lbfgs_optimizer
+			? "replicated-lbfgs"
+			: (bfgs.UsingDistributedDense()
+				? "distributed-dense-bfgs"
+				: (psize == 1
+					? "single-rank-dense-bfgs"
+					: "root-only-dense-bfgs"));
+		std::cout << "[" << CurrentTimestamp() << "] "
+		          << "optimizer execution mode=" << execution_mode
+		          << " optimizer_collective="
+		          << (optimizer_replicated ? "true" : "false")
+		          << " train_ranks=" << psize
+		          << " active_coordinates=" << opt_n
+#ifdef MLIP_MPI
+		          << " train_comm_is_world="
+		          << (train_comm_is_world_ ? "true" : "false")
+#endif
+		          << std::endl;
+	}
 	struct RadialWeightNormRow {
 		int full_begin;
 		int active_begin;
 		int pivot;
 		double pivot_sign;
+		bool is_gate1;
+		int mu;
 		RadialWeightNormRow(int full_begin_,
 		                    int active_begin_,
 		                    int pivot_,
-		                    double pivot_sign_)
+		                    double pivot_sign_,
+		                    bool is_gate1_,
+		                    int mu_)
 			: full_begin(full_begin_),
 			  active_begin(active_begin_),
 			  pivot(pivot_),
-			  pivot_sign(pivot_sign_) {}
+			  pivot_sign(pivot_sign_),
+			  is_gate1(is_gate1_),
+			  mu(mu_) {}
 	};
 	std::vector<RadialWeightNormRow> radial_weight_norm_rows;
 	std::vector<int> radial_weight_norm_role(n, -1);
 	int outer_radial_weight_norm_row_count = 0;
 	int gate1_radial_weight_norm_row_count = 0;
+	int outer_radial_weight_norm_zero_fallback_count = 0;
+	int gate1_radial_weight_norm_zero_fallback_count = 0;
 	double radial_weight_norm_roundtrip_max_abs = 0.0;
 	if (use_radial_weight_norm && p_mlmtpr->p_RadialBasis == nullptr)
 		ERROR("MTPR_trainer::Train(): radial weight normalization requires an initialized radial basis.");
 	const int radial_weight_norm_row_size =
 		p_mlmtpr->p_RadialBasis == nullptr ? 0 : p_mlmtpr->p_RadialBasis->rb_size;
+	// Keep accepted points well inside the signed-pivot chart. For the mapping
+	// theta = pi*tanh(r/2), r=8 still has a finite angular response, while the
+	// trial limit leaves room for line search without approaching tanh
+	// saturation (the old failure appeared only near r ~= 38).
+	const double radial_rechart_direction_radius = 8.0;
+	const double radial_trial_direction_radius_limit = 12.0;
 	if (use_radial_weight_norm) {
 		std::vector<double> initial_coordinates(
 			radial_weight_norm_row_size, 0.0);
 		std::vector<double> reconstructed_physical(
 			radial_weight_norm_row_size, 0.0);
-		auto add_radial_weight_norm_row = [&](int row_begin, bool is_gate1) {
+		auto add_radial_weight_norm_row = [&](int row_begin, bool is_gate1, int mu) {
 			int active_count = 0;
 			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi)
 				active_count += full_to_active_index[row_begin + xi] >= 0 ? 1 : 0;
@@ -1472,10 +1811,27 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			if (active_count != radial_weight_norm_row_size)
 				ERROR("MTPR_trainer::Train(): radial weight normalization requires a complete active radial row.");
 			const int active_begin = full_to_active_index[row_begin];
+			double max_abs = 0.0;
 			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi) {
 				if (full_to_active_index[row_begin + xi] != active_begin + xi)
 					ERROR("MTPR_trainer::Train(): radial weight-normalization coordinates are not contiguous.");
-				radial_weight_norm_role[row_begin + xi] = xi;
+				const double value = x[row_begin + xi];
+				if (!std::isfinite(value))
+					ERROR("MTPR_trainer::Train(): radial weight-normalization row contains a non-finite coefficient.");
+				max_abs = std::max(max_abs, std::abs(value));
+			}
+			if (max_abs == 0.0) {
+				if (!is_gate1 && !p_mlmtpr->OuterKRankUsesDirectRadial())
+					ERROR("MTPR_trainer::Train(): cannot select a nonzero radial weight-normalization pivot.");
+				// The norm/log-direction chart is undefined at the origin.  This
+				// occurs legitimately when a legacy rank-1 W(l,k)=0 is absorbed.
+				// Leave the complete row in ordinary physical coordinates so BFGS
+				// can move it away from zero without injecting an arbitrary epsilon.
+				if (is_gate1)
+					++gate1_radial_weight_norm_zero_fallback_count;
+				else
+					++outer_radial_weight_norm_zero_fallback_count;
+				return;
 			}
 
 			int pivot = 0;
@@ -1486,6 +1842,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			        pivot,
 			        pivot_sign))
 				ERROR("MTPR_trainer::Train(): cannot select a nonzero radial weight-normalization pivot.");
+			for (int xi = 0; xi < radial_weight_norm_row_size; ++xi)
+				radial_weight_norm_role[row_begin + xi] = xi;
 
 			if (!sus2::RadialWeightNormChart::PackWithPivot(
 			        x + row_begin,
@@ -1514,7 +1872,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 			radial_weight_norm_rows.push_back(
 				RadialWeightNormRow(
-					row_begin, active_begin, pivot, pivot_sign));
+					row_begin, active_begin, pivot, pivot_sign, is_gate1, mu));
 			if (is_gate1)
 				++gate1_radial_weight_norm_row_count;
 			else
@@ -1524,13 +1882,16 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		const int radial_begin = p_mlmtpr->RadialCoeffOffset();
 		const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
 		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
-			add_radial_weight_norm_row(radial_begin + mu * radial_stride, false);
+			add_radial_weight_norm_row(
+				radial_begin + mu * radial_stride, false, mu);
 
 		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
 			const int gate1_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
 			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
 				add_radial_weight_norm_row(
-					gate1_radial_begin + mu * radial_weight_norm_row_size, true);
+					gate1_radial_begin + mu * radial_weight_norm_row_size,
+					true,
+					mu);
 		}
 	}
 	const int redundant_radial_species_count =
@@ -1585,6 +1946,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			p_mlmtpr->TwoLayerResidualE0CoeffOffset(),
 			p_mlmtpr->TwoLayerResidualE0CoeffCount());
 		add_coordinate_normalization_block(
+			"gate-readout-head",
+			p_mlmtpr->TwoLayerGateReadoutCoeffOffset(),
+			p_mlmtpr->TwoLayerGateReadoutCoeffCount());
+		add_coordinate_normalization_block(
 			"gate1-additive",
 			p_mlmtpr->TwoLayerGateAdditiveCoeffOffset(),
 			p_mlmtpr->TwoLayerGateAdditiveCoeffCount());
@@ -1612,6 +1977,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			"gate2-body-mix",
 			p_mlmtpr->SecondLayerGateBodyMixWeightOffset(),
 			p_mlmtpr->SecondLayerGateBodyMixWeightCount());
+		add_coordinate_normalization_block(
+			"gate-k-rank",
+			p_mlmtpr->TwoLayerGateKRankWeightOffset(),
+			p_mlmtpr->TwoLayerGateKRankWeightCount());
+		add_coordinate_normalization_block(
+			"outer-k-rank",
+			p_mlmtpr->OuterKRank1WeightOffset(),
+			p_mlmtpr->OuterKRank1WeightCount());
 		if (coordinate_normalization_blocks.empty())
 			ERROR("MTPR_trainer::Train(): no active parameter block supports BFGS coordinate normalization.");
 	}
@@ -1721,6 +2094,50 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			lbfgs.ReduceStep(ratio);
 		else
 			bfgs.ReduceStep(ratio);
+	};
+	auto limit_radial_direction_trial = [&]() {
+		if (radial_weight_norm_rows.empty())
+			return;
+		int reductions = 0;
+		while (true) {
+			double max_radius = 0.0;
+			int max_row_idx = -1;
+			for (size_t row_idx = 0;
+			     row_idx < radial_weight_norm_rows.size();
+			     ++row_idx) {
+				const RadialWeightNormRow& row =
+					radial_weight_norm_rows[row_idx];
+				double radius = 0.0;
+				if (!sus2::RadialWeightNormChart::GetDirectionRadius(
+				        optimizer_data() + row.active_begin,
+				        radial_weight_norm_row_size,
+				        radius))
+					ERROR("MTPR_trainer::Train(): optimizer proposed an invalid radial direction coordinate.");
+				if (radius > max_radius) {
+					max_radius = radius;
+					max_row_idx = static_cast<int>(row_idx);
+				}
+			}
+			if (max_radius <= radial_trial_direction_radius_limit)
+				break;
+			optimizer_reduce_step(0.25);
+			if (++reductions > 64) {
+				const RadialWeightNormRow& row =
+					radial_weight_norm_rows[max_row_idx];
+				ERROR(optimizer_log_name
+				      + " could not reduce radial direction step below the safety limit"
+				      + " block=" + (row.is_gate1 ? "gate1" : "outer")
+				      + " mu=" + std::to_string(row.mu));
+			}
+		}
+		if (reductions > 0 && prank == 0) {
+			std::cerr << "[" << CurrentTimestamp() << "] "
+			          << optimizer_log_name
+			          << " reduced trial to keep radial direction charts finite"
+			          << " reductions=" << reductions
+			          << " direction_radius_limit="
+			          << radial_trial_direction_radius_limit << std::endl;
+		}
 	};
 	auto optimizer_linesearch_stagnated = [&]() {
 		return use_lbfgs_optimizer
@@ -2053,6 +2470,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					base_curvature * mult * mult;
 			}
 		}
+		if (scalar_head_l2_regularization != 0.0
+		    && p_mlmtpr->TwoLayerGateReadoutCoeffCount() > 0) {
+			const int readout_count =
+				p_mlmtpr->TwoLayerGateReadoutCoeffCount();
+			const double curvature =
+				2.0 * scalar_head_l2_regularization
+				/ static_cast<double>(readout_count);
+			const int readout_begin =
+				p_mlmtpr->TwoLayerGateReadoutCoeffOffset();
+			for (int q = 0; q < readout_count; ++q)
+				diagonal[readout_begin + q] += curvature;
+		}
 		if (p_mlmtpr->TwoLayerGateUsesBodyLinearCombo()) {
 			const int scalar_count = p_mlmtpr->TwoLayerGateWeightCount();
 			if (gate_scalar_l2_regularization != 0.0
@@ -2263,16 +2692,165 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			optimizer_set_inv_hess_diag(inv_hess_diag);
 		};
 	bool freeze_species_coeffs = do_lin && do_lin_step_limit > 0;
-	std::vector<double> last_accepted_coeffs(n, 0.0);
+	sus2::OptimizerAcceptedState accepted_state(n);
 	auto save_last_accepted_coeffs = [&]() {
-		std::copy(x, x + n, last_accepted_coeffs.begin());
+		accepted_state.SetBoundaryBase(x);
+	};
+	auto save_evaluated_accepted_coeffs = [&](const double* evaluated_x) {
+		accepted_state.SetEvaluatedAccepted(evaluated_x);
 	};
 	auto restore_last_accepted_coeffs = [&]() {
-		std::copy(last_accepted_coeffs.begin(), last_accepted_coeffs.end(), x);
+		accepted_state.Restore(x);
 		if (optimizer_replicated || prank == 0) {
 			set_optimizer_x_from_full_coeffs();
 			mask_frozen_coordinates(freeze_species_coeffs);
 		}
+	};
+	auto rechart_accepted_radial_rows = [&](int step) {
+		if (radial_weight_norm_rows.empty())
+			return false;
+
+		const size_t row_count = radial_weight_norm_rows.size();
+		std::vector<int> next_pivots(row_count, 0);
+		std::vector<double> next_pivot_signs(row_count, 1.0);
+		std::vector<double> old_radii(row_count, 0.0);
+		std::vector<double> new_radii(row_count, 0.0);
+		std::vector<int> reasons(row_count, 0);
+		std::vector<int> old_pivots(row_count, 0);
+		std::vector<double> old_pivot_signs(row_count, 1.0);
+		int rechart_state[2] = {0, -1};
+		double max_roundtrip_error = 0.0;
+
+		if (prank == 0) {
+			std::vector<double> coordinates(
+				radial_weight_norm_row_size, 0.0);
+			std::vector<double> reconstructed(
+				radial_weight_norm_row_size, 0.0);
+			for (size_t row_idx = 0; row_idx < row_count; ++row_idx) {
+				const RadialWeightNormRow& row =
+					radial_weight_norm_rows[row_idx];
+				old_pivots[row_idx] = row.pivot;
+				old_pivot_signs[row_idx] = row.pivot_sign;
+				int next_pivot = row.pivot;
+				double next_pivot_sign = row.pivot_sign;
+				const sus2::RadialWeightNormChart::RechartResult result =
+					sus2::RadialWeightNormChart::RechartIfNeeded(
+						x + row.full_begin,
+						radial_weight_norm_row_size,
+						radial_rechart_direction_radius,
+						next_pivot,
+						next_pivot_sign,
+						coordinates.data());
+				if (!result.success) {
+					rechart_state[1] = static_cast<int>(row_idx);
+					break;
+				}
+				next_pivots[row_idx] = next_pivot;
+				next_pivot_signs[row_idx] = next_pivot_sign;
+				old_radii[row_idx] = result.old_direction_radius;
+				new_radii[row_idx] = result.new_direction_radius;
+				reasons[row_idx] = static_cast<int>(result.reason);
+				if (!result.recharted)
+					continue;
+
+				if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+				        coordinates.data(),
+				        radial_weight_norm_row_size,
+				        next_pivot,
+				        next_pivot_sign,
+				        reconstructed.data())) {
+					rechart_state[1] = static_cast<int>(row_idx);
+					break;
+				}
+				for (int xi = 0; xi < radial_weight_norm_row_size; ++xi) {
+					const double physical_value = x[row.full_begin + xi];
+					const double abs_error = std::abs(
+						reconstructed[xi] - physical_value);
+					max_roundtrip_error = std::max(
+						max_roundtrip_error, abs_error);
+					const double tolerance = 64.0
+						* std::numeric_limits<double>::epsilon()
+						* std::max(1.0, std::abs(physical_value));
+					if (abs_error > tolerance) {
+						rechart_state[1] = static_cast<int>(row_idx);
+						break;
+					}
+				}
+				if (rechart_state[1] >= 0)
+					break;
+				++rechart_state[0];
+			}
+		}
+
+#ifdef MLIP_MPI
+		MPI_Bcast(rechart_state, 2, MPI_INT, 0, train_comm);
+#endif
+		if (rechart_state[1] >= 0) {
+			const RadialWeightNormRow& row =
+				radial_weight_norm_rows[rechart_state[1]];
+			ERROR("MTPR_trainer::Train(): radial weight-normalization rechart failed"
+			      + std::string(" block=")
+			      + (row.is_gate1 ? "gate1" : "outer")
+			      + " mu=" + std::to_string(row.mu));
+		}
+		if (rechart_state[0] == 0)
+			return false;
+
+#ifdef MLIP_MPI
+		MPI_Bcast(next_pivots.data(),
+		          static_cast<int>(row_count),
+		          MPI_INT,
+		          0,
+		          train_comm);
+		MPI_Bcast(next_pivot_signs.data(),
+		          static_cast<int>(row_count),
+		          MPI_DOUBLE,
+		          0,
+		          train_comm);
+#endif
+		for (size_t row_idx = 0; row_idx < row_count; ++row_idx) {
+			radial_weight_norm_rows[row_idx].pivot = next_pivots[row_idx];
+			radial_weight_norm_rows[row_idx].pivot_sign =
+				next_pivot_signs[row_idx];
+		}
+		reset_optimizer_state();
+		mask_frozen_coordinates(freeze_species_coeffs);
+
+		if (prank == 0) {
+			for (size_t row_idx = 0; row_idx < row_count; ++row_idx) {
+				if (old_pivots[row_idx] == next_pivots[row_idx]
+				    && old_pivot_signs[row_idx] == next_pivot_signs[row_idx])
+					continue;
+				const RadialWeightNormRow& row =
+					radial_weight_norm_rows[row_idx];
+				std::cerr << "[" << CurrentTimestamp() << "] "
+				          << optimizer_log_name
+				          << " radial weight-normalization rechart"
+				          << " step=" << step
+				          << " block=" << (row.is_gate1 ? "gate1" : "outer")
+				          << " mu=" << row.mu
+				          << " reason="
+				          << (reasons[row_idx]
+				                  == sus2::RadialWeightNormChart::kRechartPackFailed
+				              ? "pack-failed"
+				              : "direction-radius")
+				          << " old_pivot=" << old_pivots[row_idx]
+				          << " old_sign=" << old_pivot_signs[row_idx]
+				          << " new_pivot=" << next_pivots[row_idx]
+				          << " new_sign=" << next_pivot_signs[row_idx]
+				          << " old_radius=" << old_radii[row_idx]
+				          << " new_radius=" << new_radii[row_idx]
+				          << std::endl;
+			}
+			std::cerr << "[" << CurrentTimestamp() << "] "
+			          << optimizer_log_name
+			          << " reset after radial rechart"
+			          << " step=" << step
+			          << " rows=" << rechart_state[0]
+			          << " max_physical_roundtrip_error="
+			          << max_roundtrip_error << std::endl;
+		}
+		return true;
 	};
 	auto optimizer_state_is_finite = [&]() {
 		return std::isfinite(bfgs_f)
@@ -2319,8 +2897,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		          << "outer radial weight-normalization coordinates enabled"
 		          << " outer_rows=" << outer_radial_weight_norm_row_count
 		          << " gate1_rows=" << gate1_radial_weight_norm_row_count
+		          << " outer_zero_fallback_rows="
+		          << outer_radial_weight_norm_zero_fallback_count
+		          << " gate1_zero_fallback_rows="
+		          << gate1_radial_weight_norm_zero_fallback_count
 		          << " total_rows=" << radial_weight_norm_rows.size()
 		          << " row_size=" << radial_weight_norm_row_size
+		          << " rechart_radius=" << radial_rechart_direction_radius
+		          << " trial_radius_limit="
+		          << radial_trial_direction_radius_limit
 		          << " physical_load=roundtrip-verified"
 		          << " max_abs_error=" << radial_weight_norm_roundtrip_max_abs
 		          << " model_format=physical"
@@ -2352,6 +2937,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		double linf = 9e99;
 		double loss_reduced_by = 0.0;
 	double loss_prev = 9e99;
+	double accepted_loss_reference = 0.0;
+	bool accepted_loss_reference_valid = false;
 	double std_l = 0.0;
 	double stdd_l = 0.0;
 	double mean_1_l = 0.0;
@@ -2401,15 +2988,27 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		bfgs_trace_stream << std::scientific << std::setprecision(17);
 	}
 	int trace_lines_since_flush = 0;
+	// Reuse this buffer for every objective evaluation.  An optimizer step can
+	// contain many line-search trials, so allocating an n-sized vector in the
+	// inner loop is unnecessary overhead for large readout models.
+	std::vector<double> evaluated_coeffs(n, 0.0);
 
 		while (!converge)
 		{
 			bool restarted_rejected_linesearch_this_iteration = false;
+			bool accepted_evaluated_point_this_iteration = false;
 			//if (prank==0)
 			//cout << "itr" << endl;
 
 		if (!linesearch)
 		{
+			// A successful reverse-communication BFGS call leaves optimizer.x at
+			// the first *unevaluated* trial of the next line search even though
+			// is_in_linesearch() is false.  Boundary work must start from the
+			// separately saved evaluated/accepted physical point.
+			const bool boundary_had_pending_trial =
+				accepted_state.RestoreAcceptedForBoundary(x);
+
 			bool external_x_modified = false;
 			bool external_x_needs_broadcast = false;
 			const bool random_perturb_applied = (max_shift != 0.0);
@@ -2427,13 +3026,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				}
 			}
 			external_x_modified = random_perturb_applied;
-			external_x_needs_broadcast = optimizer_replicated && random_perturb_applied;
+			external_x_needs_broadcast = random_perturb_applied;
 
 			const bool should_freeze_species_coeffs = do_lin && num_step < do_lin_step_limit;
+			const bool freeze_species_state_changed =
+				should_freeze_species_coeffs != freeze_species_coeffs;
 			if (should_freeze_species_coeffs != freeze_species_coeffs) {
 				freeze_species_coeffs = should_freeze_species_coeffs;
-				reset_optimizer_state();
-				mask_frozen_coordinates(freeze_species_coeffs);
 				if (prank == 0) {
 					std::cout << "[" << CurrentTimestamp() << "] "
 					          << "species_coeffs optimizer freeze "
@@ -2455,19 +3054,50 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 
 #ifdef MLIP_MPI
-			if (optimizer_replicated && external_x_needs_broadcast)
+			if (external_x_needs_broadcast)
 				MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
 #endif
-			if (external_x_modified) {
-				if (optimizer_replicated || prank == 0)
-					set_optimizer_x_from_full_coeffs();
-				mask_frozen_coordinates(freeze_species_coeffs);
+			// Rechart before every path that packs externally modified physical
+			// coefficients. Otherwise an external perturbation can hit the old
+			// chart's excluded antipode before the automatic repair gets a chance
+			// to run.
+			const bool radial_recharted =
+				rechart_accepted_radial_rows(num_step);
+			if (radial_recharted) {
+				linf = 9e99;
+				loss_reduced_by = 0.0;
+				loss_prev = 9e99;
+				if (prank == 0)
+					std::cerr << "[" << CurrentTimestamp() << "] "
+					          << optimizer_log_name
+					          << " convergence window reset after radial rechart"
+					          << " step=" << num_step << std::endl;
+			} else if (freeze_species_state_changed) {
+				reset_optimizer_state();
+			} else if (external_x_modified) {
+				set_optimizer_x_from_full_coeffs();
 			}
-			save_last_accepted_coeffs();
+			const bool boundary_rebased_optimizer =
+				radial_recharted || freeze_species_state_changed
+				|| external_x_modified;
+			if (external_x_modified)
+				accepted_loss_reference_valid = false;
+			if (boundary_had_pending_trial && !boundary_rebased_optimizer) {
+				// No accepted-point operation changed the optimizer state.  Put the
+				// already generated next trial back into the live physical model for
+				// the objective evaluation below.
+				copy_optimizer_x_to_full_coeffs();
+			} else {
+				// Initial state, or an intentional boundary reset/refresh.  This is
+				// now the base to which a rejected line search must return.
+				save_last_accepted_coeffs();
+			}
+			mask_frozen_coordinates(freeze_species_coeffs);
 		}
 
 				require_live_coeff_pointer("optimizer coordinate unpack");
 				copy_optimizer_x_to_full_coeffs();
+				std::copy(x, x + n, evaluated_coeffs.begin());
 				if (!startup_objective_logged
 				    && !coordinate_physical_reference.empty()) {
 					double max_abs_delta = 0.0;
@@ -2493,8 +3123,22 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 			const std::vector<Neighborhoods>* objective_neighborhoods =
 				cache_training_neighborhoods ? &training_neighborhoods : nullptr;
-			const bool armijo_value_trial =
-				use_armijo_value_line_search && optimizer_armijo_trial_ready();
+			bool armijo_value_trial = false;
+			if (use_armijo_value_line_search
+			    && (optimizer_replicated || prank == 0))
+				armijo_value_trial = optimizer_armijo_trial_ready();
+	#ifdef MLIP_MPI
+			// In root-only dense BFGS, non-root optimizers are synchronized with
+			// Set_x(), which deliberately clears their local line-search state.
+			// Broadcast root's protocol state before choosing an objective path so
+			// every rank enters matching MPI collectives.
+			if (use_armijo_value_line_search && !optimizer_replicated) {
+				int armijo_value_trial_state = armijo_value_trial ? 1 : 0;
+				MPI_Bcast(
+					&armijo_value_trial_state, 1, MPI_INT, 0, train_comm);
+				armijo_value_trial = (armijo_value_trial_state != 0);
+			}
+	#endif
 			bool armijo_value_trial_accepted = false;
 			bool armijo_value_trial_rejected = false;
 			double armijo_value_only_loss = std::numeric_limits<double>::quiet_NaN();
@@ -2681,6 +3325,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					}
 	#endif
 						reset_optimizer_state();
+					accepted_state.DiscardPendingTrial();
 					mask_frozen_coordinates(freeze_species_coeffs);
 					if (total_linesearch_restarts
 					    < max_total_linesearch_restarts) {
@@ -2729,8 +3374,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					}
 				};
 
+				const bool optimizer_had_active_trial_before_iterate =
+					(optimizer_replicated || prank == 0)
+						? (use_armijo_value_line_search
+							? armijo_value_trial
+							: optimizer_is_in_linesearch())
+						: false;
 				int bfgs_status = 0;
 				int rejected_linesearch_from_exception = 0;
+				int recovered_accepted_point_from_ascent = 0;
 				std::string rejected_linesearch_exception_message;
 				std::string rejected_linesearch_exception_detail;
 			if (!armijo_value_trial_rejected
@@ -2740,15 +3392,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 						     row_idx < radial_weight_norm_rows.size();
 						     ++row_idx) {
 							const RadialWeightNormRow& row = radial_weight_norm_rows[row_idx];
-							if (!sus2::RadialWeightNormChart::PackWithPivot(
-							        x + row.full_begin,
-							        radial_weight_norm_row_size,
-							        row.pivot,
-							        row.pivot_sign,
-							        active_coeffs.data() + row.active_begin))
-								ERROR("MTPR_trainer::Train(): cannot record the current radial log norm.");
-							radial_log_norm_reference[row_idx] =
-								active_coeffs[row.active_begin];
+							const double current_log_norm =
+								optimizer_x(row.active_begin);
+							if (!std::isfinite(current_log_norm))
+								ERROR("MTPR_trainer::Train(): current radial log norm is non-finite.");
+							radial_log_norm_reference[row_idx] = current_log_norm;
 						}
 						mask_frozen_coordinates(freeze_species_coeffs);
 						if (use_lbfgs_optimizer)
@@ -2816,6 +3464,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					try {
 						recover_optimizer_state_from_current_coeffs(first_reason, num_step);
 						run_optimizer_iterate();
+						// An ascent failure after an active Wolfe/accepted Armijo trial
+						// occurs only after that evaluated trial passed its acceptance
+						// conditions.  The retry has already generated the next trial, so
+						// its current is_in_linesearch() value cannot classify the point.
+						// The initial base-point gradient has no active trial and remains
+						// outside accepted-step accounting.
+						recovered_accepted_point_from_ascent =
+							sus2::AscentRecoveryPointWasAccepted(
+								optimizer_had_active_trial_before_iterate,
+								use_armijo_value_line_search,
+								armijo_value_trial_accepted)
+								? 1 : 0;
 					if (prank == 0)
 						std::cerr << "[" << CurrentTimestamp() << "] "
 							          << optimizer_log_name << " recovered after state reset"
@@ -2889,9 +3549,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					bfgs_status = 1;
 			}
 		}
-#ifdef MLIP_MPI
-		{
-			int rejected_linesearch_global = 0;
+	#ifdef MLIP_MPI
+			{
+				int rejected_linesearch_global = 0;
 			MPI_Allreduce(&rejected_linesearch_from_exception,
 			              &rejected_linesearch_global,
 			              1,
@@ -2928,9 +3588,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				rejected_linesearch_exception_message,
 				rejected_linesearch_exception_detail);
 		}
-		abort_if_any_rank_reports(bfgs_status,
-				optimizer_log_name + " failed at step " + std::to_string(num_step)
-			+ "; refusing to continue with non-finite optimizer state.");
+			abort_if_any_rank_reports(bfgs_status,
+					optimizer_log_name + " failed at step " + std::to_string(num_step)
+				+ "; refusing to continue with non-finite optimizer state.");
+			if ((optimizer_replicated || prank == 0) && !converge)
+				limit_radial_direction_trial();
 
 #ifdef MLIP_MPI
 			if (!optimizer_replicated) {
@@ -2984,11 +3646,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	#endif
 				restart_or_finish_rejected_linesearch(final_message, detail);
 					} else if (optimizer_replicated || prank == 0) {
-					if (use_armijo_value_line_search)
-						linesearch = !armijo_value_trial_accepted;
-				else
-							linesearch = optimizer_is_in_linesearch();
-			}
+						const bool evaluated_point_accepted =
+							sus2::EvaluatedPointWasAccepted(
+								recovered_accepted_point_from_ascent != 0,
+								use_armijo_value_line_search,
+								armijo_value_trial_accepted,
+								optimizer_is_in_linesearch());
+						linesearch = !evaluated_point_accepted;
+				}
 
 	#ifdef MLIP_MPI
 				if (!optimizer_replicated) {
@@ -3007,6 +3672,41 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 					if (!linesearch && !restarted_rejected_linesearch_this_iteration)
 				{
+					accepted_evaluated_point_this_iteration = true;
+					save_evaluated_accepted_coeffs(evaluated_coeffs.data());
+					// Optimizer.x is already the next trial.  Diagnostics and model
+					// checkpoints must instead see the point whose objective and
+					// gradient were evaluated and accepted above.
+					std::copy(evaluated_coeffs.begin(), evaluated_coeffs.end(), x);
+					int accepted_loss_increased = 0;
+					if (prank == 0 && accepted_loss_reference_valid) {
+						const double tolerance = 1.0e-8 * std::max(
+							1.0,
+							std::max(
+								std::abs(accepted_loss_reference),
+								std::abs(bfgs_f)));
+						if (bfgs_f > accepted_loss_reference + tolerance) {
+							accepted_loss_increased = 1;
+							std::cerr << "[" << CurrentTimestamp() << "] "
+							          << optimizer_log_name
+							          << " accepted-loss invariant failed"
+							          << " step=" << num_step
+							          << " previous=" << accepted_loss_reference
+							          << " current=" << bfgs_f
+							          << " tolerance=" << tolerance
+							          << std::endl;
+						}
+					}
+					abort_if_any_rank_reports(
+						accepted_loss_increased,
+						optimizer_log_name
+							+ " accepted an objective increase at step "
+							+ std::to_string(num_step)
+							+ "; refusing to lose the last evaluated accepted point.");
+					if (prank == 0) {
+						accepted_loss_reference = bfgs_f;
+						accepted_loss_reference_valid = true;
+					}
 					accepted_diag_local[0] = metric_energy_abs_sum_;
 			accepted_diag_local[1] = metric_energy_sq_weighted_sum_;
 			accepted_diag_local[2] = metric_force_abs_component_sum_;
@@ -3193,6 +3893,23 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				num_step = iteration_state[2];
 				restored_rejected_linesearch = (iteration_state[3] != 0);
 		#endif
+			if (accepted_evaluated_point_this_iteration) {
+				if (!converge) {
+					// Continue with the next trial already generated by BFGS.  The
+					// accepted snapshot remains separate for boundary rechart and
+					// rejected-line-search recovery.
+					if (optimizer_replicated || prank == 0)
+						copy_optimizer_x_to_full_coeffs();
+		#ifdef MLIP_MPI
+					if (!optimizer_replicated)
+						MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
+		#endif
+				} else {
+					// The final live/saved model must remain at the last evaluated
+					// accepted point, not at BFGS's unused next proposal.
+					accepted_state.DiscardPendingTrial();
+				}
+			}
 		}
 
 			if (prank == 0 && use_lbfgs_optimizer) {

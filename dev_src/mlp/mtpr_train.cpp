@@ -58,6 +58,27 @@ constexpr std::size_t kNeighborhoodCacheBudgetBytesPerRank = 4ULL * 1024ULL * 10
 
 namespace {
 
+int ParseOptionalNonnegativeInteger(
+	const std::map<std::string, std::string>& opts,
+	const std::string& name)
+{
+	const auto it = opts.find(name);
+	if (it == opts.end())
+		return -1;
+	const std::string& value = it->second;
+	if (value.empty()
+	    || !std::all_of(value.begin(), value.end(), [](char ch) {
+		    return ch >= '0' && ch <= '9';
+	    }))
+		ERROR("--" + name + " should be a non-negative integer written as --"
+		      + name + "=<R>");
+	try {
+		return std::stoi(value);
+	} catch (const std::exception&) {
+		ERROR("--" + name + " is outside the supported integer range");
+	}
+}
+
 std::string CurrentTimestamp()
 {
 	std::time_t now = std::time(nullptr);
@@ -483,6 +504,10 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 						"two-layer-gate-decoupled-scaling",
 						"two-layer-gate-full-decoupled",
 						"two-layer-gate-edge-l1",
+							"two-layer-gate-readout",
+							"outer-k-rank",
+							"outer-k-rank1",
+							"two-layer-gate-k-rank",
 						"multi-layer-gate",
 							"second-layer-gate-body-order",
 							"second-layer-gate-factor-pruning",
@@ -491,6 +516,10 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			};
 	for (const char* name : names) {
 		std::map<std::string, std::string>::const_iterator it = opts.find(name);
+		// The command dispatcher pre-populates known option keys with an empty
+		// value.  Only a non-empty value means the user actually requested an
+		// inline SH initialization option.  Treating mere key presence as an
+		// explicit request silently changes `train train.cfg` into init-sh mode.
 		if (it != opts.end() && !it->second.empty())
 			return true;
 	}
@@ -1728,6 +1757,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	bool fine_tune = false;
 	if (opts["fine-tune"] != "")
 		fine_tune = true;
+	const bool two_layer_gate_readout_linear_init =
+		opts["two-layer-gate-readout-linear-init"] != "";
 	int do_lin_step_limit = 1000;
 	if (opts["do-lin-steps"] != "")
 		do_lin_step_limit = stoi(opts["do-lin-steps"]);
@@ -2052,8 +2083,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
 	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
+	const bool requested_two_layer_gate_readout =
+		opts["two-layer-gate-readout"] != "";
 	const bool requested_two_layer_gate =
-		opts["two-layer-gate"] != "" || requested_multi_layer_gate;
+		opts["two-layer-gate"] != "" || requested_multi_layer_gate
+		|| requested_two_layer_gate_readout;
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
 	const bool requested_two_layer_gate_decoupled_scaling =
@@ -2062,13 +2096,50 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool requested_two_layer_gate_edge_l1 =
 		opts["two-layer-gate-edge-l1"] != "";
 	const bool requested_two_layer_residual = opts["two-layer-residual"] != "";
+	const auto outer_k_rank1_alias_it = opts.find("outer-k-rank1");
+	const bool requested_outer_k_rank1_alias =
+		outer_k_rank1_alias_it != opts.end();
+	if (requested_outer_k_rank1_alias
+	    && outer_k_rank1_alias_it->second != "true")
+		ERROR("--outer-k-rank1 is a boolean compatibility flag; use it without '=value'");
+	const bool has_requested_outer_k_rank =
+		opts.find("outer-k-rank") != opts.end();
+	if (requested_outer_k_rank1_alias && has_requested_outer_k_rank)
+		ERROR("Use either --outer-k-rank1 or --outer-k-rank=<R>, not both");
+	int requested_outer_k_rank = -1;
+	if (requested_outer_k_rank1_alias)
+		requested_outer_k_rank = 1;
+	else if (has_requested_outer_k_rank)
+		requested_outer_k_rank =
+			ParseOptionalNonnegativeInteger(opts, "outer-k-rank");
+	const int requested_two_layer_gate_k_rank =
+		ParseOptionalNonnegativeInteger(opts, "two-layer-gate-k-rank");
 	bool plain_to_gate_upgrade = false;
 	bool edge_l1_gate_upgrade = false;
 	bool multi_layer_gate_upgrade = false;
+	bool gate_readout_upgrade = false;
 	bool plain_to_gate_disabled_controls = false;
 	bool multi_layer_gate_disabled_controls = false;
 	int plain_to_gate_body_order = -1;
 	bool plain_to_gate_independent_radial = false;
+	if (requested_outer_k_rank >= 0
+	    && requested_outer_k_rank != mtpr.OuterKRank())
+		ERROR("--outer-k-rank must match the loaded model; changing rank requires init-sh/inline initialization");
+	if (requested_two_layer_gate_k_rank >= 0
+	    && requested_two_layer_gate_k_rank != mtpr.TwoLayerGateKRank())
+		ERROR("--two-layer-gate-k-rank must match the loaded model; changing rank requires init-sh/inline initialization");
+	if (mtpr.OuterKRankEnabled()
+	    && (requested_two_layer_gate_readout
+	        || requested_two_layer_gate_edge_l1
+	        || requested_multi_layer_gate
+	        || requested_two_layer_residual))
+		ERROR("--outer-k-rank is not compatible with readout, edge-L1, multi-layer gate, or residual options");
+	if (mtpr.TwoLayerGateKRankEnabled()
+	    && (requested_two_layer_gate_readout
+	        || requested_two_layer_gate_edge_l1
+	        || requested_multi_layer_gate
+	        || requested_two_layer_residual))
+		ERROR("--two-layer-gate-k-rank is not compatible with readout, edge-L1, multi-layer gate, or residual options");
 	if ((custom_second_layer_gate_mode
 	     || custom_second_layer_gate_factor_pruning
 	     || requested_second_layer_gate_body_order > 0)
@@ -2077,6 +2148,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--second-layer-gate-* requires --multi-layer-gate unless the loaded model already has release3 multi-layer gate");
 	if (requested_multi_layer_gate && requested_two_layer_gate_edge_l1)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1");
+	if (requested_two_layer_gate_readout && requested_multi_layer_gate)
+		ERROR("--two-layer-gate-readout first version supports one gate only");
+	if (requested_two_layer_gate_readout && requested_two_layer_gate_edge_l1)
+		ERROR("--two-layer-gate-readout first version does not include edge-L1");
+	if (requested_two_layer_gate_readout && requested_two_layer_residual)
+		ERROR("--two-layer-gate-readout is not compatible with --two-layer-residual");
 	if (requested_multi_layer_gate && requested_two_layer_gate_decoupled_scaling)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-decoupled-scaling");
 	if (requested_two_layer_gate_shared_radial && !requested_two_layer_gate
@@ -2132,6 +2209,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models");
 		if (!mtpr.TwoLayerGateUsesDecoupledScaling())
 			mtpr.EnableTwoLayerGateDecoupledScalingFromBase();
+	}
+	if (requested_two_layer_gate_readout) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-readout requires a two-layer gate model or --two-layer-gate");
+		if (mtpr.MultiLayerGateEnabled())
+			ERROR("--two-layer-gate-readout first version supports one gate only");
+		if (mtpr.TwoLayerGateEdgeL1Enabled())
+			ERROR("--two-layer-gate-readout first version does not include edge-L1");
+		if (!mtpr.TwoLayerGateReadoutEnabled()) {
+			mtpr.EnableTwoLayerGateReadout();
+			gate_readout_upgrade = true;
+		}
 	}
 	if (requested_multi_layer_gate) {
 		if (!mtpr.TwoLayerGateEnabled())
@@ -2211,6 +2300,31 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--atomic-energies count should match species_count");
 	if (two_layer_residual_staged && !mtpr.TwoLayerResidualEnabled())
 		ERROR("--two-layer-residual-staged requires a model initialized with --two-layer-residual");
+	if (mtpr.TwoLayerGateReadoutEnabled()
+	    && guard_compression_options.enabled
+	    && guard_compression_options.block_monotonic_weight > 0.0)
+		ERROR("--guard-compression-block-monotonic-weight is not compatible with gate readout; set it to 0 or disable gate readout");
+	if (two_layer_gate_readout_linear_init) {
+		if (!loaded_complete_parameters)
+			ERROR("--two-layer-gate-readout-linear-init requires a complete trained checkpoint");
+		if (!mtpr.TwoLayerGateReadoutEnabled())
+			ERROR("--two-layer-gate-readout-linear-init requires --two-layer-gate-readout or an enabled readout model");
+		if (plain_to_gate_upgrade || multi_layer_gate_upgrade
+		    || edge_l1_gate_upgrade || mtpr.TwoLayerResidualEnabled())
+			ERROR("--two-layer-gate-readout-linear-init supports only a trained one-gate, non-residual model");
+		if (do_lin || do_lin_rescale || fine_tune)
+			ERROR("--two-layer-gate-readout-linear-init is not compatible with --do-lin, --do-lin-rescale, or --fine-tune");
+		if (two_layer_residual_staged)
+			ERROR("--two-layer-gate-readout-linear-init is not compatible with residual staged training");
+		if (force_loss_kind != ForceLossKind::L2)
+			ERROR("--two-layer-gate-readout-linear-init requires --force-loss=l2");
+		if (weight_std != 0.0 || weight_stdd != 0.0)
+			ERROR("--two-layer-gate-readout-linear-init requires --std-weight=0 and --stdd-weight=0");
+		if (scale_by_force != 0.0)
+			ERROR("--two-layer-gate-readout-linear-init currently requires --scale-by-force=0");
+		if (guard_compression_options.enabled)
+			ERROR("--two-layer-gate-readout-linear-init is not compatible with guard-compression terms");
+	}
 #ifdef MLIP_MPI
 	MPI_Comm_rank(MPI_COMM_WORLD, &prank);
 	MPI_Comm_size(MPI_COMM_WORLD, &psize);
@@ -2308,6 +2422,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		          << " edge_l1_weight_count="
 		          << mtpr.TwoLayerGateEdgeL1WeightCount()
 		          << " initialized_weights=zero"
+		          << std::endl;
+	}
+	if (prank == 0 && gate_readout_upgrade) {
+		std::cout << "SUS2-SH gate scalar energy readout enabled: "
+		          << "readout_coeff_count="
+		          << mtpr.TwoLayerGateReadoutCoeffCount()
+		          << " shared_center_prefactor=true"
+		          << " initialized_coeffs=zero"
 		          << std::endl;
 	}
 	if (prank == 0 && multi_layer_gate_upgrade) {
@@ -2556,7 +2678,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 
 	int radial_first_coeff_repairs = 0;
-	if (maxits > 0 && mtpr.has_radial_coeffs
+	if (!two_layer_gate_readout_linear_init
+	    && maxits > 0 && mtpr.has_radial_coeffs
 	    && radial_parameterization == "physical") {
 		if (prank == 0)
 			radial_first_coeff_repairs = mtpr.EnforcePositiveRadialFirstCoeffs();
@@ -2622,7 +2745,36 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "[" << CurrentTimestamp() << "] Random init barrier done" << std::endl;
 #endif
 	}
-         trainer.shift(do_shift);
+	trainer.shift(do_shift);
+	if (two_layer_gate_readout_linear_init) {
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Readout-only residual linear initialization start"
+			          << " readout_coeff_count="
+			          << mtpr.TwoLayerGateReadoutCoeffCount()
+			          << " fixed_nonreadout_coeffs=true"
+			          << " rescale=false"
+			          << std::endl;
+		if (trainer.TrainRankActive())
+			trainer.TrainLinear(
+				prank,
+				training_set,
+				linear_training_neighborhoods_ptr,
+				"readout-only residual initialization",
+				true);
+		trainer.BroadcastCoeffsWorld();
+		if (prank == 0) {
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Readout-only residual linear initialization done"
+			          << std::endl;
+			if (maxits == 0) {
+				mtpr.Save(trained_fnm);
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "Readout-only initialized model saved to "
+				          << trained_fnm << std::endl;
+			}
+		}
+	}
 	const bool run_initial_untrained_linear_warmup =
 		!loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
 	if (run_initial_untrained_linear_warmup) {

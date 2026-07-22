@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <map>
 
 #ifdef MLIP_INTEL_MKL
@@ -37,6 +38,7 @@
 //#include "../mult_trainer.h"
 #include "../mtpr_trainer.h"
 #include "../diagonal_coordinate_scaling.h"
+#include "../optimizer_accepted_state.h"
 #include "../radial_weight_norm.h"
 //#include "../mtpr_trainer2.h"
 #include "../../src/mlip_wrapper.h"
@@ -332,6 +334,350 @@ TEST("radial weight-normalization chart and gradient") {
 				FAIL("signed radial weight-normalization gradient mismatch")
 		}
 	}
+} END_TEST;
+
+TEST("radial weight-normalization automatic antipode rechart") {
+	const int count = 5;
+	const double rechart_radius = 8.0;
+	double exact_antipode[count] = {-2.0, 0.0, 0.0, 0.0, 0.0};
+	double exact_reference[count];
+	std::copy(
+		exact_antipode, exact_antipode + count, exact_reference);
+	int pivot = 0;
+	double pivot_sign = 1.0;
+	double coordinates[count] = {};
+	if (sus2::RadialWeightNormChart::PackWithPivot(
+	        exact_antipode, count, pivot, pivot_sign, coordinates))
+		FAIL("the fixed chart unexpectedly represented its exact antipode")
+
+	const sus2::RadialWeightNormChart::RechartResult exact_result =
+		sus2::RadialWeightNormChart::RechartIfNeeded(
+			exact_antipode,
+			count,
+			rechart_radius,
+			pivot,
+			pivot_sign,
+			coordinates);
+	if (!exact_result.success || !exact_result.recharted
+	    || exact_result.reason
+	       != sus2::RadialWeightNormChart::kRechartPackFailed)
+		FAIL("exact-antipode automatic rechart failed")
+	if (pivot != 0 || pivot_sign != -1.0
+	    || exact_result.new_direction_radius > 1.0e-12)
+		FAIL("exact-antipode automatic rechart selected an unsafe chart")
+	for (int i = 0; i < count; ++i)
+		if (exact_antipode[i] != exact_reference[i])
+			FAIL("automatic rechart modified the physical radial row")
+
+	double reconstructed[count] = {};
+	if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+	        coordinates,
+	        count,
+	        pivot,
+	        pivot_sign,
+	        reconstructed))
+		FAIL("exact-antipode rechart coordinates could not be unpacked")
+	for (int i = 0; i < count; ++i) {
+		const double tolerance = 64.0
+			* std::numeric_limits<double>::epsilon()
+			* std::max(1.0, std::abs(exact_antipode[i]));
+		if (std::abs(reconstructed[i] - exact_antipode[i]) > tolerance)
+			FAIL("exact-antipode rechart changed the physical radial row")
+	}
+
+	// Exercise the soft radius trigger before tanh reaches its double-precision
+	// saturation wall. Recharting must preserve the physical objective while
+	// producing a finite pullback in the new coordinates.
+	double old_coordinates[count] = {};
+	old_coordinates[0] = std::log(1.7);
+	old_coordinates[1] = 9.0;
+	pivot = 0;
+	pivot_sign = 1.0;
+	double near_antipode[count] = {};
+	if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+	        old_coordinates,
+	        count,
+	        pivot,
+	        pivot_sign,
+	        near_antipode))
+		FAIL("near-antipode setup unpack failed")
+	double near_reference[count];
+	std::copy(near_antipode, near_antipode + count, near_reference);
+	auto physical_loss = [&](const double* values) {
+		double value = 0.0;
+		for (int i = 0; i < count; ++i)
+			value += 0.5 * (i + 1.0) * values[i] * values[i]
+			       + std::sin(values[i]);
+		return value;
+	};
+	const double loss_before = physical_loss(near_antipode);
+	const sus2::RadialWeightNormChart::RechartResult radius_result =
+		sus2::RadialWeightNormChart::RechartIfNeeded(
+			near_antipode,
+			count,
+			rechart_radius,
+			pivot,
+			pivot_sign,
+			coordinates);
+	if (!radius_result.success || !radius_result.recharted
+	    || radius_result.reason
+	       != sus2::RadialWeightNormChart::kRechartDirectionRadiusExceeded
+	    || radius_result.old_direction_radius < rechart_radius
+	    || radius_result.new_direction_radius > rechart_radius)
+		FAIL("direction-radius automatic rechart failed")
+	if (physical_loss(near_antipode) != loss_before)
+		FAIL("automatic rechart changed the physical objective")
+	for (int i = 0; i < count; ++i)
+		if (near_antipode[i] != near_reference[i])
+			FAIL("radius-triggered rechart modified the physical radial row")
+
+	double physical_gradient[count] = {};
+	for (int i = 0; i < count; ++i)
+		physical_gradient[i] =
+			(i + 1.0) * near_antipode[i] + std::cos(near_antipode[i]);
+	double coordinate_gradient[count] = {};
+	if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
+	        near_antipode,
+	        coordinates,
+	        physical_gradient,
+	        count,
+	        pivot,
+	        pivot_sign,
+	        coordinate_gradient))
+		FAIL("recharted radial pullback failed")
+	const double diff_step = 1.0e-6;
+	for (int coord = 0; coord < count; ++coord) {
+		double plus_coordinates[count];
+		double minus_coordinates[count];
+		std::copy(coordinates, coordinates + count, plus_coordinates);
+		std::copy(coordinates, coordinates + count, minus_coordinates);
+		plus_coordinates[coord] += diff_step;
+		minus_coordinates[coord] -= diff_step;
+		double plus_physical[count] = {};
+		double minus_physical[count] = {};
+		if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+		        plus_coordinates,
+		        count,
+		        pivot,
+		        pivot_sign,
+		        plus_physical)
+		    || !sus2::RadialWeightNormChart::UnpackWithPivot(
+		        minus_coordinates,
+		        count,
+		        pivot,
+		        pivot_sign,
+		        minus_physical))
+			FAIL("recharted finite-difference unpack failed")
+		const double finite_difference =
+			(physical_loss(plus_physical) - physical_loss(minus_physical))
+			/ (2.0 * diff_step);
+		const double scale = std::max(1.0, std::abs(finite_difference));
+		if (!std::isfinite(coordinate_gradient[coord])
+		    || std::abs(finite_difference - coordinate_gradient[coord])
+		       > 2.0e-8 * scale)
+			FAIL("recharted radial gradient mismatch")
+	}
+
+	// Repeatedly drive the row close to the antipode of its current chart.
+	// Every rechart should flip to a safe signed pivot without accumulating a
+	// physical round-trip error.
+	pivot = 0;
+	pivot_sign = 1.0;
+	for (int cycle = 0; cycle < 8; ++cycle) {
+		double far_coordinates[count] = {};
+		far_coordinates[0] = std::log(1.0 + 0.1 * cycle);
+		far_coordinates[1] = 9.0;
+		double physical[count] = {};
+		if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+		        far_coordinates,
+		        count,
+		        pivot,
+		        pivot_sign,
+		        physical))
+			FAIL("repeated rechart setup unpack failed")
+		double physical_before[count];
+		std::copy(physical, physical + count, physical_before);
+		const double old_sign = pivot_sign;
+		const sus2::RadialWeightNormChart::RechartResult result =
+			sus2::RadialWeightNormChart::RechartIfNeeded(
+				physical,
+				count,
+				rechart_radius,
+				pivot,
+				pivot_sign,
+				coordinates);
+		if (!result.success || !result.recharted
+		    || pivot != 0 || pivot_sign != -old_sign
+		    || result.reason
+		       != sus2::RadialWeightNormChart::kRechartDirectionRadiusExceeded
+		    || result.old_direction_radius <= rechart_radius
+		    || result.new_direction_radius > rechart_radius)
+			FAIL("repeated automatic rechart failed")
+		for (int i = 0; i < count; ++i)
+			if (physical[i] != physical_before[i])
+				FAIL("repeated rechart modified the physical radial row")
+		if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+		        coordinates,
+		        count,
+		        pivot,
+		        pivot_sign,
+		        reconstructed))
+			FAIL("repeated rechart roundtrip unpack failed")
+		for (int i = 0; i < count; ++i) {
+			const double tolerance = 64.0
+				* std::numeric_limits<double>::epsilon()
+				* std::max(1.0, std::abs(physical_before[i]));
+			if (std::abs(reconstructed[i] - physical_before[i]) > tolerance)
+				FAIL("repeated rechart accumulated physical error")
+		}
+	}
+} END_TEST;
+
+TEST("optimizer accepted state transitions") {
+	sus2::OptimizerAcceptedState state(3);
+	const double boundary[3] = {1.0, 2.0, 3.0};
+	state.SetBoundaryBase(boundary);
+	if (state.HasPendingTrial())
+		FAIL("boundary base unexpectedly retained a pending trial")
+	double restored[3] = {-1.0, -1.0, -1.0};
+	state.Restore(restored);
+	for (int i = 0; i < 3; ++i)
+		if (restored[i] != boundary[i])
+			FAIL("boundary base restore mismatch")
+
+	const double evaluated[3] = {4.0, 5.0, 6.0};
+	state.SetEvaluatedAccepted(evaluated);
+	if (!state.HasPendingTrial())
+		FAIL("evaluated accepted point did not record a pending trial")
+	restored[0] = 100.0;
+	restored[1] = 200.0;
+	restored[2] = 300.0;
+	if (!state.RestoreAcceptedForBoundary(restored))
+		FAIL("accepted boundary restore did not report a pending trial")
+	for (int i = 0; i < 3; ++i)
+		if (restored[i] != evaluated[i])
+			FAIL("evaluated accepted restore mismatch")
+
+	state.DiscardPendingTrial();
+	if (state.HasPendingTrial())
+		FAIL("discard did not clear the pending trial")
+	restored[0] = 7.0;
+	restored[1] = 8.0;
+	restored[2] = 9.0;
+	if (state.RestoreAcceptedForBoundary(restored))
+		FAIL("boundary restore reported a discarded pending trial")
+	if (restored[0] != 7.0 || restored[1] != 8.0 || restored[2] != 9.0)
+		FAIL("discarded boundary restore modified the live point")
+} END_TEST;
+
+TEST("optimizer accepted snapshot excludes BFGS next trial") {
+	Array1D initial(2);
+	initial[0] = 0.0;
+	initial[1] = 0.0;
+	BFGS bfgs;
+	bfgs.Set_x(initial);
+	sus2::OptimizerAcceptedState accepted_state(2);
+	accepted_state.SetBoundaryBase(initial.data());
+
+	auto value = [](const double* point) {
+		const double dx = point[0] - 2.0;
+		const double dy = point[1] + 1.0;
+		return 0.5 * (4.0 * dx * dx + dy * dy);
+	};
+	auto gradient = [](const double* point) {
+		Array1D result(2);
+		result[0] = 4.0 * (point[0] - 2.0);
+		result[1] = point[1] + 1.0;
+		return result;
+	};
+
+	bool found_accepted_trial = false;
+	for (int iteration = 0; iteration < 30; ++iteration) {
+		double evaluated[2] = {bfgs.x(0), bfgs.x(1)};
+		const Array1D g = gradient(evaluated);
+		bfgs.Iterate(value(evaluated), g);
+		if (bfgs.is_in_linesearch())
+			continue;
+
+		// The Wolfe-accepted point is `evaluated`; BFGS has already put the
+		// first unevaluated trial for the next line search in bfgs.x.
+		const double next_trial[2] = {bfgs.x(0), bfgs.x(1)};
+		const double trial_delta = std::max(
+			std::abs(next_trial[0] - evaluated[0]),
+			std::abs(next_trial[1] - evaluated[1]));
+		if (trial_delta <= 1.0e-10)
+			continue;
+
+		accepted_state.SetEvaluatedAccepted(evaluated);
+		if (!accepted_state.HasPendingTrial())
+			FAIL("accepted state did not record the pending BFGS trial")
+
+		double boundary_live[2] = {next_trial[0], next_trial[1]};
+		if (!accepted_state.RestoreAcceptedForBoundary(boundary_live))
+			FAIL("accepted boundary did not detect the pending BFGS trial")
+		for (int i = 0; i < 2; ++i)
+			if (boundary_live[i] != evaluated[i])
+				FAIL("accepted boundary restored the unevaluated BFGS trial")
+
+		// A rejected/stagnated line search uses the same snapshot.  Poisoning
+		// the live point makes the old bug deterministic: restore must still
+		// return the evaluated point, not BFGS's proposal.
+		double restart_live[2] = {1.0e6, -1.0e6};
+		accepted_state.Restore(restart_live);
+		for (int i = 0; i < 2; ++i)
+			if (restart_live[i] != evaluated[i])
+				FAIL("line-search restart did not restore the evaluated accepted point")
+		found_accepted_trial = true;
+		break;
+	}
+	if (!found_accepted_trial)
+		FAIL("BFGS test did not produce a distinct next trial after Wolfe acceptance")
+
+	// Rechart must likewise consume the accepted radial row, never a pending
+	// optimizer proposal.  Use a deterministic near-antipode accepted row.
+	const int count = 5;
+	double old_coordinates[count] = {};
+	old_coordinates[0] = std::log(1.7);
+	old_coordinates[1] = 9.0;
+	int pivot = 0;
+	double pivot_sign = 1.0;
+	double accepted_radial[count] = {};
+	if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+	        old_coordinates,
+	        count,
+	        pivot,
+	        pivot_sign,
+	        accepted_radial))
+		FAIL("accepted-state rechart setup failed")
+	auto radial_loss = [&](const double* physical) {
+		double result = 0.0;
+		for (int i = 0; i < count; ++i)
+			result += (i + 1.0) * physical[i] * physical[i];
+		return result;
+	};
+	const double accepted_loss = radial_loss(accepted_radial);
+	sus2::OptimizerAcceptedState radial_state(count);
+	radial_state.SetEvaluatedAccepted(accepted_radial);
+	double pending_radial_trial[count] = {
+		100.0, -80.0, 60.0, -40.0, 20.0};
+	if (!radial_state.RestoreAcceptedForBoundary(pending_radial_trial))
+		FAIL("radial accepted boundary missed a pending trial")
+	double rechart_coordinates[count] = {};
+	const sus2::RadialWeightNormChart::RechartResult rechart =
+		sus2::RadialWeightNormChart::RechartIfNeeded(
+			pending_radial_trial,
+			count,
+			8.0,
+			pivot,
+			pivot_sign,
+			rechart_coordinates);
+	if (!rechart.success || !rechart.recharted)
+		FAIL("accepted-state radial rechart did not trigger")
+	if (radial_loss(pending_radial_trial) != accepted_loss)
+		FAIL("accepted-state radial rechart consumed the pending trial")
+	radial_state.SetBoundaryBase(pending_radial_trial);
+	if (radial_state.HasPendingTrial())
+		FAIL("recharted accepted base retained a stale pending-trial state")
 } END_TEST;
 
 TEST("EAMSimple CalcEnergyGrad test by finite difference") {
@@ -2825,8 +3171,59 @@ TEST("MTPR TrainLinear keeps fixed atomic energies") {
 		}
 	}
 } END_TEST;
-		
-			/*#ifndef MLIP_NOEWALD
+
+TEST("MTPR full TrainLinear applies scalar-head L2 in normal equations") {
+	std::vector<Configuration> train_set;
+	Configuration cfg;
+	ifstream ifs(PATH+"2comp.cfgs", ios::binary);
+	for (int i = 0; i < 3 && cfg.Load(ifs); ++i)
+		train_set.push_back(cfg);
+	ifs.close();
+	if (train_set.empty())
+		FAIL("empty linear-regression self-test set")
+
+	MLMTPR unregularized(PATH+"unlearned.mtp");
+	MTPR_trainer unregularized_trainer(
+		&unregularized, 1.0, 0.01, 0.0, 0.0, 0.0);
+	unregularized_trainer.scalar_head_l2_regularization = 0.0;
+	unregularized_trainer.TrainLinear(
+		0, train_set, nullptr, "unregularized scalar-head self-test");
+
+	MLMTPR regularized(PATH+"unlearned.mtp");
+	MTPR_trainer regularized_trainer(
+		&regularized, 1.0, 0.01, 0.0, 0.0, 0.0);
+	regularized_trainer.scalar_head_l2_regularization = 10.0;
+	regularized_trainer.TrainLinear(
+		0, train_set, nullptr, "regularized scalar-head self-test");
+
+	auto physical_scalar_norm_sq = [](MLMTPR& model) {
+		model.LinCoeff();
+		double norm_sq = 0.0;
+		for (int q = 0; q < model.alpha_scalar_moments; ++q) {
+			const double mult =
+				q < static_cast<int>(model.linear_mults.size())
+					? model.linear_mults[q]
+					: 1.0;
+			const double value = model.linear_coeffs[model.species_count + q] * mult;
+			norm_sq += value * value;
+		}
+		return norm_sq;
+	};
+
+	const double unregularized_norm_sq =
+		physical_scalar_norm_sq(unregularized);
+	const double regularized_norm_sq = physical_scalar_norm_sq(regularized);
+	if (!std::isfinite(unregularized_norm_sq)
+	    || !std::isfinite(regularized_norm_sq))
+		FAIL("non-finite scalar-head norm after TrainLinear")
+	if (!(regularized_norm_sq < unregularized_norm_sq)) {
+		std::cerr << "unregularized_norm_sq=" << unregularized_norm_sq
+		          << " regularized_norm_sq=" << regularized_norm_sq;
+		FAIL("scalar-head L2 did not change the full linear solution")
+	}
+} END_TEST;
+
+				/*#ifndef MLIP_NOEWALD
 TEST("Check Ewald summation") {
 	vector<string> fnm(5);
 	vector<double> madelung(5);

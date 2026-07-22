@@ -1294,12 +1294,19 @@ double LinearEquationCurrentCoeff(const MLMTPR& mtpr, int column)
 	}
 	const int e0_index = column - linear_count;
 	const int e0_begin = mtpr.TwoLayerResidualE0CoeffOffset();
-	double value = 0.0;
-	if (e0_index >= 0 && e0_index < mtpr.TwoLayerResidualE0CoeffCount())
-		value = mtpr.regression_coeffs[e0_begin + e0_index];
-	if (e0_index >= 0 && e0_index < static_cast<int>(mtpr.linear_mults.size()))
-		value *= mtpr.linear_mults[e0_index];
-	return value;
+	if (e0_index >= 0 && e0_index < mtpr.TwoLayerResidualE0CoeffCount()) {
+		double value = mtpr.regression_coeffs[e0_begin + e0_index];
+		if (e0_index < static_cast<int>(mtpr.linear_mults.size()))
+			value *= mtpr.linear_mults[e0_index];
+		return value;
+	}
+	const int readout_index =
+		column - mtpr.TwoLayerGateReadoutLinearColumnOffset();
+	if (readout_index >= 0
+	    && readout_index < mtpr.TwoLayerGateReadoutCoeffCount())
+		return mtpr.TwoLayerGateReadoutCoeff(readout_index);
+	ERROR("MTPR linear equation column is out of range");
+	return 0.0;
 }
 
 DevLinearReadoutResult CheckLinearReadout(
@@ -1443,6 +1450,22 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	    && index < mtpr.SecondLayerGateBodyMixWeightOffset()
 	        + mtpr.SecondLayerGateBodyMixWeightCount())
 		return "second_layer_gate_body_mix_weight";
+	if (index >= mtpr.TwoLayerGateReadoutCoeffOffset()
+	    && index < mtpr.TwoLayerGateReadoutCoeffOffset()
+	        + mtpr.TwoLayerGateReadoutCoeffCount())
+		return "two_layer_gate_readout_coeff";
+	if (index >= mtpr.TwoLayerResidualE0CoeffOffset()
+	    && index < mtpr.TwoLayerResidualE0CoeffOffset()
+	        + mtpr.TwoLayerResidualE0CoeffCount())
+		return "two_layer_residual_e0_coeff";
+	if (index >= mtpr.TwoLayerGateKRankWeightOffset()
+	    && index < mtpr.TwoLayerGateKRankWeightOffset()
+	        + mtpr.TwoLayerGateKRankWeightCount())
+		return "two_layer_gate_k_rank_weight";
+	if (index >= mtpr.OuterKRank1WeightOffset()
+	    && index < mtpr.OuterKRank1WeightOffset()
+	        + mtpr.OuterKRank1WeightCount())
+		return "outer_k_rank_weight";
 	if (index >= mtpr.LinearCoeffOffset())
 		return "linear";
 	return "unknown";
@@ -1507,6 +1530,18 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		if(!self_test_dev()) exit(1);
 	} END_COMMAND;
 
+	BEGIN_COMMAND("roundtrip-model-dev",
+		"loads and saves a model for serialization regression checks",
+		"mlp-sus2 roundtrip-model-dev input.mtp output.mtp\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 roundtrip-model-dev: input and output model arguments are required\n";
+			return 1;
+		}
+		MLMTPR mtpr(args[0]);
+		mtpr.Save(args[1]);
+	} END_COMMAND;
+
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
 		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
@@ -1568,6 +1603,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			std::cout << std::setprecision(12)
 			          << "checked_coeffs=" << result.checked_count
 				          << " coeff_count=" << mtpr.CoeffCount()
+				          << " radial_begin=" << mtpr.RadialCoeffOffset()
+				          << " radial_end=" << mtpr.BaseNonlinearCoeffCount()
 					          << " base_nonlinear_end=" << mtpr.BaseNonlinearCoeffCount()
 					          << " gate_radial_begin=" << mtpr.TwoLayerGateRadialCoeffOffset()
 					          << " gate_radial_end=" << mtpr.TwoLayerGateScalingCoeffOffset()
@@ -1593,6 +1630,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					          << " second_gate_weight_end=" << mtpr.SecondLayerGateWeightOffset() + mtpr.SecondLayerGateWeightCount()
 					          << " second_gate_body_mix_begin=" << mtpr.SecondLayerGateBodyMixWeightOffset()
 					          << " second_gate_body_mix_end=" << mtpr.SecondLayerGateBodyMixWeightOffset() + mtpr.SecondLayerGateBodyMixWeightCount()
+						          << " gate_k_rank_begin=" << mtpr.TwoLayerGateKRankWeightOffset()
+						          << " gate_k_rank_end=" << mtpr.TwoLayerGateKRankWeightOffset() + mtpr.TwoLayerGateKRankWeightCount()
+						          << " outer_k_rank_begin=" << mtpr.OuterKRank1WeightOffset()
+						          << " outer_k_rank_end=" << mtpr.OuterKRank1WeightOffset() + mtpr.OuterKRank1WeightCount()
 					          << " linear_begin=" << mtpr.LinearCoeffOffset()
 			          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
@@ -1670,6 +1711,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			std::cout << std::setprecision(12)
 			          << "checked_coeffs=" << result.checked_count
 			          << " coeff_count=" << mtpr.CoeffCount()
+			          << " radial_begin=" << mtpr.RadialCoeffOffset()
+			          << " radial_end=" << mtpr.BaseNonlinearCoeffCount()
 			          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
 			          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
@@ -1683,8 +1726,12 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " second_gate_weight_begin=" << mtpr.SecondLayerGateWeightOffset()
 				          << " second_gate_weight_end=" << mtpr.SecondLayerGateWeightOffset() + mtpr.SecondLayerGateWeightCount()
 				          << " second_gate_body_mix_begin=" << mtpr.SecondLayerGateBodyMixWeightOffset()
-				          << " second_gate_body_mix_end=" << mtpr.SecondLayerGateBodyMixWeightOffset() + mtpr.SecondLayerGateBodyMixWeightCount()
-				          << " residual_stage=" << DevResidualStageName(residual_stage)
+					          << " second_gate_body_mix_end=" << mtpr.SecondLayerGateBodyMixWeightOffset() + mtpr.SecondLayerGateBodyMixWeightCount()
+						          << " gate_k_rank_begin=" << mtpr.TwoLayerGateKRankWeightOffset()
+						          << " gate_k_rank_end=" << mtpr.TwoLayerGateKRankWeightOffset() + mtpr.TwoLayerGateKRankWeightCount()
+						          << " outer_k_rank_begin=" << mtpr.OuterKRank1WeightOffset()
+						          << " outer_k_rank_end=" << mtpr.OuterKRank1WeightOffset() + mtpr.OuterKRank1WeightCount()
+					          << " residual_stage=" << DevResidualStageName(residual_stage)
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss
 			          << " analytic_directional=" << result.analytic
@@ -2337,6 +2384,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					"         --two-layer-gate-shared-radial (default for gate models),\n"
 					"         --two-layer-gate-decoupled-scaling|--two-layer-gate-full-decoupled (one-layer gate only),\n"
 					"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
+					"         --two-layer-gate-readout (linear energy readout from gate scalars; default=off),\n"
+					"         --outer-k-rank=<R> (per-l K contraction to a q-total K=R outer graph; R=1 uses direct radial sums with no trainable W, R>=2 uses learned W; 0/default=off),\n"
+					"         --outer-k-rank1 (compatibility alias for --outer-k-rank=1),\n"
+					"         --two-layer-gate-k-rank=<R> (independent K-to-R contraction before q-total gate products/scalars; requires outer rank; 0/default=off),\n"
 				"         --multi-layer-gate (release3 second gate on first-gate endpoint coefficients),\n"
 				"         --second-layer-gate-body-order=<int> (default=--body-order),\n"
 				"         --second-layer-gate-factor-pruning=same-k|legacy|q-total (default=gate1),\n"

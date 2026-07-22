@@ -153,39 +153,29 @@ Common training options:
 
 ## Gate Model Training CLI
 
-The current production gate form is the bounded tanh additive mu-body-order
-two-layer SH gate. The first layer computes a mu-dependent site residual from
-selected exact-body SH scalars:
+The release3 production gate is a linear additive-node update. It does not use
+`tanh` or any other activation. Let `B_i,q^gate` be the first-layer invariant
+scalars. The `mu-scalar-full` mode forms
 
 ```text
-h_i,mu = sum_{q: body_order(B_i^gate,q) = k_mu + 1} w_q B_i^gate,q
+h_i,mu = sum_q W_mu,q B_i,q^gate
 ```
 
-The main-layer basic moment is then evaluated as
+while `mu-body-linear-combo` first pools the scalars by body order and then
+mixes those body-order channels for each `mu`. The neighbor node coefficient in
+the outer edge is updated linearly,
 
 ```text
-M_i,mu,m^main =
-  sum_j R_ZiZj,mu^main(r_ij) Y_lm(rhat_ij)
-        [1 + A tanh(a_Zj,mu h_j,mu)]
+u_i,j,mu = s_center[Z_i,mu]
+             (s_outer[Z_j,mu] + a[Z_j,mu] h_j,mu),
+
+M_i,mu,m^main = sum_j R_i,j,mu(r_ij) Y_lm(rhat_ij) u_i,j,mu.
 ```
 
-This is the default neighbor-site gate. The optional double-site gate uses the
-same shared \(w_q\), the same exact body-order bucket for each mu channel, and
-multiplies both endpoint gate factors:
-
-```text
-M_i,mu,m^main =
-  sum_j R_ZiZj,mu^main(r_ij) Y_lm(rhat_ij)
-        [1 + A tanh(a_Zi,mu h_i,mu)]
-        [1 + A tanh(a_Zj,mu h_j,mu)]
-```
-
-`A` is controlled by `--two-layer-gate-tanh-amplitude` and defaults to `0.8`.
-The additive coefficients `a_Z,mu` are initialized to `1.0`. Gate models use
-their own trained radial contraction coefficients for the first-layer
-`B_i^gate` by default. In code `k_mu`
-is zero-based, so the exact scalar body order is `k_internal + 2`; therefore
-`--two-layer-gate` requires `--body-order >= --k-max + 1`.
+Thus zero gate weights recover the ungated node coefficient exactly. The
+release path is neighbor-site only; the older center/double-site and
+`--two-layer-gate-tanh-amplitude` controls are obsolete. Gate models use their
+own trained radial contraction coefficients for `B_i,q^gate` by default.
 
 Initialize and train a gate model directly:
 
@@ -225,10 +215,14 @@ Gate-specific options:
 | Option | Meaning |
 | --- | --- |
 | `--two-layer-gate` | Add two-layer gate metadata to a new SH model, or upgrade a plain SH model before continuing training. |
+| `--two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full` | Gate projection from first-layer scalars to the `mu` node channels. `mu-scalar-full` keeps an independent coefficient for every `(mu,q)` pair. |
 | `--two-layer-gate-body-order=<int>` | Gate1 scalar body-order cutoff in `[2, --body-order]`; default is the outer body order. |
 | `--two-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate1 scalar subgraph. It defaults to the outer mode and cannot be richer than `--sh-factor-pruning`. |
 | `--two-layer-gate-site-mode=neighbor` | Gate acts on neighbor endpoint `j`; `neighbor` is the only release mode. |
 | `--two-layer-gate-shared-radial` | Compatibility switch for the default behavior: gate models use an independent first-layer radial contraction table. |
+| `--two-layer-gate-readout` | Add an experimental linear energy head on the first-layer gate scalars. It is supported by standalone training/evaluation but not by the release3 LAMMPS interfaces. |
+| `--outer-k-rank=<R>` | Contract the outer `k` channels to rank `R` before building the outer scalar graph. `0`/omitted keeps the full graph; `R=1` uses the direct-radial form. |
+| `--two-layer-gate-k-rank=<R_g>` | Independently contract the first-layer gate `k` channels. It currently requires an outer-rank model. |
 | `--second-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate2 scalar subgraph for `--multi-layer-gate`. It defaults to gate1 and cannot be richer than the outer mode. |
 | `--multi-layer-gate` | Add release3 gate2 on the gate1 endpoint coefficients. |
 | `--second-layer-gate-body-order=<int>` | Gate2 scalar body-order cutoff in `[2, --body-order]`; default is the outer body order. |
@@ -242,7 +236,9 @@ Gate-specific options:
 For current production work, use `--two-layer-gate`; add
 `--multi-layer-gate` only when gate2 is required. The saved scalar index lists
 fully define each gate subgraph, so inference and LAMMPS readers do not need a
-runtime pruning-mode branch.
+runtime pruning-mode branch. Rank-model mathematics, constraints, and runtime
+compatibility are documented in
+[`docs/release3-k-rank.md`](docs/release3-k-rank.md).
 
 ## Effective Pair Energy CLI
 
@@ -276,8 +272,8 @@ E_EP(I,j) =
 
 The unordered row for an `I,J` image sums the two directed projections
 `E_EP(I,J) + E_EP(J,I)` when both directions are present. The command supports
-plain SH, single-site gate, and double-site gate models, and uses the same gate
-factors as ordinary `calc-efs`.
+plain SH and the release neighbor-site additive gate, and uses the same node
+update as ordinary `calc-efs`.
 
 `calc-eij` requires `sh_scalar_info` metadata in the `.mtp` file. New gate
 models write this metadata automatically; for plain SH models, initialize or
@@ -393,9 +389,23 @@ Table radial types such as `RBChebyshev_sss_lmp`,
 `RBLaguerre_log1p_pos_lmp`, and `RBJacobi_sss_lmp` enable list-based radial
 evaluation in LAMMPS. The `tabstep` keyword controls table spacing.
 
+The release3 CPU and Kokkos pair styles accept both the historical full-`K`
+models and the optional outer/gate `K`-rank models documented in
+[`docs/release3-k-rank.md`](docs/release3-k-rank.md). Gate readout remains a
+standalone-only feature; both LAMMPS pair styles reject it explicitly. The
+standalone decoupled gate-scaling mode is likewise not implemented by the
+release3 LAMMPS pair styles and is rejected with an explicit diagnostic.
+The Kokkos pair style requires a half neighbor-list package configuration with
+Newton pair forces enabled, for example
+`-k on g 1 -sf kk -pk kokkos neigh half newton on`; the input should also keep
+`newton on`.
+
 ### GPUMD-SUS2-SH
 
 The GPUMD backend is hosted separately at
 <https://github.com/hu-yanxiao/GPUMD-SUS2-SH>. It loads trained SUS2-SH `.mtp`
-files, supports single-layer SH, ZBL, and the current tanh additive gate path,
-and exposes runtime options through the GPUMD `potential` line.
+files, supports single-layer SH, ZBL, and the current additive-node gate path,
+and exposes runtime options through the GPUMD `potential` line. The current
+GPUMD reader is declared compatible with the historical `1.1.0` feature set;
+release3 `1.2.0` rank and gate-readout models require a separately updated
+backend and must not be assumed compatible.

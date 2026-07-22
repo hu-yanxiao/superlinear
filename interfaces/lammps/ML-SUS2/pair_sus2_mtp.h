@@ -154,6 +154,23 @@ class PairSUS2MTP : public Pair {
   double *linear_coeffs;     // These are the moment tensor basis coeffs (xi)
   double *species_coeffs;    // For the species coefficients (0th rank moment tensor)
   bool two_layer_gate_enabled = false;
+  // Optional exact k-channel contraction stages written by release3 rank
+  // models.  They are deliberately inactive for legacy (no-rank) models.
+  bool outer_k_rank_enabled = false;
+  int outer_k_rank = 0;
+  int outer_k_rank_basic_begin = 0;
+  int outer_k_rank_basic_count = 0;
+  int outer_k_rank_product_begin = 0;
+  std::vector<double> outer_k_rank_weights;
+  std::vector<int> outer_k_rank_raw_basic_indices;
+  int two_layer_gate_k_rank = 0;
+  int two_layer_gate_k_rank_basic_begin = 0;
+  int two_layer_gate_k_rank_basic_count = 0;
+  int two_layer_gate_k_rank_product_begin = 0;
+  int two_layer_gate_k_rank_product_end = 0;
+  std::vector<double> two_layer_gate_k_rank_weights;
+  std::vector<int> two_layer_gate_k_rank_raw_basic_indices;
+  bool two_layer_gate_explicit_scalar_moments = false;
   bool two_layer_gate_shared_radial = false;
   bool two_layer_gate_body_linear_combo = true;
   bool two_layer_gate_full_scalar_weights = false;
@@ -349,6 +366,14 @@ class PairSUS2MTP : public Pair {
   double two_layer_gate_mu_signal(const double *, int) const;
   void accumulate_two_layer_gate_signal_adjoints(double *, const double *) const;
   void prepare_two_layer_gate_weight_layouts();
+  void prepare_k_rank_layout();
+  int k_rank_basic_index(int, int, int, int, int) const;
+  int k_rank_raw_basic_index(const std::vector<int> &, int, int) const;
+  double k_rank_weight(const std::vector<double> &, int, int, int) const;
+  void contract_outer_k_rank_values();
+  void contract_two_layer_gate_k_rank_values();
+  void backprop_outer_k_rank_adjoints();
+  void backprop_two_layer_gate_k_rank_adjoints();
   void prepare_two_layer_gate_edge_l1_layout();
   void prepare_two_layer_gate_product_layout();
   void forward_two_layer_gate_products();
@@ -427,6 +452,7 @@ class PairSUS2MTP : public Pair {
   void apply_static_fixed_gate_main_cache_adjoints(int);
   void forward_sh_products();
   void backprop_sh_products();
+  void backprop_sh_products_range(const double *, int, int);
   void backprop_sh_products_from(const double *, int);
   void ensure_two_layer_atom_buffers();
   void ensure_two_layer_edge_buffer(int);

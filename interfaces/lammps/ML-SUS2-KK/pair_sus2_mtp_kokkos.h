@@ -154,6 +154,18 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_edge_l1_adjoint_kk(
 	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu,
 	      const F_FLOAT *sh_values, F_FLOAT *y_adjoints) const;
+	  KOKKOS_INLINE_FUNCTION void contract_outer_k_rank_values_kk(
+	      const int atom_index) const;
+	  KOKKOS_INLINE_FUNCTION void contract_two_layer_gate_k_rank_values_kk(
+	      const int atom_index) const;
+	  KOKKOS_INLINE_FUNCTION void backprop_outer_k_rank_adjoints_kk(
+	      const int atom_index) const;
+	  KOKKOS_INLINE_FUNCTION void backprop_two_layer_gate_k_rank_adjoints_kk(
+	      const int atom_index) const;
+	  KOKKOS_INLINE_FUNCTION void forward_two_layer_gate_products_kk(
+	      const int atom_index) const;
+	  KOKKOS_INLINE_FUNCTION void backprop_two_layer_gate_products_kk(
+	      const int atom_index, const bool use_cached_moments) const;
 
   // ---------- SUS2MTP routines (in order of execution) ----------
 
@@ -373,6 +385,10 @@ namespace LAMMPS_NS {
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
   Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index;     // Real-SH flat index for SUS2-SH basic alphas.
   Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficient for SH products.
+	  Kokkos::View<int *, DeviceType> d_outer_k_rank_raw_basic_indices;
+	  Kokkos::View<double *, DeviceType> d_outer_k_rank_weights;
+	  Kokkos::View<int *, DeviceType> d_two_layer_gate_k_rank_raw_basic_indices;
+	  Kokkos::View<double *, DeviceType> d_two_layer_gate_k_rank_weights;
 
   // SUS2-MLIP mapping arrays
   Kokkos::View<int *, DeviceType> d_mu_to_K;              // Mapping from radial function to scaling dimension
@@ -485,6 +501,7 @@ namespace LAMMPS_NS {
 	  int regression_coeffs_count;    // Total size of unified regression_coeffs array
 	  int basic_mu_group_count;       // Number of unique mu values in alpha_index_basic
 	  int two_layer_gate_product_limit = 0;
+	  int outer_k_rank_kk_unit_weights = 0;
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;
 	  int two_layer_gate_kk_comm_stride = 1;

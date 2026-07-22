@@ -62,13 +62,19 @@ private:
 	double FixedAtomicEnergySum(const Configuration& cfg) const;
 		void ApplyFixedAtomicEnergyGauge(int n);
 		bool LinearColumnActiveForStage(int column) const;
-		void PrepareLinearSolveColumns();
+		void PrepareLinearSolveColumns(bool readout_residual_only = false);
 		int LinearSolveColumnCount() const;
 		int LinearSolveActiveIndex(int column) const;
 		bool LinearSolveColumnActive(int column) const;
 		bool CoeffActiveForStage(int coeff_index) const;
 		double LinearColumnCurrentCoeff(int column) const;
 		void ProjectLinearRowToActive(const double* full_row, int full_stride, double& rhs, double* active_row);
+		void BuildReadoutResidualRow(const double* full_row,
+		                             int full_stride,
+		                             double reference_value,
+		                             double predicted_value,
+		                             double& rhs,
+		                             double* active_row) const;
 #ifdef MLIP_MPI
 	MPI_Comm train_comm_ = MPI_COMM_WORLD;
 	bool train_comm_owned_ = false;
@@ -152,16 +158,20 @@ public:
 
 	void LoadWeights(std::ifstream& ifs);						// Load weights in Linear regression from file
         void shift(bool shift_);
-	void ClearSLAE();											// Setting SLAE Matrix and right part to zero
+	void ClearSLAE(bool readout_residual_only = false);				// Setting SLAE Matrix and right part to zero
 	void SymmetrizeSLAE();										// Symmetrization of the SLAE matrix before solving (only upper right part is filled during adding or removing configuration to regression)
 	void SolveSLAE();											// Find the corresponding linear coefficients
-	void AddToSLAE(Configuration& cfg, double weight = 1, const Neighborhoods* neighborhoods = nullptr);	// Adds configuration to regression SLAE. If weight = -1 removes from regression
+	void AddToSLAE(Configuration& cfg,
+	               double weight = 1,
+	               const Neighborhoods* neighborhoods = nullptr,
+	               bool readout_residual_only = false);	// Adds configuration to regression SLAE. If weight = -1 removes from regression
 
 	double* ConstructLinHessian();
 	void TrainLinear(int prank,
 					std::vector<Configuration>& training_set,
 					const std::vector<Neighborhoods>* neighborhoods = nullptr,
-					const std::string& context = "");
+					const std::string& context = "",
+					bool readout_residual_only = false);
         void random_sample(int prank, std::vector<Configuration>& training_set, int max_step, const std::vector<Neighborhoods>* neighborhoods = nullptr);
 	#ifndef ALGLIB
 		void Train(std::vector<Configuration>& training_set) override; //with Shapeev bfgs

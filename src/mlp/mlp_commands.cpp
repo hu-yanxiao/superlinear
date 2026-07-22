@@ -64,6 +64,10 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 						"two-layer-gate-site-mode",
 						"two-layer-gate-shared-radial",
 						"two-layer-gate-edge-l1",
+						"two-layer-gate-readout",
+						"outer-k-rank",
+						"outer-k-rank1",
+						"two-layer-gate-k-rank",
 						"multi-layer-gate",
 						"second-layer-gate-body-order",
 						"second-layer-gate-factor-pruning",
@@ -72,6 +76,9 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 			};
 	for (const char* name : names) {
 		map<string, string>::const_iterator it = opts.find(name);
+		// Known option keys may exist with an empty value even when they were
+		// not present on the command line.  Preserve the historical train CLI:
+		// an SH inline option is explicit only when its value is non-empty.
 		if (it != opts.end() && !it->second.empty())
 			return true;
 	}
@@ -627,6 +634,10 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"        pre-fitted. Default is random. Other is same - this is when interaction\n"
 		"        of all species is the same (more accurate fit, but longer optimization)\n"
 		"    --do-lin: enable linear pre-fitting path inside nonlinear training.\n"
+		"    --two-layer-gate-readout-linear-init: before BFGS, freeze the trained model\n"
+		"        and solve only the gate-readout coefficients against the E/F/stress residual.\n"
+		"        Uses the same scalar-head L2; default=off. With --max-iter=0, saves the\n"
+		"        initialized model without running BFGS.\n"
 		"    --do-lin-rescale: before each BFGS do-lin full-data TrainLinear solve,\n"
 		"                      run the existing subset-based rescale pass first.\n"
 		"    --do-lin-steps=<int>: apply do-lin for the first <int> accepted BFGS steps.\n"
@@ -655,6 +666,10 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
 					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
 					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
+					"    --two-layer-gate-readout: add a linear energy readout from the gate scalar basis. Default=off\n"
+					"    --outer-k-rank=<R>: use a q-total K=R outer graph; R=1 contracts directly into the radial rows, R>=2 learns R independent K contractions per l, and 0/default disables it.\n"
+					"    --outer-k-rank1: compatibility alias for --outer-k-rank=1.\n"
+					"    --two-layer-gate-k-rank=<R>: independently contract K to R before q-total gate products/scalars; requires --outer-k-rank; 0/default disables it.\n"
 					"    --multi-layer-gate: enable release3 second gate on the first gate endpoint coefficients.\n"
 					"    --second-layer-gate-body-order=<int>: second gate scalar body-order cutoff. Default=--body-order\n"
 					"    --second-layer-gate-factor-pruning=same-k|legacy|q-total: gate2 scalar subgraph. Default=gate1\n"

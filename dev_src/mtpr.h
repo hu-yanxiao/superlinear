@@ -48,6 +48,7 @@ class MLMTPR : public AnyLocalMLIP
 {
 protected:
 	void MemAlloc();
+	void ResizeLinearComponentStorage();
 
 	void ReadLinearCoeffs(std::ifstream& ifs);				//Read linear regression coeffs from MTP file
 	void WriteLinearCoeffs(std::ofstream& ofs);				//Write linear regression coeffs to MTP file
@@ -81,6 +82,20 @@ protected:
 	std::string sh_parity_;
 	std::vector<int> sh_body_l_max_;
 	std::vector<SHProduct> sh_products_;
+	bool outer_k_rank1_enabled_ = false;
+	int outer_k_rank_ = 0;
+	bool outer_k_rank1_direct_radial_ = false;
+	int outer_k_rank1_basic_begin_ = 0;
+	int outer_k_rank1_basic_count_ = 0;
+	int outer_k_rank1_product_begin_ = 0;
+	std::vector<double> outer_k_rank1_weights_;
+	int two_layer_gate_k_rank_ = 0;
+	int two_layer_gate_k_rank_basic_begin_ = 0;
+	int two_layer_gate_k_rank_basic_count_ = 0;
+	int two_layer_gate_k_rank_product_begin_ = 0;
+	int two_layer_gate_k_rank_product_end_ = 0;
+	std::vector<double> two_layer_gate_k_rank_weights_;
+	std::vector<int> two_layer_gate_k_rank_raw_basic_indices_;
 	std::vector<SHProductRow> sh_product_rows_;
 	std::vector<SHProductRowTerm> sh_product_row_terms_;
 	std::vector<int> sh_scalar_index_by_moment_;
@@ -193,6 +208,11 @@ protected:
 		std::vector<double> sh_gate_linear_component_ders_;
 		std::vector<double> sh_gate_energy_ders_wrt_moments_;
 		std::vector<Vector3> sh_gate_component_ders_;
+		std::vector<Vector3> two_layer_gate_readout_direction_scratch_;
+		std::vector<double> two_layer_gate_readout_tangent_scratch_;
+		std::vector<double> two_layer_gate_readout_moment_tangent_scratch_;
+		std::vector<double> two_layer_gate_readout_value_seed_scratch_;
+		std::vector<double> two_layer_gate_readout_energy_seed_scratch_;
 	std::vector<int> basic_total_degree_cache_;
 	std::vector<int> basic_scaling_block_cache_;
 	std::vector<int> basic_radial_eval_block_cache_;
@@ -204,6 +224,10 @@ protected:
 	std::vector<int> basic_sh_der_index_cache_;
 	std::vector<int> basic_indices_by_mu_;
 	std::vector<int> basic_mu_offsets_;
+	// For each synthetic contracted primitive (in graph order), cache the raw
+	// primitive node for every k.  This keeps the learned contraction out of
+	// the neighbor loop and makes all forward/reverse paths use one mapping.
+	std::vector<int> outer_k_rank1_raw_basic_indices_;
 	std::vector<int> mu_to_radial_eval_block_;
 	std::vector<int> radial_eval_to_scaling_block_;
 	Array3D sh_adj_ders_;
@@ -320,6 +344,19 @@ protected:
 		bool need_stress);
 	void CalcSHResidualSiteEnergyDers(const Neighborhood& nbh);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
+	void AddTwoLayerGateReadoutSiteEnergyDers(const Neighborhood& nbh);
+	void AccumulateTwoLayerGateReadoutCombinationGrad(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		double se_weight,
+		const Vector3* se_ders_weights);
+	void AccumulateTwoLayerGateReadoutDirectionalGrad(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		const Vector3* se_ders_weights,
+		const double* gate_scalar_tangents,
+		const double* gate_moment_tangents,
+		int cache_atom_index);
 		void AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 											std::vector<double>& out_grad_accumulator,
 											const std::vector<double>& neighbor_gate_tangent,
@@ -331,11 +368,13 @@ protected:
 										const Vector3* se_ders_weights = nullptr);
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
 		void WriteSHProductGraph(std::ofstream& ofs);
+		void ValidateSHProductGraphDefinitions() const;
 		void BuildSHProductProgram();
 		void BuildTwoLayerGateProductProgram();
 		void BuildSecondLayerGateProductProgram();
 		void BuildGateLayerProductProgram(
 			const std::vector<int>& scalar_indices,
+			const std::vector<int>* explicit_scalar_moment_indices,
 			std::vector<char>& required_moments,
 			std::vector<int>& required_moment_indices,
 			std::vector<int>& required_basic_indices,
@@ -355,6 +394,22 @@ protected:
 										int neighbor_index) const;
 	int TwoLayerGateMuDenseIndex(int mu) const;
 	bool UseSHProductRows() const;
+	int OuterKRank1ProductStart() const;
+	int OuterKRank1OuterBasicIndex(int channel, int l, int m) const;
+	int OuterKRank1RawBasicIndex(int l, int m, int k) const;
+	void ContractOuterKRank1Values(double* values) const;
+	void ContractOuterKRank1MomentDers(const Neighborhood& nbh);
+	void BackpropOuterKRank1Adjoints(std::vector<double>& adjoints) const;
+	void AbsorbOuterKRank1WeightsIntoRadialCoeffs();
+	int TwoLayerGateKRankBasicIndex(int channel, int l, int m) const;
+	int TwoLayerGateKRankRawBasicIndex(int l, int m, int k) const;
+	void ContractTwoLayerGateKRankValues(double* values) const;
+	void BackpropTwoLayerGateKRankAdjoints(std::vector<double>& adjoints) const;
+	void AccumulateTwoLayerGateKRankWeightGrad(
+		std::vector<double>& out_grad,
+		const std::vector<double>& total_adjoint,
+		const std::vector<double>* energy_adjoint,
+		const std::vector<double>* raw_tangent) const;
 	bool UseSHSiteDerivativeCache() const;
 	bool UseSHAccumSkipSiteDers() const;
 	bool UseSHProductHVTReverse() const;
@@ -370,13 +425,20 @@ protected:
 	void CalcSHEdgeBasicValues(const Neighborhood& nbh,
 	                           int neighbor_index,
 	                           std::vector<double>& edge_basic_values);
+	void CalcTwoLayerGateEdgeBasicValues(
+		const Neighborhood& nbh,
+		int neighbor_index,
+		int cache_atom_index,
+		std::vector<double>& edge_basic_values);
 	double CalcSHScalarFirstFactorProjection(
 		const SHScalarInfo& scalar_info,
 		const std::vector<double>& edge_basic_values) const;
 	bool UseFastCalcEijProjection() const;
 	void CalcSHDirectedEffectivePairWeights(
 		const Neighborhood& nbh,
-		std::vector<double>& edge_basic_weights) const;
+		std::vector<double>& edge_basic_weights,
+		const std::vector<int>* scalar_indices = nullptr,
+		const std::vector<double>* scalar_coeffs = nullptr) const;
 	double CalcSHDirectedEffectivePairEnergyFromWeights(
 		const Neighborhood& nbh,
 		int neighbor_index,
@@ -452,6 +514,7 @@ public:
 		int two_layer_residual_eval_stage_ = 0;
 		bool two_layer_residual_skip_outer_param_grad_ = false;
 		std::vector<int> two_layer_gate_scalar_indices_;
+		std::vector<int> two_layer_gate_scalar_moment_indices_;
 		std::vector<int> two_layer_gate_scalar_body_orders_;
 		std::vector<int> two_layer_gate_body_order_weight_offsets_;
 		std::vector<int> two_layer_gate_body_order_weight_indices_;
@@ -462,6 +525,8 @@ public:
 				std::vector<double> two_layer_gate_type_coeffs_;
 				std::vector<double> two_layer_gate_weights_;
 				std::vector<double> two_layer_gate_body_mix_weights_;
+				bool two_layer_gate_readout_enabled_ = false;
+				std::vector<double> two_layer_gate_readout_coeffs_;
 				bool multi_layer_gate_enabled_ = false;
 				bool second_layer_gate_shared_radial_ = false;
 				int second_layer_gate_body_order_max_ = 0;
@@ -558,9 +623,9 @@ public:
 	int two_layer_edge_cache_rb_size_ = 0;
 	int active_two_layer_edge_cache_atom_index_ = -1;
         bool shift_ = true;
-	double* energy_cmpnts;								// Energy components for SLAE matrix
-	Array3D forces_cmpnts;								// Force components for SLAE matrix
-	double(*stress_cmpnts)[3][3];						// Stress components for SLAE matrix
+				double* energy_cmpnts = nullptr;					// Energy components for SLAE matrix
+				Array3D forces_cmpnts;								// Force components for SLAE matrix
+				double(*stress_cmpnts)[3][3] = nullptr;			// Stress components for SLAE matrix
 
 		void CalcBasisFuncs(const Neighborhood& Neighborhood, double* bf_vals); //Linear basic functions calculation
 		double CalcSiteEnergyValue(const Neighborhood& nbh, double* out_site_energy0);
@@ -569,8 +634,16 @@ public:
 	void CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods);
 	void CalcEFSComponents(Configuration& cfg, bool need_forces, bool need_stress);
 	void CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods, bool need_forces, bool need_stress);
+	void CalcEFSComponents(Configuration& cfg,
+	                       const Neighborhoods& neighborhoods,
+	                       bool need_forces,
+	                       bool need_stress,
+	                       bool fixed_center_readout_columns);
 	void CalcEComponents(Configuration& cfg);			//Calculate the components for linear regression matrix
 	void CalcEComponents(Configuration& cfg, const Neighborhoods& neighborhoods);
+	void CalcEComponents(Configuration& cfg,
+	                     const Neighborhoods& neighborhoods,
+	                     bool fixed_center_readout_columns);
 		void CalcEFS(Configuration& cfg) override;
 		void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
 		void CalcEnergyAndSiteEnergies(Configuration& cfg) override;
@@ -759,6 +832,38 @@ public:
 						void SetTwoLayerGateTanhAmplitude(double amplitude);
 						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
+						bool OuterKRank1Enabled() const { return outer_k_rank1_enabled_; }
+						bool OuterKRankEnabled() const { return outer_k_rank_ > 0; }
+						int OuterKRank() const { return outer_k_rank_; }
+						bool OuterKRankUsesDirectRadial() const {
+							return outer_k_rank_ == 1 && outer_k_rank1_direct_radial_;
+						}
+						bool OuterKRankHasTrainableWeights() const {
+							return OuterKRankEnabled() && !OuterKRankUsesDirectRadial();
+						}
+					int OuterKRank1BasicBegin() const { return outer_k_rank1_basic_begin_; }
+					int OuterKRank1BasicCount() const { return outer_k_rank1_basic_count_; }
+					int OuterKRank1ProductBegin() const { return outer_k_rank1_product_begin_; }
+					int OuterKRank1WeightCount() const;
+					int OuterKRank1WeightOffset() const;
+					int OuterKRank1WeightIndex(int channel, int l, int k) const;
+					double OuterKRank1Weight(int channel, int l, int k) const;
+					const double* OuterKRank1WeightData() const;
+					bool TwoLayerGateKRankEnabled() const {
+						return two_layer_gate_k_rank_ > 0;
+					}
+					int TwoLayerGateKRank() const { return two_layer_gate_k_rank_; }
+					int TwoLayerGateKRankBasicBegin() const {
+						return two_layer_gate_k_rank_basic_begin_;
+					}
+					int TwoLayerGateKRankBasicCount() const {
+						return two_layer_gate_k_rank_basic_count_;
+					}
+					int TwoLayerGateKRankWeightCount() const;
+					int TwoLayerGateKRankWeightOffset() const;
+					int TwoLayerGateKRankWeightIndex(int channel, int l, int k) const;
+					double TwoLayerGateKRankWeight(int channel, int l, int k) const;
+					const double* TwoLayerGateKRankWeightData() const;
 					bool TwoLayerGateEnabled() const { return two_layer_gate_enabled_; }
 						void UpgradePlainSHToTwoLayerGate(int gate_body_order,
 						                                      bool independent_gate_radial_coeffs,
@@ -770,6 +875,10 @@ public:
 							const std::string& factor_pruning) const;
 							void EnableTwoLayerGateDecoupledScalingFromBase();
 							void UpgradeTwoLayerGateToEdgeL1();
+							void EnableTwoLayerGateReadout();
+							bool TwoLayerGateReadoutEnabled() const {
+								return two_layer_gate_readout_enabled_;
+							}
 						bool MultiLayerGateEnabled() const { return multi_layer_gate_enabled_; }
 						void UpgradeTwoLayerGateToMultiLayerGate(
 							int second_gate_body_order,
@@ -788,6 +897,12 @@ public:
 		int TwoLayerGateTypeCoeffOffset() const;
 		int TwoLayerGateBodyOrderCount() const;
 		int TwoLayerGateScalarCount() const;
+		int TwoLayerGateScalarMomentIndex(int scalar_weight_index) const;
+		int TwoLayerGateScalarMomentIndexUnchecked(int scalar_weight_index) const
+		{
+			return two_layer_gate_scalar_moment_indices_[scalar_weight_index];
+		}
+		int TwoLayerGateScalarBodyOrder(int scalar_weight_index) const;
 		int TwoLayerGateWeightCount() const;
 			int TwoLayerGateWeightOffset() const;
 			int TwoLayerGateBodyMixWeightCount() const;
@@ -797,8 +912,12 @@ public:
 				int TwoLayerGateEdgeL1WeightCount() const;
 				int TwoLayerGateEdgeL1WeightOffset() const;
 				int TwoLayerGateEdgeL1SourceMomentIndex(int source_index) const;
-				int TwoLayerResidualE0CoeffCount() const;
-				int TwoLayerResidualE0CoeffOffset() const;
+					int TwoLayerResidualE0CoeffCount() const;
+					int TwoLayerResidualE0CoeffOffset() const;
+					int TwoLayerGateReadoutCoeffCount() const;
+					int TwoLayerGateReadoutCoeffOffset() const;
+					int TwoLayerGateReadoutLinearColumnOffset() const;
+					double TwoLayerGateReadoutCoeff(int scalar_index) const;
 		int LinearCoeffOffset() const;
 		int LinearCoeffCount() const;
 		int LinearEquationCount() const;
@@ -942,7 +1061,11 @@ public:
 						const int second_gate_weight_count = SecondLayerGateWeightCount();
 						const int second_gate_body_mix_weight_count =
 							SecondLayerGateBodyMixWeightCount();
-							const int e0_count = TwoLayerResidualE0CoeffCount();
+							const int gate_readout_count = TwoLayerGateReadoutCoeffCount();
+								const int e0_count = TwoLayerResidualE0CoeffCount();
+							const int gate_k_rank_weight_count =
+								TwoLayerGateKRankWeightCount();
+							const int outer_k_rank1_weight_count = OuterKRank1WeightCount();
 						const int linear_size = LinearCoeffCount();
 					std::vector<double> old_coeffs = regression_coeffs;
 					if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
@@ -965,6 +1088,15 @@ public:
 								new_second_gate_type_offset + second_gate_type_count;
 							const int new_second_gate_body_mix_offset =
 								new_second_gate_weight_offset + second_gate_weight_count;
+							const int new_gate_readout_offset =
+								new_second_gate_body_mix_offset + second_gate_body_mix_weight_count;
+								const int new_gate_k_rank_weight_offset =
+									new_gate_readout_offset + gate_readout_count + e0_count;
+								const int new_outer_k_rank1_weight_offset =
+									new_gate_k_rank_weight_offset + gate_k_rank_weight_count;
+							const int expected_new_size =
+								new_outer_k_rank1_weight_offset
+								+ outer_k_rank1_weight_count + linear_size;
 						const int legacy_gate_additive_count =
 							two_layer_gate_enabled_ ? species_count : 0;
 						const int legacy_gate_offset =
@@ -1172,6 +1304,19 @@ public:
 											second_gate_body_mix_weight_count, 1.0);
 									}
 								}
+							if (gate_readout_count > 0) {
+								if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+									two_layer_gate_readout_coeffs_.assign(
+										gate_readout_count, 0.0);
+									for (int i = 0; i < gate_readout_count; ++i)
+										two_layer_gate_readout_coeffs_[i] =
+											old_coeffs[new_gate_readout_offset + i];
+								} else if (static_cast<int>(two_layer_gate_readout_coeffs_.size())
+								           != gate_readout_count) {
+									two_layer_gate_readout_coeffs_.assign(
+										gate_readout_count, 0.0);
+								}
+							}
 							if (e0_count > 0) {
 								const int old_e0_offset =
 									old_coeffs_have_second_gate_layout
@@ -1192,6 +1337,31 @@ public:
 								two_layer_residual_e0_coeffs_[i] = old_coeffs[old_e0_offset + i];
 						}
 					}
+							if (gate_k_rank_weight_count > 0) {
+								if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+									two_layer_gate_k_rank_weights_.assign(
+										gate_k_rank_weight_count, 0.0);
+									for (int i = 0; i < gate_k_rank_weight_count; ++i)
+										two_layer_gate_k_rank_weights_[i] =
+											old_coeffs[new_gate_k_rank_weight_offset + i];
+								} else if (static_cast<int>(
+									       two_layer_gate_k_rank_weights_.size())
+								           != gate_k_rank_weight_count) {
+									ERROR("SUS2-SH gate K-rank weight metadata has inconsistent sizes");
+								}
+							}
+								if (outer_k_rank1_weight_count > 0) {
+								if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+									outer_k_rank1_weights_.assign(
+										outer_k_rank1_weight_count, 0.0);
+									for (int i = 0; i < outer_k_rank1_weight_count; ++i)
+										outer_k_rank1_weights_[i] =
+											old_coeffs[new_outer_k_rank1_weight_offset + i];
+								} else if (static_cast<int>(outer_k_rank1_weights_.size())
+								           != outer_k_rank1_weight_count) {
+									ERROR("SUS2-SH outer K-rank1 weight metadata has inconsistent sizes");
+								}
+							}
 								regression_coeffs.assign(
 									base_nonlinear_size + gate_radial_count
 								+ gate_scaling_count + gate_additive_count
@@ -1199,8 +1369,10 @@ public:
 								+ gate_body_mix_weight_count + gate_edge_l1_weight_count
 								+ second_gate_radial_count + second_gate_additive_count
 								+ second_gate_type_count + second_gate_weight_count
-								+ second_gate_body_mix_weight_count
-								+ e0_count + linear_size, 0.0);
+									+ second_gate_body_mix_weight_count
+									+ gate_readout_count + e0_count
+									+ gate_k_rank_weight_count
+									+ outer_k_rank1_weight_count + linear_size, 0.0);
 				for (int i = 0; i < base_nonlinear_size; ++i)
 					regression_coeffs[i] = old_coeffs[i];
 				if (gate_radial_count > 0) {
@@ -1289,7 +1461,7 @@ public:
 								regression_coeffs[SecondLayerGateWeightOffset() + i] =
 									second_layer_gate_weights_[i];
 						}
-						if (second_gate_body_mix_weight_count > 0) {
+							if (second_gate_body_mix_weight_count > 0) {
 							if (static_cast<int>(second_layer_gate_body_mix_weights_.size())
 							    != second_gate_body_mix_weight_count)
 								second_layer_gate_body_mix_weights_.assign(
@@ -1297,14 +1469,38 @@ public:
 							for (int i = 0; i < second_gate_body_mix_weight_count; ++i)
 								regression_coeffs[SecondLayerGateBodyMixWeightOffset() + i] =
 									second_layer_gate_body_mix_weights_[i];
-						}
-						if (e0_count > 0) {
+							}
+							if (gate_readout_count > 0) {
+								if (static_cast<int>(two_layer_gate_readout_coeffs_.size())
+								    != gate_readout_count)
+									ERROR("SUS2-SH gate readout metadata has inconsistent sizes");
+								for (int i = 0; i < gate_readout_count; ++i)
+									regression_coeffs[TwoLayerGateReadoutCoeffOffset() + i] =
+										two_layer_gate_readout_coeffs_[i];
+							}
+					if (e0_count > 0) {
 					if (static_cast<int>(two_layer_residual_e0_coeffs_.size()) != e0_count)
 						two_layer_residual_e0_coeffs_.assign(e0_count, 0.0);
 					for (int i = 0; i < e0_count; ++i)
 						regression_coeffs[TwoLayerResidualE0CoeffOffset() + i] =
 							two_layer_residual_e0_coeffs_[i];
 				}
+							if (gate_k_rank_weight_count > 0) {
+								if (static_cast<int>(two_layer_gate_k_rank_weights_.size())
+								    != gate_k_rank_weight_count)
+									ERROR("SUS2-SH gate K-rank weight metadata has inconsistent sizes");
+								for (int i = 0; i < gate_k_rank_weight_count; ++i)
+									regression_coeffs[TwoLayerGateKRankWeightOffset() + i] =
+										two_layer_gate_k_rank_weights_[i];
+							}
+							if (outer_k_rank1_weight_count > 0) {
+							if (static_cast<int>(outer_k_rank1_weights_.size())
+							    != outer_k_rank1_weight_count)
+								ERROR("SUS2-SH outer K-rank1 weight metadata has inconsistent sizes");
+							for (int i = 0; i < outer_k_rank1_weight_count; ++i)
+								regression_coeffs[OuterKRank1WeightOffset() + i] =
+									outer_k_rank1_weights_[i];
+						}
 				int radial_size = LinearCoeffOffset();
 			int max_comp = species_count - 1;				//maximum index of component
 

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace sus2 {
 
@@ -309,6 +310,29 @@ private:
 	}
 
 public:
+	enum RechartReason {
+		kRechartNone = 0,
+		kRechartDirectionRadiusExceeded = 1,
+		kRechartPackFailed = 2
+	};
+
+	struct RechartResult {
+		bool success;
+		bool recharted;
+		RechartReason reason;
+		double old_direction_radius;
+		double new_direction_radius;
+
+		RechartResult()
+			: success(false),
+			  recharted(false),
+			  reason(kRechartNone),
+			  old_direction_radius(
+				  std::numeric_limits<double>::quiet_NaN()),
+			  new_direction_radius(
+				  std::numeric_limits<double>::quiet_NaN()) {}
+	};
+
 	static bool SelectSignedPivot(const double* physical,
 	                              int count,
 	                              int& pivot,
@@ -347,6 +371,70 @@ public:
 	{
 		return PackChart(
 			physical, count, pivot, pivot_sign, Pi(), 2.0, false, coordinates);
+	}
+
+	static bool GetDirectionRadius(const double* coordinates,
+	                               int count,
+	                               double& radius)
+	{
+		if (coordinates == nullptr || count <= 0)
+			return false;
+		return DirectionRadius(coordinates, count, radius);
+	}
+
+	// Re-select the signed pivot before the fixed chart reaches its excluded
+	// antipode. This function never writes the physical row: it only updates
+	// the chart metadata and returns coordinates for the same physical values.
+	static RechartResult RechartIfNeeded(const double* physical,
+	                                     int count,
+	                                     double max_direction_radius,
+	                                     int& pivot,
+	                                     double& pivot_sign,
+	                                     double* coordinates)
+	{
+		RechartResult result;
+		if (physical == nullptr || coordinates == nullptr || count <= 0
+		    || !std::isfinite(max_direction_radius)
+		    || max_direction_radius <= 0.0
+		    || !ValidPivot(count, pivot, pivot_sign))
+			return result;
+
+		const int old_pivot = pivot;
+		const double old_pivot_sign = pivot_sign;
+		if (PackWithPivot(
+		        physical, count, old_pivot, old_pivot_sign, coordinates)) {
+			if (!DirectionRadius(coordinates, count, result.old_direction_radius))
+				return result;
+			if (result.old_direction_radius <= max_direction_radius) {
+				result.success = true;
+				result.new_direction_radius = result.old_direction_radius;
+				return result;
+			}
+			result.reason = kRechartDirectionRadiusExceeded;
+		} else {
+			result.reason = kRechartPackFailed;
+			result.old_direction_radius =
+				std::numeric_limits<double>::infinity();
+		}
+
+		int new_pivot = -1;
+		double new_pivot_sign = 0.0;
+		if (!SelectSignedPivot(
+		        physical, count, new_pivot, new_pivot_sign)
+		    || (new_pivot == old_pivot
+		        && new_pivot_sign == old_pivot_sign)
+		    || !PackWithPivot(
+		        physical, count, new_pivot, new_pivot_sign, coordinates)
+		    || !DirectionRadius(
+		        coordinates, count, result.new_direction_radius)
+		    || result.new_direction_radius > max_direction_radius)
+			return result;
+
+		pivot = new_pivot;
+		pivot_sign = new_pivot_sign;
+		result.success = true;
+		result.recharted = true;
+		return result;
 	}
 
 	static bool Unpack(const double* coordinates, int count, double* physical)
