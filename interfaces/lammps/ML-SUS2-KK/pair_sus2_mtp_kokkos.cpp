@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 #include <sstream>
 
 using namespace LAMMPS_NS;
@@ -643,6 +644,39 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	  if (two_layer_gate_product_limit < 0 ||
 	      two_layer_gate_product_limit > alpha_index_times_count)
 	    error->all(FLERR, "SUS2-SH Kokkos gate product limit is inconsistent.");
+	  two_layer_gate_kk_moment_cache_width = alpha_moment_count;
+	  if (outer_k_rank_enabled) {
+	    // Rank models serialize the gate graph as a closed prefix and the outer
+	    // graph as a closed suffix.  The Kokkos first-layer cache only needs the
+	    // former.  Validate every cached gate read before using the prefix width;
+	    // this also makes the stage-specific clears below safe in the presence of
+	    // a malformed or future model layout.
+	    if (outer_k_rank_basic_begin < alpha_index_basic_count ||
+	        outer_k_rank_basic_begin > alpha_moment_count)
+	      error->all(FLERR,
+	                 "SUS2-SH Kokkos rank gate/outer moment boundary is invalid.");
+	    for (int k = 0; k < two_layer_gate_product_limit; k++) {
+	      if (alpha_times_a0[k] < 0 ||
+	          alpha_times_a0[k] >= outer_k_rank_basic_begin ||
+	          alpha_times_a1[k] < 0 ||
+	          alpha_times_a1[k] >= outer_k_rank_basic_begin ||
+	          alpha_times_out[k] < 0 ||
+	          alpha_times_out[k] >= outer_k_rank_basic_begin)
+	        error->all(
+	            FLERR,
+	            "SUS2-SH Kokkos gate product graph is not a closed prefix.");
+	    }
+	    if (static_cast<int>(two_layer_gate_scalar_moment_indices.size()) !=
+	        two_layer_gate_scalar_count)
+	      error->all(FLERR,
+	                 "SUS2-SH Kokkos gate scalar moment layout is inconsistent.");
+	    for (int moment_index : two_layer_gate_scalar_moment_indices)
+	      if (moment_index < 0 || moment_index >= outer_k_rank_basic_begin)
+	        error->all(
+	            FLERR,
+	            "SUS2-SH Kokkos gate scalar lies outside the gate graph prefix.");
+	    two_layer_gate_kk_moment_cache_width = outer_k_rank_basic_begin;
+	  }
 	  // We need to init these as very small views to begin with because the user might specify a very large chunk_size which is much more than inum. We will resize these as needed in compute.
 	  MemKK::realloc_kokkos(d_moment_tensor_vals, "sus2mtp/kk:moment_tensor_vals", 1, alpha_moment_count);
 	  MemKK::realloc_kokkos(d_nbh_energy_ders_wrt_moments, "sus2mtp/kk:nbh_energy_ders_wrt_moments", 1,
@@ -2074,10 +2108,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		    if (use_gate_moment_cache &&
 		        ((int) d_two_layer_gate_cached_moment_vals.extent(0) < nmax ||
 		         (int) d_two_layer_gate_cached_moment_vals.extent(1) <
-		             alpha_moment_count)) {
+		             two_layer_gate_kk_moment_cache_width)) {
 		      Kokkos::realloc(Kokkos::WithoutInitializing,
 		                      d_two_layer_gate_cached_moment_vals, nmax,
-		                      alpha_moment_count);
+		                      two_layer_gate_kk_moment_cache_width);
 		    }
 	    if ((int) d_two_layer_gate_mu_multipliers.extent(0) < nmax ||
 	        (int) d_two_layer_gate_mu_multipliers.extent(1) < radial_func_count) {
@@ -2103,8 +2137,33 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		    while (chunk_offset < inum) {
 		      if (chunk_size > inum - chunk_offset) chunk_size = inum - chunk_offset;
 		      profile_begin();
-		      Kokkos::deep_copy(d_moment_tensor_vals, moment_buffer_value_type(0));
-		      Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments, nbh_der_buffer_value_type(0));
+		      if (outer_k_rank_enabled) {
+		        // The first gate pass reads/writes only the validated graph prefix.
+		        // direct_gate_chain is always active in this implementation, so its
+		        // derivative buffer is not read before the main-stage clear.
+		        const int local_chunk_size = chunk_size;
+		        const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		        auto d_local_moments = d_moment_tensor_vals;
+		        using clear_policy = Kokkos::TeamPolicy<DeviceType>;
+		        using clear_member = typename clear_policy::member_type;
+		        Kokkos::parallel_for(
+		            "ClearRankGateFirstMoments",
+		            clear_policy(prefix_width, Kokkos::AUTO),
+		            KOKKOS_LAMBDA(const clear_member &team) {
+		              const int k = team.league_rank();
+		              Kokkos::parallel_for(
+		                  Kokkos::TeamThreadRange(team, local_chunk_size),
+		                  [&](const int ii) {
+		                    d_local_moments(ii, k) =
+		                        moment_buffer_value_type(0);
+		                  });
+		            });
+		      } else {
+		        Kokkos::deep_copy(d_moment_tensor_vals,
+		                          moment_buffer_value_type(0));
+		        Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+		                          nbh_der_buffer_value_type(0));
+		      }
 		      profile_end(prof_first_clear);
 
 	      int team_size = alpha_basic_team_size;
@@ -2156,24 +2215,76 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 				                             policy_gate_edge_l1_values, *this);
 				      }
 
-				      if (use_gate_moment_cache) {
-				        const int local_chunk_offset = chunk_offset;
-				        const int local_alpha_moment_count = alpha_moment_count;
-				        auto d_local_ilist = d_ilist;
-				        auto d_local_moments = d_moment_tensor_vals;
-				        auto d_local_cache = d_two_layer_gate_cached_moment_vals;
-				        Kokkos::parallel_for(
-				            "StoreGateMomentCache",
-				            typename Kokkos::RangePolicy<DeviceType>(
-				                0, chunk_size * local_alpha_moment_count),
-				            KOKKOS_LAMBDA(const int idx) {
-				              const int ii = idx / local_alpha_moment_count;
-				              const int k = idx - ii * local_alpha_moment_count;
-				              const int atom_index =
-				                  d_local_ilist(ii + local_chunk_offset);
-				              d_local_cache(atom_index, k) = d_local_moments(ii, k);
-				            });
-				      }
+		      if (use_gate_moment_cache) {
+		        const int local_chunk_offset = chunk_offset;
+		        if (outer_k_rank_enabled) {
+		          const int local_chunk_size = chunk_size;
+		          const int local_gate_moment_cache_width =
+		              two_layer_gate_kk_moment_cache_width;
+		          auto d_local_ilist = d_ilist;
+		          auto d_local_moments = d_moment_tensor_vals;
+		          auto d_local_cache = d_two_layer_gate_cached_moment_vals;
+		          using cache_policy = Kokkos::TeamPolicy<DeviceType>;
+		          using cache_member = typename cache_policy::member_type;
+		          Kokkos::parallel_for(
+		              "StoreRankGateMomentCache",
+		              cache_policy(local_gate_moment_cache_width, Kokkos::AUTO),
+		              KOKKOS_LAMBDA(const cache_member &team) {
+		                const int k = team.league_rank();
+		                Kokkos::parallel_for(
+		                    Kokkos::TeamThreadRange(team, local_chunk_size),
+		                    [&](const int ii) {
+		                      const int atom_index =
+		                          d_local_ilist(ii + local_chunk_offset);
+		                      d_local_cache(atom_index, k) =
+		                          d_local_moments(ii, k);
+		                    });
+		              });
+		        } else {
+		          // Preserve the historical rank-off kernel and iteration order
+		          // whenever its flattened range is representable.  Extremely
+		          // large chunks use the same two-dimensional mapping as the rank
+		          // cache path, avoiding signed overflow in chunk_size * width.
+		          const int local_chunk_size = chunk_size;
+		          const int local_alpha_moment_count = alpha_moment_count;
+		          auto d_local_ilist = d_ilist;
+		          auto d_local_moments = d_moment_tensor_vals;
+		          auto d_local_cache = d_two_layer_gate_cached_moment_vals;
+		          if (local_alpha_moment_count > 0 &&
+		              local_chunk_size > std::numeric_limits<int>::max() /
+		                  local_alpha_moment_count) {
+		            using cache_policy = Kokkos::TeamPolicy<DeviceType>;
+		            using cache_member = typename cache_policy::member_type;
+		            Kokkos::parallel_for(
+		                "StoreGateMomentCacheWide",
+		                cache_policy(local_alpha_moment_count, Kokkos::AUTO),
+		                KOKKOS_LAMBDA(const cache_member &team) {
+		                  const int k = team.league_rank();
+		                  Kokkos::parallel_for(
+		                      Kokkos::TeamThreadRange(team, local_chunk_size),
+		                      [&](const int ii) {
+		                        const int atom_index =
+		                            d_local_ilist(ii + local_chunk_offset);
+		                        d_local_cache(atom_index, k) =
+		                            d_local_moments(ii, k);
+		                      });
+		                });
+		          } else {
+		            Kokkos::parallel_for(
+		                "StoreGateMomentCache",
+		                typename Kokkos::RangePolicy<DeviceType>(
+		                    0, local_chunk_size * local_alpha_moment_count),
+		                KOKKOS_LAMBDA(const int idx) {
+		                  const int ii = idx / local_alpha_moment_count;
+		                  const int k = idx - ii * local_alpha_moment_count;
+		                  const int atom_index =
+		                      d_local_ilist(ii + local_chunk_offset);
+		                  d_local_cache(atom_index, k) =
+		                      d_local_moments(ii, k);
+		                });
+		          }
+		        }
+		      }
 
 				      if (!direct_gate_chain) {
 			        for (int signal = 0; signal < gate_signal_stride; signal++) {
@@ -2257,8 +2368,42 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		      EV_FLOAT ev_tmp;
 		      if (chunk_size > inum - chunk_offset) chunk_size = inum - chunk_offset;
 		      profile_begin();
-		      Kokkos::deep_copy(d_moment_tensor_vals, moment_buffer_value_type(0));
-		      Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments, nbh_der_buffer_value_type(0));
+		      if (outer_k_rank_enabled) {
+		        // The main rank graph consumes the raw SH basics and the closed
+		        // outer suffix.  The serialized gate-only interval between them is
+		        // not read by either the forward or transpose pass.
+		        const int local_chunk_size = chunk_size;
+		        const int raw_width = alpha_index_basic_count;
+		        const int suffix_begin = outer_k_rank_basic_begin;
+		        const int suffix_width = alpha_moment_count - suffix_begin;
+		        const int active_width = raw_width + suffix_width;
+		        auto d_local_moments = d_moment_tensor_vals;
+		        auto d_local_moment_ders = d_nbh_energy_ders_wrt_moments;
+		        using clear_policy = Kokkos::TeamPolicy<DeviceType>;
+		        using clear_member = typename clear_policy::member_type;
+		        Kokkos::parallel_for(
+		            "ClearRankOuterMainBuffers",
+		            clear_policy(active_width, Kokkos::AUTO),
+		            KOKKOS_LAMBDA(const clear_member &team) {
+		              const int active_k = team.league_rank();
+		              const int k = active_k < raw_width
+		                  ? active_k
+		                  : suffix_begin + active_k - raw_width;
+		              Kokkos::parallel_for(
+		                  Kokkos::TeamThreadRange(team, local_chunk_size),
+		                  [&](const int ii) {
+		                    d_local_moments(ii, k) =
+		                        moment_buffer_value_type(0);
+		                    d_local_moment_ders(ii, k) =
+		                        nbh_der_buffer_value_type(0);
+		                  });
+		            });
+		      } else {
+		        Kokkos::deep_copy(d_moment_tensor_vals,
+		                          moment_buffer_value_type(0));
+		        Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+		                          nbh_der_buffer_value_type(0));
+		      }
 		      profile_end(prof_main_clear);
 
 	      int team_size = alpha_basic_team_size;
@@ -2402,15 +2547,55 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 					      while (chunk_offset < inum) {
 					        if (chunk_size > inum - chunk_offset) chunk_size = inum - chunk_offset;
 					        double detail_t0 = profile_detail_begin();
-					        Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
-					                          nbh_der_buffer_value_type(0));
+		        if (outer_k_rank_enabled) {
+		          const int local_chunk_size = chunk_size;
+		          const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		          auto d_local_moment_ders = d_nbh_energy_ders_wrt_moments;
+		          using clear_policy = Kokkos::TeamPolicy<DeviceType>;
+		          using clear_member = typename clear_policy::member_type;
+		          Kokkos::parallel_for(
+		              "ClearRankGateChainAdjoints",
+		              clear_policy(prefix_width, Kokkos::AUTO),
+		              KOKKOS_LAMBDA(const clear_member &team) {
+		                const int k = team.league_rank();
+		                Kokkos::parallel_for(
+		                    Kokkos::TeamThreadRange(team, local_chunk_size),
+		                    [&](const int ii) {
+		                      d_local_moment_ders(ii, k) =
+		                          nbh_der_buffer_value_type(0);
+		                    });
+		              });
+		        } else {
+		          Kokkos::deep_copy(d_nbh_energy_ders_wrt_moments,
+		                            nbh_der_buffer_value_type(0));
+		        }
 					        profile_detail_end(detail_t0, prof_chain_clear);
 					        if (use_gate_moment_cache) {
 					          // Reverse product kernels read per-atom cached moments directly.
 					        } else {
 					          detail_t0 = profile_detail_begin();
-					          Kokkos::deep_copy(d_moment_tensor_vals,
-					                            moment_buffer_value_type(0));
+		          if (outer_k_rank_enabled) {
+		            const int local_chunk_size = chunk_size;
+		            const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		            auto d_local_moments = d_moment_tensor_vals;
+		            using clear_policy = Kokkos::TeamPolicy<DeviceType>;
+		            using clear_member = typename clear_policy::member_type;
+		            Kokkos::parallel_for(
+		                "ClearRankGateChainMoments",
+		                clear_policy(prefix_width, Kokkos::AUTO),
+		                KOKKOS_LAMBDA(const clear_member &team) {
+		                  const int k = team.league_rank();
+		                  Kokkos::parallel_for(
+		                      Kokkos::TeamThreadRange(team, local_chunk_size),
+		                      [&](const int ii) {
+		                        d_local_moments(ii, k) =
+		                            moment_buffer_value_type(0);
+		                      });
+		                });
+		          } else {
+		            Kokkos::deep_copy(d_moment_tensor_vals,
+		                              moment_buffer_value_type(0));
+		          }
 				          int chain_alpha_team_size = alpha_basic_team_size;
 				          int chain_alpha_vector_length = alpha_basic_vector_length;
 				          check_team_size_for<TagPairSUS2MTPComputeGateFirstLayer>(

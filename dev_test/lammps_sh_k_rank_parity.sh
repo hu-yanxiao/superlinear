@@ -13,6 +13,7 @@ CPU_MPI_RANKS="${CPU_MPI_RANKS:-1}"
 KOKKOS_MPI_RANKS="${KOKKOS_MPI_RANKS:-1}"
 MPI_RUN="${MPI_RUN:-mpirun}"
 KOKKOS_ARGS="${KOKKOS_ARGS:--k on g 1 -sf kk -pk kokkos neigh half newton on}"
+KOKKOS_CHUNKSIZE="${KOKKOS_CHUNKSIZE:-2048}"
 KEEP="${SUS2_SH_TEST_KEEP_TMP:-0}"
 
 usage() {
@@ -25,7 +26,8 @@ Usage: dev_test/lammps_sh_k_rank_parity.sh [options]
   --keep           retain temporary test files
 
 At least one of --cpu or --kokkos is required.  KOKKOS_ARGS may be overridden
-for a site-specific GPU/host Kokkos launch configuration.
+for a site-specific GPU/host Kokkos launch configuration.  KOKKOS_CHUNKSIZE
+may be set to a positive integer to exercise multi-chunk execution.
 EOF
 }
 
@@ -43,6 +45,10 @@ done
 if [[ -z "$CPU_LAMMPS_BIN" && -z "$KOKKOS_LAMMPS_BIN" ]]; then
   echo "provide --cpu and/or --kokkos" >&2
   usage >&2
+  exit 2
+fi
+if ! [[ "$KOKKOS_CHUNKSIZE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "KOKKOS_CHUNKSIZE must be a positive integer" >&2
   exit 2
 fi
 [[ -x "$MLP_BIN" ]] || { echo "MLP binary is not executable: $MLP_BIN" >&2; exit 2; }
@@ -245,7 +251,7 @@ make_input() {
   local model="$1" label="$2" style="$3"
   local style_args=""
   if [[ "$style" == sus2mtp/kk ]]; then
-    style_args="chunksize 2048"
+    style_args="chunksize $KOKKOS_CHUNKSIZE"
   fi
   cat > "$tmp_dir/in.$label" <<LAMMPS
 units metal

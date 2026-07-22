@@ -501,6 +501,7 @@ namespace LAMMPS_NS {
 	  int regression_coeffs_count;    // Total size of unified regression_coeffs array
 	  int basic_mu_group_count;       // Number of unique mu values in alpha_index_basic
 	  int two_layer_gate_product_limit = 0;
+	  int two_layer_gate_kk_moment_cache_width = 0;
 	  int outer_k_rank_kk_unit_weights = 0;
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;
