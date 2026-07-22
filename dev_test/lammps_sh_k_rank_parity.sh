@@ -14,6 +14,7 @@ KOKKOS_MPI_RANKS="${KOKKOS_MPI_RANKS:-1}"
 MPI_RUN="${MPI_RUN:-mpirun}"
 KOKKOS_ARGS="${KOKKOS_ARGS:--k on g 1 -sf kk -pk kokkos neigh half newton on}"
 KOKKOS_CHUNKSIZE="${KOKKOS_CHUNKSIZE:-2048}"
+PARITY_K_MAX="${SUS2_SH_PARITY_K_MAX:-4}"
 KEEP="${SUS2_SH_TEST_KEEP_TMP:-0}"
 
 usage() {
@@ -28,6 +29,8 @@ Usage: dev_test/lammps_sh_k_rank_parity.sh [options]
 At least one of --cpu or --kokkos is required.  KOKKOS_ARGS may be overridden
 for a site-specific GPU/host Kokkos launch configuration.  KOKKOS_CHUNKSIZE
 may be set to a positive integer to exercise multi-chunk execution.
+SUS2_SH_PARITY_K_MAX may be set to an integer >= 2 (default: 4); using 3
+exercises the Kokkos no-moment-cache recomputation path.
 EOF
 }
 
@@ -49,6 +52,10 @@ if [[ -z "$CPU_LAMMPS_BIN" && -z "$KOKKOS_LAMMPS_BIN" ]]; then
 fi
 if ! [[ "$KOKKOS_CHUNKSIZE" =~ ^[1-9][0-9]*$ ]]; then
   echo "KOKKOS_CHUNKSIZE must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "$PARITY_K_MAX" =~ ^[0-9]+$ ]] || ((PARITY_K_MAX < 2)); then
+  echo "SUS2_SH_PARITY_K_MAX must be an integer >= 2" >&2
   exit 2
 fi
 [[ -x "$MLP_BIN" ]] || { echo "MLP binary is not executable: $MLP_BIN" >&2; exit 2; }
@@ -119,7 +126,7 @@ Atoms # atomic
 DATA
 
 common_init=(
-  --species-count=2 --l-max=4 --k-max=4 --body-order=6
+  --species-count=2 --l-max=4 --k-max="$PARITY_K_MAX" --body-order=6
   --body-l-max=4,4,4,2,1 --radial-basis-size=4
   --radial-basis-type=RBChebyshev_sss --cutoff=5.0
   --sh-factor-pruning=q-total --two-layer-gate
@@ -135,11 +142,13 @@ prepare_model() {
   local model="$tmp_dir/$name.lmp.mtp"
   "$MLP_BIN" init-sh "$init" "${common_init[@]}" "$@" >/dev/null || return
   "$MLP_BIN" roundtrip-model-dev "$init" "$materialized" >/dev/null || return
-  python3 - "$materialized" "$model" "$name" <<'PY' || return
+  python3 - "$materialized" "$model" "$name" "$PARITY_K_MAX" <<'PY' || return
 import re
 import sys
 
-source, target, name = sys.argv[1:]
+source, target, name, kmax_text = sys.argv[1:]
+kmax = int(kmax_text)
+lmax = 4
 text = open(source, encoding="utf-8").read()
 number = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
 
@@ -185,13 +194,12 @@ if "outer-rank2" in name or "gate2-outer2" in name or "outer2-gate1" in name:
         for q in range(len(weights))])
 if "outer-rankK-identity" in name:
     weights = vector("outer_k_rank1_weights")
-    kmax = 4
-    rank = 4
-    expected = (kmax + 1) * rank * kmax
+    rank = kmax
+    expected = (lmax + 1) * rank * kmax
     if len(weights) != expected:
         raise SystemExit(f"{name}: unexpected rank-K weight count {len(weights)}")
     identity = []
-    for l in range(kmax + 1):
+    for l in range(lmax + 1):
         for channel in range(rank):
             for k in range(kmax):
                 identity.append(1.0 if channel == k else 0.0)
@@ -313,7 +321,7 @@ models=()
 model="$(prepare_model rank0)" || exit 1; models+=("$model")
 model="$(prepare_model outer-rank1-direct --outer-k-rank=1)" || exit 1; models+=("$model")
 model="$(prepare_model outer-rank2 --outer-k-rank=2)" || exit 1; models+=("$model")
-model="$(prepare_model outer-rankK-identity --outer-k-rank=4)" || exit 1; models+=("$model")
+model="$(prepare_model outer-rankK-identity --outer-k-rank="$PARITY_K_MAX")" || exit 1; models+=("$model")
 model="$(prepare_model gate1-outer1 --outer-k-rank=1 --two-layer-gate-k-rank=1)" || exit 1; models+=("$model")
 model="$(prepare_model gate2-outer2 --outer-k-rank=2 --two-layer-gate-k-rank=2)" || exit 1; models+=("$model")
 model="$(prepare_model outer2-gate1 --outer-k-rank=2 --two-layer-gate-k-rank=1)" || exit 1; models+=("$model")

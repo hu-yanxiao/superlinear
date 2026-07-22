@@ -536,6 +536,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   SUS2GateCache::CompactLayout compact_gate_cache_layout;
 
   if (two_layer_gate_enabled) {
+    if (env_gate_enabled)
+      error->all(
+          FLERR,
+          "LAMMPS SUS2-SH two-layer gate cannot be combined with env_gate.");
     if (two_layer_gate_center_enabled)
       error->all(FLERR,
                  "Pair sus2mtp/kk does not support center two-layer gate models; use CPU pair_style sus2mtp.");
@@ -651,6 +655,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	      two_layer_gate_product_limit > alpha_index_times_count)
 	    error->all(FLERR, "SUS2-SH Kokkos gate product limit is inconsistent.");
 	  two_layer_gate_kk_moment_cache_width = alpha_moment_count;
+	  two_layer_gate_kk_active_moment_width = alpha_moment_count;
 	  two_layer_gate_kk_cache_slot_count = 0;
 	  two_layer_gate_kk_cache_product_end = 0;
 	  two_layer_gate_kk_compact_cache_enabled = 0;
@@ -693,6 +698,38 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	      error->all(
 	          FLERR,
 	          "SUS2-SH Kokkos compact gate-cache product range is invalid.");
+	    std::string active_width_reason;
+	    const bool edge_l1_active = two_layer_gate_edge_l1_active();
+	    if (!SUS2GateCache::build_active_moment_width(
+	            alpha_times_a0, alpha_times_a1, alpha_times_out,
+	            two_layer_gate_kk_cache_product_end,
+	            alpha_index_basic_count,
+	            two_layer_gate_kk_moment_cache_width,
+	            two_layer_gate_scalar_moment_indices.data(),
+	            static_cast<int>(two_layer_gate_scalar_moment_indices.size()),
+	            edge_l1_active
+	                ? two_layer_gate_edge_l1_source_moment_indices.data()
+	                : nullptr,
+	            edge_l1_active
+	                ? static_cast<int>(
+	                      two_layer_gate_edge_l1_source_moment_indices.size())
+	                : 0,
+	            two_layer_gate_k_rank > 0
+	                ? two_layer_gate_k_rank_basic_begin : 0,
+	            two_layer_gate_k_rank > 0
+	                ? two_layer_gate_k_rank_basic_count : 0,
+	            two_layer_gate_k_rank > 0
+	                ? two_layer_gate_k_rank_raw_basic_indices.data() : nullptr,
+	            two_layer_gate_k_rank > 0
+	                ? static_cast<int>(
+	                      two_layer_gate_k_rank_raw_basic_indices.size())
+	                : 0,
+	            two_layer_gate_kk_active_moment_width,
+	            active_width_reason))
+	      error->all(
+	          FLERR,
+	          "SUS2-SH Kokkos active gate-moment layout is invalid: {}",
+	          active_width_reason);
 	    if (two_layer_gate_enabled &&
 	        two_layer_gate_kk_cache_product_end > 0 &&
 	        two_layer_gate_kk_moment_cache_width <=
@@ -2229,7 +2266,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		        // direct_gate_chain is always active in this implementation, so its
 		        // derivative buffer is not read before the main-stage clear.
 		        const int local_chunk_size = chunk_size;
-		        const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		        const int prefix_width = two_layer_gate_kk_active_moment_width;
 		        auto d_local_moments = d_moment_tensor_vals;
 		        using clear_policy = Kokkos::TeamPolicy<DeviceType>;
 		        using clear_member = typename clear_policy::member_type;
@@ -2661,7 +2698,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 					        double detail_t0 = profile_detail_begin();
 		        if (outer_k_rank_enabled) {
 		          const int local_chunk_size = chunk_size;
-		          const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		          const int prefix_width = two_layer_gate_kk_active_moment_width;
 		          auto d_local_moment_ders = d_nbh_energy_ders_wrt_moments;
 		          using clear_policy = Kokkos::TeamPolicy<DeviceType>;
 		          using clear_member = typename clear_policy::member_type;
@@ -2688,7 +2725,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 					          detail_t0 = profile_detail_begin();
 		          if (outer_k_rank_enabled) {
 		            const int local_chunk_size = chunk_size;
-		            const int prefix_width = two_layer_gate_kk_moment_cache_width;
+		            const int prefix_width = two_layer_gate_kk_active_moment_width;
 		            auto d_local_moments = d_moment_tensor_vals;
 		            using clear_policy = Kokkos::TeamPolicy<DeviceType>;
 		            using clear_member = typename clear_policy::member_type;

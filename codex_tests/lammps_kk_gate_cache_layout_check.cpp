@@ -12,6 +12,7 @@
 namespace {
 
 using LAMMPS_NS::SUS2GateCache::CompactLayout;
+using LAMMPS_NS::SUS2GateCache::build_active_moment_width;
 using LAMMPS_NS::SUS2GateCache::build_compact_layout;
 using LAMMPS_NS::SUS2GateCache::kIndexMask;
 using LAMMPS_NS::SUS2GateCache::unpack_moment;
@@ -174,6 +175,115 @@ void CheckUniqueOperandsAndStableSlots()
   }
 }
 
+void CheckActiveMomentWidth()
+{
+  int width = -1;
+  std::string reason;
+
+  Require(build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && width == 4 && reason.empty(),
+          "raw-basic active width is incorrect");
+
+  const int product_a0[] = {9, 1, 1};
+  const int product_a1[] = {1, 10, 1};
+  const int product_out[] = {2, 2, 11};
+  Require(build_active_moment_width(
+              product_a0, product_a1, product_out, 3, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && width == 12,
+          "product a0/a1/out active width is incorrect");
+
+  const int scalars[] = {3, 15};
+  Require(build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              scalars, 2, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && width == 16,
+          "scalar active width is incorrect");
+
+  const int edge_bases[] = {5, 17};
+  Require(build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, edge_bases, 2, 0, 0, nullptr, 0,
+              width, reason) && width == 20,
+          "edge-L1 active width is incorrect");
+
+  const int rank_raw[] = {0, 1, 2, 3};
+  Require(build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 8, 7, rank_raw, 4,
+              width, reason) && width == 15,
+          "unused rank-contracted tail was omitted from active width");
+
+  // Current outer-rank2 million-atom model: the executed gate graph and
+  // scalar readout touch no moment above 2520 inside the 3313-wide prefix.
+  const int current_a0[] = {0, 100, 2200};
+  const int current_a1[] = {1, 1500, 2400};
+  const int current_out[] = {100, 2300, 2500};
+  const int current_scalars[] = {96, 2520};
+  Require(build_active_moment_width(
+              current_a0, current_a1, current_out, 3, 100, 3313,
+              current_scalars, 2, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && width == 2521,
+          "current outer-rank2 active width changed");
+
+  const int out_of_boundary[] = {20};
+  Require(!build_active_moment_width(
+              product_a0, product_a1, out_of_boundary, 1, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty() && width == 20,
+          "out-of-bound product did not preserve the full-width fallback");
+  const int bad_edge[] = {18};
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, bad_edge, 1, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty(),
+          "overflowing edge-L1 triplet was accepted");
+  const int bad_raw[] = {4};
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 8, 3, bad_raw, 1,
+              width, reason) && !reason.empty(),
+          "out-of-range rank raw basic was accepted");
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 19, 2, rank_raw, 4,
+              width, reason) && !reason.empty(),
+          "overflowing rank-contracted range was accepted");
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, rank_raw, 4,
+              width, reason) && !reason.empty(),
+          "incomplete rank active-width metadata was accepted");
+
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, -1, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty() && width == 20,
+          "negative active product count did not preserve full width");
+  Require(!build_active_moment_width(
+              nullptr, product_a1, product_out, 1, 4, 20,
+              nullptr, 0, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty() && width == 20,
+          "missing active product array was accepted");
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 1, nullptr, 0, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty() && width == 20,
+          "missing active scalar array was accepted");
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 1, 0, 0, nullptr, 0,
+              width, reason) && !reason.empty() && width == 20,
+          "missing active edge-L1 array was accepted");
+  Require(!build_active_moment_width(
+              nullptr, nullptr, nullptr, 0, 4, 20,
+              nullptr, 0, nullptr, 0, 8, 1, nullptr, 1,
+              width, reason) && !reason.empty() && width == 20,
+          "missing active rank raw-basic array was accepted");
+}
+
 void CheckCurrentOuterRank2ScaleWithoutModelData()
 {
   // The current million-atom outer-rank2 model's gate dependency closure has
@@ -300,6 +410,29 @@ void CheckListOrdinalChunkRows()
 
 void CheckSourceGuard(const std::string &source)
 {
+  const std::size_t active_call = source.find(
+      "SUS2GateCache::build_active_moment_width(");
+  Require(active_call != std::string::npos,
+          "active gate-moment width construction is missing");
+  const std::string active_context = source.substr(active_call, 1800);
+  Require(active_context.find("two_layer_gate_kk_cache_product_end") !=
+              std::string::npos,
+          "active width does not scan the full executed gate product range");
+  Require(CountOccurrences(
+              source,
+              "const int prefix_width = "
+              "two_layer_gate_kk_active_moment_width;") == 3,
+          "one of the three ranked gate clears lost the active width");
+  Require(source.find(
+              "direct_gate_chain && sh_k_max >= 4 && sh_l_max >= 3") !=
+              std::string::npos,
+          "K=3 parity no longer guarantees the no-moment-cache path");
+  Require(CountOccurrences(
+              source,
+              "LAMMPS SUS2-SH two-layer gate cannot be combined with "
+              "env_gate.") == 1,
+          "Kokkos env-gate/two-layer rejection is missing or duplicated");
+
   Require(CountOccurrences(
               source, "const int cache_row = ii + chunk_offset;") == 1,
           "compact gate-cache backprop lost its list-ordinal cache row");
@@ -369,6 +502,7 @@ int main(int argc, char **argv)
   Require(argc == 2,
           "usage: lammps_kk_gate_cache_layout_check <pair_sus2_mtp_kokkos.cpp>");
   CheckUniqueOperandsAndStableSlots();
+  CheckActiveMomentWidth();
   CheckCurrentOuterRank2ScaleWithoutModelData();
   CheckInvalidInputsAndPackedDomainFallback();
   CheckListOrdinalChunkRows();

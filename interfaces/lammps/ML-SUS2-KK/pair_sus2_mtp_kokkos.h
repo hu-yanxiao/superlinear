@@ -511,6 +511,7 @@ namespace LAMMPS_NS {
 	  int basic_mu_group_count;       // Number of unique mu values in alpha_index_basic
 	  int two_layer_gate_product_limit = 0;
 	  int two_layer_gate_kk_moment_cache_width = 0;
+	  int two_layer_gate_kk_active_moment_width = 0;
 	  int two_layer_gate_kk_cache_slot_count = 0;
 	  int two_layer_gate_kk_cache_product_end = 0;
 	  int two_layer_gate_kk_compact_cache_enabled = 0;
