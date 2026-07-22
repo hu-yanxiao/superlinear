@@ -117,8 +117,9 @@ Common training options:
 | `--valid-cfgs=<path>` | Optional validation CFG file. |
 | `--optimizer=bfgs|lbfgs` | Nonlinear optimizer. The default remains dense BFGS; L-BFGS is an independent opt-in path. |
 | `--max-iter=<int>` | Maximum accepted optimizer iterations, default `1000`. |
-| `--curr-pot-name=<path>` | Save current model during training. |
-| `--trained-pot-name=<path>` | Final trained model path, default `Trained.mtp_`. |
+| `--curr-pot-name=<path>` | Atomically save the latest evaluated and accepted model during training. |
+| `--best-pot-name=<path>` | Atomically save the best fully evaluated boundary/accepted model. By default a `.best.mtp` path is derived from `--curr-pot-name`; an existing best file is copied to a timestamped archive before a new run writes it. It must not alias the current or final-model path. |
+| `--trained-pot-name=<path>` | Atomically save the final trained model, default `Trained.mtp_`. |
 | `--optimizer-conv-tol=<double>` | Generic alias for `--bfgs-conv-tol`. |
 | `--optimizer-trace-file=<path>` | Generic alias for `--bfgs-trace-file`. L-BFGS traces include curvature/history diagnostics. |
 | `--optimizer-line-search=wolfe|armijo-value` | Generic line-search selector. L-BFGS supports value-only Armijo; BFGS retains its historical Wolfe default. |

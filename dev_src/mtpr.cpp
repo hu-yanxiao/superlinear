@@ -5317,6 +5317,8 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 void MLMTPR::Save(const string& filename)
 {
 	ofstream ofs(filename);
+	if (!ofs.is_open())
+		ERROR("MLMTPR::Save(): Cannot open file \"" + filename + "\"");
 	ofs.setf(ios::scientific);
 	ofs.precision(15);
 
@@ -5840,7 +5842,12 @@ void MLMTPR::Save(const string& filename)
 	}
 	ofs << '}';
 
+	ofs.flush();
+	if (!ofs.good())
+		ERROR("MLMTPR::Save(): Failed while writing file \"" + filename + "\"");
 	ofs.close();
+	if (ofs.fail())
+		ERROR("MLMTPR::Save(): Failed while closing file \"" + filename + "\"");
 }
 
 

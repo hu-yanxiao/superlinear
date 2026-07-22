@@ -568,6 +568,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"    --valid-cfgs=<string>: filename with configuration to validate\n"
 		"    --max-iter=<int>: maximal number of iterations. Default=1000\n"
 		"    --curr-pot-name=<string>: save potential on each iteration if <string> not empty.\n"
+		"    --best-pot-name=<string>: best fully evaluated boundary/accepted model path. By default,\n"
+		"                              derive a .best.mtp path from --curr-pot-name and archive older best files.\n"
 		"    --trained-pot-name=<string>: filename for trained potential. Default=Trained.mtp_\n"
                 "    --distribution-weight=<double>: weight of distribution in fitting. Default=1\n"
 		"    --std-weight=<double>: weight of joint std regularization term.\n"

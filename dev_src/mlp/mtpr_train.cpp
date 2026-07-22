@@ -22,6 +22,7 @@
 
 #include "mtpr_train.h"
 #include "../sh_model_init.h"
+#include "../optimizer_checkpoint.h"
 #include "../../src/zbl.h"
 
 using namespace std;
@@ -1774,6 +1775,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	string curr_fnm = "";
 	if (opts["curr-pot-name"] != "")
 		curr_fnm = opts["curr-pot-name"];
+	string best_fnm = "";
+	if (opts["best-pot-name"] != "")
+		best_fnm = opts["best-pot-name"];
 
 	string optimizer_trace_fnm = "";
 	if (opts["optimizer-trace-file"] != "")
@@ -1788,6 +1792,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	string trained_fnm = "Trained.mtp_";
 	if (opts["trained-pot-name"] != "")
 		trained_fnm = opts["trained-pot-name"];
+	const string resolved_cli_best_fnm = best_fnm.empty()
+		? sus2::DefaultBestCheckpointPath(curr_fnm)
+		: best_fnm;
+	if (sus2::CheckpointDestinationsAlias(resolved_cli_best_fnm, curr_fnm))
+		ERROR("--best-pot-name must differ from --curr-pot-name");
+	if (sus2::CheckpointDestinationsAlias(resolved_cli_best_fnm, trained_fnm))
+		ERROR("--best-pot-name must differ from --trained-pot-name");
 
 	string optimizer_kind = "bfgs";
 	if (opts["optimizer"] != "")
@@ -2333,6 +2344,43 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 #ifdef MLIP_MPI
 	MPI_Barrier(MPI_COMM_WORLD);
 #endif
+	auto save_model_atomically_collective = [&]
+		(const std::string& path, const std::string& context) {
+		int save_failed = 0;
+		std::string save_error;
+		if (prank == 0) {
+			try {
+				sus2::AtomicWriteCheckpoint(
+					path,
+					[&](const std::string& temporary) {
+						mtpr.Save(temporary);
+					});
+			} catch (const MlipException& exception) {
+				save_failed = 1;
+				save_error = exception.What();
+			} catch (const std::exception& exception) {
+				save_failed = 1;
+				save_error = exception.what();
+			} catch (...) {
+				save_failed = 1;
+				save_error = "unknown model-save exception";
+			}
+		}
+#ifdef MLIP_MPI
+		MPI_Bcast(&save_failed, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		int error_length = prank == 0
+			? static_cast<int>(save_error.size())
+			: 0;
+		MPI_Bcast(&error_length, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		if (prank != 0)
+			save_error.resize(error_length);
+		if (error_length > 0)
+			MPI_Bcast(
+				&save_error[0], error_length, MPI_CHAR, 0, MPI_COMM_WORLD);
+#endif
+		if (save_failed != 0)
+			ERROR("Atomic model save failed during " + context + ": " + save_error);
+	};
 
 	MTPR_trainer trainer(&mtpr, weight_energy, weight_force, weight_stress, scale_by_force, 1e-9, curr_fnm, 0);
 	//LOSS FUNCTIONAL MODIFICATION!!!
@@ -2353,6 +2401,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.bfgs_coordinate_probes = bfgs_coordinate_probes;
 	trainer.bfgs_coordinate_floor = bfgs_coordinate_floor;
 	trainer.curr_pot_name = curr_fnm;
+	trainer.best_pot_name = best_fnm;
 	trainer.bfgs_trace_file = optimizer_trace_fnm;
 	trainer.lbfgs_history_size = lbfgs_history_size;
 	trainer.lbfgs_curvature_tolerance = lbfgs_curvature_tolerance;
@@ -2767,12 +2816,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "[" << CurrentTimestamp() << "] "
 			          << "Readout-only residual linear initialization done"
 			          << std::endl;
-			if (maxits == 0) {
-				mtpr.Save(trained_fnm);
+		}
+		if (maxits == 0) {
+			save_model_atomically_collective(
+				trained_fnm, "readout-only initialized model");
+			if (prank == 0)
 				std::cout << "[" << CurrentTimestamp() << "] "
 				          << "Readout-only initialized model saved to "
 				          << trained_fnm << std::endl;
-			}
 		}
 	}
 	const bool run_initial_untrained_linear_warmup =
@@ -2807,12 +2858,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 //		                                                mtpr.Save_2("unfixed1.mtp");
 //		                                                                  
 //
-               if (prank == 0){
-			std::cout << "[" << CurrentTimestamp() << "] Saving ini.mtp start" << std::endl;
-                        mtpr.Save("ini.mtp");
-			std::cout << "[" << CurrentTimestamp() << "] Saving ini.mtp done" << std::endl;
-                      
-                      }
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp()
+			          << "] Saving ini.mtp start" << std::endl;
+		save_model_atomically_collective("ini.mtp", "initial model");
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp()
+			          << "] Saving ini.mtp done" << std::endl;
 
 	       if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Entering Rescale" << std::endl;
@@ -3012,10 +3064,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
   //              trainer.Train(training_set);
    //             if (prank == 0) {mtpr.Save("loop_4.mtp");}
 
-		if (prank == 0){
-			mtpr.Save(trained_fnm);
+		save_model_atomically_collective(trained_fnm, "final trained model");
      //                   mtpr.Save_2("unfixed1.mtp");
-                      }
      //           Rescale(trainer, mtpr);
      //           if (prank==0){ mtpr.Save_2("unfixed2.mtp");
       //                 }

@@ -10,6 +10,7 @@
 #include "../src/common/stdafx.h"
 #include "non_linear_regression.h"
 #include "mtpr.h"
+#include "optimizer_checkpoint.h"
 #include "../src/common/bfgs.h"
 #include "../src/common/lbfgs.h"
 #include <vector>
@@ -57,6 +58,9 @@ private:
 	Array1D bfgs_g;
 	TrainErrorSummary last_train_error_summary_;
 	bool have_last_train_error_summary_ = false;
+	sus2::BestAcceptedCheckpoint best_accepted_checkpoint_;
+	std::string resolved_best_checkpoint_path_;
+	bool existing_best_checkpoint_prepared_ = false;
 	bool HasFixedAtomicEnergies() const;
 	void ValidateFixedAtomicEnergies() const;
 	double FixedAtomicEnergySum(const Configuration& cfg) const;
@@ -86,6 +90,7 @@ private:
 
 public:
 	std::string curr_pot_name="";
+	std::string best_pot_name="";
 	std::string bfgs_trace_file="";
 	int max_step_count = 2000;
 	double linstop = 1e-8;

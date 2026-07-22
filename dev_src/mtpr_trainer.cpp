@@ -10,6 +10,7 @@
 
 #include "mtpr_trainer.h"
 #include "optimizer_accepted_state.h"
+#include "optimizer_checkpoint.h"
 #include "diagonal_coordinate_scaling.h"
 #include "radial_weight_norm.h"
 
@@ -33,6 +34,8 @@
 #include <array>
 #include <cstdint>
 #include <exception>
+#include <functional>
+#include <iomanip>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -49,6 +52,14 @@ std::string CurrentTimestamp()
 	std::time_t now = std::time(nullptr);
 	char buf[32];
 	std::strftime(buf, sizeof(buf), "%F %T", std::localtime(&now));
+	return std::string(buf);
+}
+
+std::string CurrentFilenameTimestamp()
+{
+	std::time_t now = std::time(nullptr);
+	char buf[32];
+	std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", std::localtime(&now));
 	return std::string(buf);
 }
 
@@ -2693,6 +2704,39 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		};
 	bool freeze_species_coeffs = do_lin && do_lin_step_limit > 0;
 	sus2::OptimizerAcceptedState accepted_state(n);
+	const std::string requested_best_pot_name = best_pot_name.empty()
+		? sus2::DefaultBestCheckpointPath(curr_pot_name)
+		: best_pot_name;
+	if (resolved_best_checkpoint_path_.empty())
+		resolved_best_checkpoint_path_ = requested_best_pot_name;
+	else if (resolved_best_checkpoint_path_ != requested_best_pot_name)
+		ERROR("Best checkpoint path changed between optimizer stages");
+	if (sus2::CheckpointDestinationsAlias(
+	        resolved_best_checkpoint_path_, curr_pot_name))
+		ERROR("Best and current checkpoint paths must differ");
+	auto save_potential_atomically_root = [&](const std::string& path) {
+		if (path.empty())
+			return;
+		sus2::AtomicWriteCheckpoint(path, [&](const std::string& temporary) {
+			p_mlmtpr->Save(temporary);
+		});
+	};
+	auto prepare_best_checkpoint = [&]() {
+		if (existing_best_checkpoint_prepared_
+		    || resolved_best_checkpoint_path_.empty())
+			return;
+		const std::string archive = sus2::ArchiveExistingCheckpoint(
+			resolved_best_checkpoint_path_,
+			".previous-" + CurrentFilenameTimestamp());
+		if (!archive.empty() && prank == 0) {
+			std::cerr << "[" << CurrentTimestamp() << "] "
+			          << optimizer_log_name
+			          << " archived existing best checkpoint"
+			          << " source=" << resolved_best_checkpoint_path_
+			          << " archive=" << archive << std::endl;
+		}
+		existing_best_checkpoint_prepared_ = true;
+	};
 	auto save_last_accepted_coeffs = [&]() {
 		accepted_state.SetBoundaryBase(x);
 	};
@@ -2877,6 +2921,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	mask_frozen_coordinates(freeze_species_coeffs);
 	save_last_accepted_coeffs();
+	if (prank == 0
+	    && (!curr_pot_name.empty() || !resolved_best_checkpoint_path_.empty())) {
+		std::cout << "[" << CurrentTimestamp() << "] "
+		          << optimizer_log_name << " checkpoint safety enabled"
+		          << " current="
+		          << (curr_pot_name.empty() ? "disabled" : curr_pot_name)
+		          << " best="
+		          << (resolved_best_checkpoint_path_.empty()
+		                  ? "disabled"
+		                  : resolved_best_checkpoint_path_)
+		          << " writes=atomic accepted-only" << std::endl;
+	}
 	if (prank == 0 && freeze_scal_coeffs) {
 		std::cout << "[" << CurrentTimestamp() << "] "
 		          << "scal_coeffs excluded from " << optimizer_log_name << " coordinates"
@@ -2968,6 +3024,66 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (global_status != 0)
 			ERROR(message);
 	};
+	auto run_root_checkpoint_io_collective = [&]
+		(const std::string& context, const std::function<void()>& root_action) {
+		int io_failed = 0;
+		std::string io_error;
+		if (prank == 0) {
+			try {
+				root_action();
+			} catch (const MlipException& exception) {
+				io_failed = 1;
+				io_error = exception.What();
+			} catch (const std::exception& exception) {
+				io_failed = 1;
+				io_error = exception.what();
+			} catch (...) {
+				io_failed = 1;
+				io_error = "unknown checkpoint I/O exception";
+			}
+		}
+#ifdef MLIP_MPI
+		MPI_Bcast(&io_failed, 1, MPI_INT, 0, train_comm);
+		int error_length = prank == 0
+			? static_cast<int>(io_error.size())
+			: 0;
+		MPI_Bcast(&error_length, 1, MPI_INT, 0, train_comm);
+		if (prank != 0)
+			io_error.resize(error_length);
+		if (error_length > 0)
+			MPI_Bcast(&io_error[0], error_length, MPI_CHAR, 0, train_comm);
+#endif
+		if (io_failed != 0)
+			ERROR("Checkpoint I/O failed during " + context + ": " + io_error);
+	};
+	auto update_best_checkpoint_collective = [&]
+		(double root_loss, int step, const std::string& point_kind) {
+		int update_best = 0;
+		if (prank == 0 && !resolved_best_checkpoint_path_.empty())
+			update_best = best_accepted_checkpoint_.Observe(root_loss, step) ? 1 : 0;
+#ifdef MLIP_MPI
+		MPI_Bcast(&update_best, 1, MPI_INT, 0, train_comm);
+#endif
+		if (update_best == 0)
+			return;
+		run_root_checkpoint_io_collective(
+			"best accepted model at step " + std::to_string(step),
+			[&]() {
+				prepare_best_checkpoint();
+				save_potential_atomically_root(resolved_best_checkpoint_path_);
+			});
+		if (prank == 0) {
+			std::cerr << "[" << CurrentTimestamp() << "] "
+			          << optimizer_log_name
+			          << " best checkpoint updated"
+			          << " kind=" << point_kind
+			          << " step=" << step
+			          << " total_loss=" << std::setprecision(17)
+			          << root_loss
+			          << " path=" << resolved_best_checkpoint_path_
+			          << std::endl;
+		}
+	};
 	auto require_finite_coeffs_all = [&](const std::string& context) {
 		const int local_status = FirstNonFinite(p_mlmtpr->Coeff(), n) >= 0 ? 1 : 0;
 		abort_if_any_rank_reports(local_status, context + ": non-finite MTPR coefficients detected.");
@@ -2997,6 +3113,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		{
 			bool restarted_rejected_linesearch_this_iteration = false;
 			bool accepted_evaluated_point_this_iteration = false;
+			bool evaluated_boundary_base_this_iteration = false;
 			//if (prank==0)
 			//cout << "itr" << endl;
 
@@ -3091,6 +3208,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				// Initial state, or an intentional boundary reset/refresh.  This is
 				// now the base to which a rejected line search must return.
 				save_last_accepted_coeffs();
+				evaluated_boundary_base_this_iteration = true;
 			}
 			mask_frozen_coordinates(freeze_species_coeffs);
 		}
@@ -3295,6 +3413,27 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				}
 			}
 
+			if (evaluated_boundary_base_this_iteration
+			    && !armijo_value_trial_rejected) {
+				int boundary_status = 0;
+				if (prank == 0) {
+					boundary_status =
+						!std::isfinite(bfgs_f)
+						|| FirstNonFinite(&bfgs_g[0], opt_n) >= 0
+						|| FirstNonFinite(
+							p_mlmtpr->Coeff(), p_mlmtpr->CoeffCount()) >= 0;
+				}
+				abort_if_any_rank_reports(
+					boundary_status,
+					"Non-finite evaluated optimizer boundary at step "
+						+ std::to_string(num_step)
+						+ "; refusing to write best potential.");
+				update_best_checkpoint_collective(
+					prank == 0 ? bfgs_f : 0.0,
+					num_step,
+					"evaluated-boundary");
+			}
+
 			if (!armijo_value_trial_rejected
 			    && (optimizer_replicated || prank == 0) && !converge) {
 			const int bad_grad_active_idx = FirstNonFinite(&bfgs_g[0], opt_n);
@@ -3311,7 +3450,17 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				          << " gradient=" << bfgs_g[bad_grad_active_idx]
 				          << " coeff=" << x[bad_grad_full_idx]
 				          << " dump=" << dump_name << std::endl;
-				p_mlmtpr->Save(dump_name);
+				try {
+					save_potential_atomically_root(dump_name);
+				} catch (const MlipException& exception) {
+					std::cerr << "[" << CurrentTimestamp() << "] "
+					          << "non-finite diagnostic checkpoint failed: "
+					          << exception.What() << std::endl;
+				} catch (const std::exception& exception) {
+					std::cerr << "[" << CurrentTimestamp() << "] "
+					          << "non-finite diagnostic checkpoint failed: "
+					          << exception.what() << std::endl;
+				}
 			}
 		}
 
@@ -3347,8 +3496,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 								logstrm1 << " " << detail;
 							logstrm1 << endl;
 							MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
-							if (curr_pot_name != "")
-								p_mlmtpr->Save(curr_pot_name);
+						}
+						if (!curr_pot_name.empty()) {
+							run_root_checkpoint_io_collective(
+								"restored accepted model at step "
+									+ std::to_string(num_step),
+								[&]() {
+									save_potential_atomically_root(curr_pot_name);
+								});
 						}
 						return;
 					}
@@ -3369,8 +3524,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 							logstrm1 << " " << detail;
 						logstrm1 << endl;
 						MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
-						if (curr_pot_name != "")
-							p_mlmtpr->Save(curr_pot_name);
+					}
+					if (!curr_pot_name.empty()) {
+						run_root_checkpoint_io_collective(
+							"final restored accepted model at step "
+								+ std::to_string(num_step),
+							[&]() {
+								save_potential_atomically_root(curr_pot_name);
+							});
 					}
 				};
 
@@ -3673,7 +3834,6 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					if (!linesearch && !restarted_rejected_linesearch_this_iteration)
 				{
 					accepted_evaluated_point_this_iteration = true;
-					save_evaluated_accepted_coeffs(evaluated_coeffs.data());
 					// Optimizer.x is already the next trial.  Diagnostics and model
 					// checkpoints must instead see the point whose objective and
 					// gradient were evaluated and accepted above.
@@ -3817,12 +3977,22 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 			abort_if_any_rank_reports(accepted_status,
 					"Non-finite accepted " + optimizer_log_name + " state at step " + std::to_string(num_step)
-				+ "; refusing to write current potential.");
+					+ "; refusing to write current potential.");
+			save_evaluated_accepted_coeffs(evaluated_coeffs.data());
+			update_best_checkpoint_collective(
+				prank == 0 ? bfgs_f : 0.0,
+				num_step,
+				"accepted-trial");
+			if (!curr_pot_name.empty()) {
+				run_root_checkpoint_io_collective(
+					"latest accepted model at step " + std::to_string(num_step),
+					[&]() {
+						save_potential_atomically_root(curr_pot_name);
+					});
+			}
 
 			if (prank == 0)
 			{
-				if (curr_pot_name != "")
-					p_mlmtpr->Save(curr_pot_name);
 				if (bfgs_trace_stream.is_open()) {
 					bfgs_trace_stream << num_step << ','
 					                  << bfgs_f << ','
