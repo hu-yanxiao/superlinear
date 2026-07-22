@@ -145,6 +145,8 @@ namespace LAMMPS_NS {
 	                                                F_FLOAT &rho, F_FLOAT &rho_der) const;
 	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_mu_adjoint_kk(
 	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu) const;
+	  KOKKOS_INLINE_FUNCTION double two_layer_gate_mu_deriv_kk(
+	      const int jtype, const int mu) const;
 	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_mu_signal_kk(
 	      const int atom_index, const int mu) const;
 	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_edge_l1_projection_kk(
@@ -473,7 +475,6 @@ namespace LAMMPS_NS {
 		      d_two_layer_gate_cached_moment_vals;
 		  Kokkos::View<double ***, DeviceType> d_two_layer_gate_first_derivs;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_mu_multipliers;
-	  Kokkos::View<double **, DeviceType> d_two_layer_gate_mu_derivs;
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_weight_moment_indices;
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_body_bucket;
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_signal_index;

@@ -783,8 +783,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	                        "sus2mtp/kk:two_layer_gate_first_derivs", 1, 1, 3);
 	  MemKK::realloc_kokkos(d_two_layer_gate_mu_multipliers,
 	                        "sus2mtp/kk:two_layer_gate_mu_multipliers", 1, 1);
-	  MemKK::realloc_kokkos(d_two_layer_gate_mu_derivs,
-	                        "sus2mtp/kk:two_layer_gate_mu_derivs", 1, 1);
 	  if (two_layer_gate_enabled) {
 	    two_layer_gate_kk_signal_stride = two_layer_gate_signal_stride();
 	    two_layer_gate_kk_body_stride = std::max(0, two_layer_gate_body_order_max - 1);
@@ -1746,7 +1744,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 
 	  const int mu = d_basic_mu_values(mu_group);
 	  const F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(gate_atom_index, mu);
-	  const F_FLOAT gate_deriv = d_two_layer_gate_mu_derivs(gate_atom_index, mu);
+	  const F_FLOAT gate_deriv = two_layer_gate_mu_deriv_kk(jtype, mu);
 	  val = base_val * gate_multiplier;
 	  der = base_der * gate_multiplier;
 	  gate_residual_val = base_val * gate_deriv;
@@ -1865,6 +1863,15 @@ PairSUS2MTPKokkos<DeviceType>::accumulate_two_layer_gate_mu_adjoint_kk(
     Kokkos::atomic_add(&d_two_layer_gate_adjoints(adjoint_offset + group),
                        gate_adjoint_mu);
   }
+}
+
+template <class DeviceType>
+KOKKOS_INLINE_FUNCTION double
+PairSUS2MTPKokkos<DeviceType>::two_layer_gate_mu_deriv_kk(
+    const int jtype, const int mu) const
+{
+  return static_cast<double>(static_cast<F_FLOAT>(
+      d_two_layer_gate_additive_coeffs(jtype * radial_func_count + mu)));
 }
 
 template <class DeviceType>
@@ -2241,8 +2248,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	        (int) d_two_layer_gate_mu_multipliers.extent(1) < radial_func_count) {
 	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_mu_multipliers,
 	                      nmax, radial_func_count);
-	      Kokkos::realloc(Kokkos::WithoutInitializing, d_two_layer_gate_mu_derivs,
-	                      nmax, radial_func_count);
 	    }
 	    if (!direct_gate_chain &&
 	        ((int) d_two_layer_gate_first_derivs.extent(0) < inum ||
@@ -2479,7 +2484,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      auto d_body_mix_weights = d_two_layer_gate_body_mix_weights;
 	      auto d_full_signal_group = d_two_layer_gate_full_signal_group_for_mu;
 	      auto d_mu_multipliers = d_two_layer_gate_mu_multipliers;
-		      auto d_mu_derivs = d_two_layer_gate_mu_derivs;
 		      profile_begin();
 		      Kokkos::parallel_for(
 	          "ComputeGateMuCache",
@@ -2505,8 +2509,6 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	            const F_FLOAT additive_ratio = d_additive_coeffs(additive_index);
 	            d_mu_multipliers(atom_index, mu) =
 	                static_cast<F_FLOAT>(1.0) + additive_ratio * gate_signal;
-		            d_mu_derivs(atom_index, mu) =
-		                additive_ratio;
 		          });
 		      profile_end(prof_mu_cache);
 		    }
@@ -4296,8 +4298,8 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 			      if (two_layer_gate_kk_edge_l1_active) {
 			        const F_FLOAT edge_projection =
 			            two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
-			        gate_multiplier +=
-			            d_two_layer_gate_mu_derivs(j, mu) * edge_projection;
+		        gate_multiplier +=
+		            two_layer_gate_mu_deriv_kk(jtype, mu) * edge_projection;
 			      }
 			      s_radial_vals(thread, mu_group) =
 			          base_val * gate_multiplier;
@@ -4590,7 +4592,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	      }
 	      const int mu = d_basic_mu_values(mu_group);
 	      F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
-	      F_FLOAT gate_deriv = d_two_layer_gate_mu_derivs(j, mu);
+	      F_FLOAT gate_deriv = two_layer_gate_mu_deriv_kk(jtype, mu);
 	      if (two_layer_gate_kk_edge_l1_active) {
 	        const F_FLOAT edge_projection =
 	            two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
@@ -4792,7 +4794,7 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 	      }
 	      const int mu = d_basic_mu_values(mu_group);
 	      F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
-	      F_FLOAT gate_deriv = d_two_layer_gate_mu_derivs(j, mu);
+	      F_FLOAT gate_deriv = two_layer_gate_mu_deriv_kk(jtype, mu);
 	      if (edge_l1_active_local) {
 	        const F_FLOAT edge_projection =
 	            two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
