@@ -166,6 +166,9 @@ namespace LAMMPS_NS {
 	      const int atom_index) const;
 	  KOKKOS_INLINE_FUNCTION void backprop_two_layer_gate_products_kk(
 	      const int atom_index, const bool use_cached_moments) const;
+	  KOKKOS_INLINE_FUNCTION void
+	  backprop_two_layer_gate_products_compact_cached_kk(
+	      const int atom_index) const;
 
   // ---------- SUS2MTP routines (in order of execution) ----------
 
@@ -382,6 +385,12 @@ namespace LAMMPS_NS {
   Kokkos::View<int *, DeviceType> d_alpha_times_a0;
   Kokkos::View<int *, DeviceType> d_alpha_times_a1;
   Kokkos::View<int *, DeviceType> d_alpha_times_out;
+	  Kokkos::View<int *, DeviceType>
+	      d_two_layer_gate_cache_slot_to_moment;
+	  Kokkos::View<int *, DeviceType>
+	      d_two_layer_gate_cache_packed_a0;
+	  Kokkos::View<int *, DeviceType>
+	      d_two_layer_gate_cache_packed_a1;
   Kokkos::View<int *, DeviceType> d_alpha_moment_mapping;    // Maps alphas to basis functions.
   Kokkos::View<int *, DeviceType> d_alpha_basic_sh_index;     // Real-SH flat index for SUS2-SH basic alphas.
   Kokkos::View<double *, DeviceType> d_alpha_times_coeff;     // Tensor-product coefficient for SH products.
@@ -502,6 +511,9 @@ namespace LAMMPS_NS {
 	  int basic_mu_group_count;       // Number of unique mu values in alpha_index_basic
 	  int two_layer_gate_product_limit = 0;
 	  int two_layer_gate_kk_moment_cache_width = 0;
+	  int two_layer_gate_kk_cache_slot_count = 0;
+	  int two_layer_gate_kk_cache_product_end = 0;
+	  int two_layer_gate_kk_compact_cache_enabled = 0;
 	  int outer_k_rank_kk_unit_weights = 0;
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;

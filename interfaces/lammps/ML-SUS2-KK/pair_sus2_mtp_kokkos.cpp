@@ -17,6 +17,8 @@
 
 #include "pair_sus2_mtp_kokkos.h"
 
+#include "sus2_mtp_gate_cache_layout.h"
+
 #include "atom_kokkos.h"
 #include "atom_masks.h"
 #include "comm.h"
@@ -518,6 +520,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 
   if (!found_chunksize)
     error->all(FLERR, "Pair sus2mtp/kk requires the keyword \"chunksize\".");
+  if (input_chunk_size <= 0)
+    error->all(FLERR, "Pair sus2mtp/kk chunksize must be positive.");
 
   char *base_args[3] = {arg[0], nullptr, nullptr};
   int base_narg = 1;
@@ -528,6 +532,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 
   PairSUS2MTP::settings(
       base_narg, base_args);    // This also calls read_file which parses and loads the arrays in host
+
+  SUS2GateCache::CompactLayout compact_gate_cache_layout;
 
   if (two_layer_gate_enabled) {
     if (two_layer_gate_center_enabled)
@@ -645,6 +651,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	      two_layer_gate_product_limit > alpha_index_times_count)
 	    error->all(FLERR, "SUS2-SH Kokkos gate product limit is inconsistent.");
 	  two_layer_gate_kk_moment_cache_width = alpha_moment_count;
+	  two_layer_gate_kk_cache_slot_count = 0;
+	  two_layer_gate_kk_cache_product_end = 0;
+	  two_layer_gate_kk_compact_cache_enabled = 0;
 	  if (outer_k_rank_enabled) {
 	    // Rank models serialize the gate graph as a closed prefix and the outer
 	    // graph as a closed suffix.  The Kokkos first-layer cache only needs the
@@ -676,7 +685,51 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	            FLERR,
 	            "SUS2-SH Kokkos gate scalar lies outside the gate graph prefix.");
 	    two_layer_gate_kk_moment_cache_width = outer_k_rank_basic_begin;
+	    two_layer_gate_kk_cache_product_end = two_layer_gate_k_rank > 0
+	        ? two_layer_gate_k_rank_product_end
+	        : two_layer_gate_product_limit;
+	    if (two_layer_gate_kk_cache_product_end < 0 ||
+	        two_layer_gate_kk_cache_product_end > alpha_index_times_count)
+	      error->all(
+	          FLERR,
+	          "SUS2-SH Kokkos compact gate-cache product range is invalid.");
+	    if (two_layer_gate_enabled &&
+	        two_layer_gate_kk_cache_product_end > 0 &&
+	        two_layer_gate_kk_moment_cache_width <=
+	            SUS2GateCache::kIndexMask) {
+	      std::string compact_reason;
+	      if (!SUS2GateCache::build_compact_layout(
+	              alpha_times_a0, alpha_times_a1,
+	              two_layer_gate_kk_cache_product_end,
+	              two_layer_gate_kk_moment_cache_width,
+	              compact_gate_cache_layout, compact_reason))
+	        error->all(FLERR,
+	                   "SUS2-SH Kokkos compact gate-cache layout is invalid: {}",
+	                   compact_reason);
+	      two_layer_gate_kk_cache_slot_count = static_cast<int>(
+	          compact_gate_cache_layout.slot_to_moment.size());
+	      if (two_layer_gate_kk_cache_slot_count <= 0)
+	        error->all(
+	            FLERR,
+	            "SUS2-SH Kokkos compact gate cache has no product operands.");
+	      two_layer_gate_kk_compact_cache_enabled = 1;
+	    }
 	  }
+	  MemKK::realloc_kokkos(
+	      d_two_layer_gate_cache_slot_to_moment,
+	      "sus2mtp/kk:two_layer_gate_cache_slot_to_moment",
+	      std::max(1, two_layer_gate_kk_compact_cache_enabled
+	          ? two_layer_gate_kk_cache_slot_count : 0));
+	  MemKK::realloc_kokkos(
+	      d_two_layer_gate_cache_packed_a0,
+	      "sus2mtp/kk:two_layer_gate_cache_packed_a0",
+	      std::max(1, two_layer_gate_kk_compact_cache_enabled
+	          ? two_layer_gate_kk_cache_product_end : 0));
+	  MemKK::realloc_kokkos(
+	      d_two_layer_gate_cache_packed_a1,
+	      "sus2mtp/kk:two_layer_gate_cache_packed_a1",
+	      std::max(1, two_layer_gate_kk_compact_cache_enabled
+	          ? two_layer_gate_kk_cache_product_end : 0));
 	  // We need to init these as very small views to begin with because the user might specify a very large chunk_size which is much more than inum. We will resize these as needed in compute.
 	  MemKK::realloc_kokkos(d_moment_tensor_vals, "sus2mtp/kk:moment_tensor_vals", 1, alpha_moment_count);
 	  MemKK::realloc_kokkos(d_nbh_energy_ders_wrt_moments, "sus2mtp/kk:nbh_energy_ders_wrt_moments", 1,
@@ -777,6 +830,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   auto h_alpha_times_a0 = Kokkos::create_mirror_view(d_alpha_times_a0);
   auto h_alpha_times_a1 = Kokkos::create_mirror_view(d_alpha_times_a1);
   auto h_alpha_times_out = Kokkos::create_mirror_view(d_alpha_times_out);
+	  auto h_two_layer_gate_cache_slot_to_moment =
+	      Kokkos::create_mirror_view(d_two_layer_gate_cache_slot_to_moment);
+	  auto h_two_layer_gate_cache_packed_a0 =
+	      Kokkos::create_mirror_view(d_two_layer_gate_cache_packed_a0);
+	  auto h_two_layer_gate_cache_packed_a1 =
+	      Kokkos::create_mirror_view(d_two_layer_gate_cache_packed_a1);
   auto h_alpha_moment_mapping = Kokkos::create_mirror_view(d_alpha_moment_mapping);
   auto h_alpha_basic_sh_index = Kokkos::create_mirror_view(d_alpha_basic_sh_index);
   auto h_alpha_times_coeff = Kokkos::create_mirror_view(d_alpha_times_coeff);
@@ -855,6 +914,20 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
     h_alpha_times_a1(i) = alpha_index_times[i][1];
     h_alpha_times_out(i) = alpha_index_times[i][3];
   }
+	  h_two_layer_gate_cache_slot_to_moment(0) = 0;
+	  h_two_layer_gate_cache_packed_a0(0) = 0;
+	  h_two_layer_gate_cache_packed_a1(0) = 0;
+	  if (two_layer_gate_kk_compact_cache_enabled) {
+	    for (int i = 0; i < two_layer_gate_kk_cache_slot_count; ++i)
+	      h_two_layer_gate_cache_slot_to_moment(i) =
+	          compact_gate_cache_layout.slot_to_moment[i];
+	    for (int i = 0; i < two_layer_gate_kk_cache_product_end; ++i) {
+	      h_two_layer_gate_cache_packed_a0(i) =
+	          compact_gate_cache_layout.packed_a0[i];
+	      h_two_layer_gate_cache_packed_a1(i) =
+	          compact_gate_cache_layout.packed_a1[i];
+	    }
+	  }
 	  h_outer_k_rank_raw_basic_indices(0) = 0;
 	  h_outer_k_rank_weights(0) = 0.0;
 	  h_two_layer_gate_k_rank_raw_basic_indices(0) = 0;
@@ -1028,6 +1101,12 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   Kokkos::deep_copy(d_alpha_times_a0, h_alpha_times_a0);
   Kokkos::deep_copy(d_alpha_times_a1, h_alpha_times_a1);
   Kokkos::deep_copy(d_alpha_times_out, h_alpha_times_out);
+	  Kokkos::deep_copy(d_two_layer_gate_cache_slot_to_moment,
+	                    h_two_layer_gate_cache_slot_to_moment);
+	  Kokkos::deep_copy(d_two_layer_gate_cache_packed_a0,
+	                    h_two_layer_gate_cache_packed_a0);
+	  Kokkos::deep_copy(d_two_layer_gate_cache_packed_a1,
+	                    h_two_layer_gate_cache_packed_a1);
   Kokkos::deep_copy(d_alpha_moment_mapping, h_alpha_moment_mapping);
   Kokkos::deep_copy(d_alpha_basic_sh_index, h_alpha_basic_sh_index);
   Kokkos::deep_copy(d_alpha_times_coeff, h_alpha_times_coeff);
@@ -2105,13 +2184,21 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		                      d_two_layer_gate_edge_l1_weighted_adjoints, nmax,
 		                      two_layer_gate_kk_edge_l1_stride);
 		    }
-		    if (use_gate_moment_cache &&
-		        ((int) d_two_layer_gate_cached_moment_vals.extent(0) < nmax ||
-		         (int) d_two_layer_gate_cached_moment_vals.extent(1) <
-		             two_layer_gate_kk_moment_cache_width)) {
-		      Kokkos::realloc(Kokkos::WithoutInitializing,
-		                      d_two_layer_gate_cached_moment_vals, nmax,
-		                      two_layer_gate_kk_moment_cache_width);
+		    if (use_gate_moment_cache) {
+		      const bool use_compact_gate_cache =
+		          two_layer_gate_kk_compact_cache_enabled != 0;
+		      const int gate_cache_rows = use_compact_gate_cache
+		          ? std::max(1, inum) : nmax;
+		      const int gate_cache_width = use_compact_gate_cache
+		          ? two_layer_gate_kk_cache_slot_count
+		          : two_layer_gate_kk_moment_cache_width;
+		      if ((int) d_two_layer_gate_cached_moment_vals.extent(0) <
+		              gate_cache_rows ||
+		          (int) d_two_layer_gate_cached_moment_vals.extent(1) <
+		              gate_cache_width)
+		        Kokkos::realloc(Kokkos::WithoutInitializing,
+		                        d_two_layer_gate_cached_moment_vals,
+		                        gate_cache_rows, gate_cache_width);
 		    }
 	    if ((int) d_two_layer_gate_mu_multipliers.extent(0) < nmax ||
 	        (int) d_two_layer_gate_mu_multipliers.extent(1) < radial_func_count) {
@@ -2217,7 +2304,32 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 
 		      if (use_gate_moment_cache) {
 		        const int local_chunk_offset = chunk_offset;
-		        if (outer_k_rank_enabled) {
+		        if (outer_k_rank_enabled &&
+		            two_layer_gate_kk_compact_cache_enabled) {
+		          const int local_chunk_size = chunk_size;
+		          const int local_gate_cache_slot_count =
+		              two_layer_gate_kk_cache_slot_count;
+		          auto d_local_slot_to_moment =
+		              d_two_layer_gate_cache_slot_to_moment;
+		          auto d_local_moments = d_moment_tensor_vals;
+		          auto d_local_cache = d_two_layer_gate_cached_moment_vals;
+		          using cache_policy = Kokkos::TeamPolicy<DeviceType>;
+		          using cache_member = typename cache_policy::member_type;
+		          Kokkos::parallel_for(
+		              "StoreCompactRankGateMomentCache",
+		              cache_policy(local_gate_cache_slot_count, Kokkos::AUTO),
+		              KOKKOS_LAMBDA(const cache_member &team) {
+		                const int slot = team.league_rank();
+		                const int moment = d_local_slot_to_moment(slot);
+		                Kokkos::parallel_for(
+		                    Kokkos::TeamThreadRange(team, local_chunk_size),
+		                    [&](const int ii) {
+		                      const int row = local_chunk_offset + ii;
+		                      d_local_cache(row, slot) =
+		                          d_local_moments(ii, moment);
+		                    });
+		              });
+		        } else if (outer_k_rank_enabled) {
 		          const int local_chunk_size = chunk_size;
 		          const int local_gate_moment_cache_width =
 		              two_layer_gate_kk_moment_cache_width;
@@ -3211,9 +3323,64 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 
 	template <class DeviceType>
 	KOKKOS_INLINE_FUNCTION void
+	PairSUS2MTPKokkos<DeviceType>::
+	backprop_two_layer_gate_products_compact_cached_kk(const int ii) const
+	{
+	  const int cache_row = ii + chunk_offset;
+	  int begin = 0;
+	  int end = two_layer_gate_product_limit;
+	  if (two_layer_gate_k_rank > 0) {
+	    begin = two_layer_gate_k_rank_product_begin;
+	    end = two_layer_gate_k_rank_product_end;
+	  }
+	  for (int k = end - 1; k >= begin; --k) {
+	    const int packed0 = d_two_layer_gate_cache_packed_a0(k);
+	    const int packed1 = d_two_layer_gate_cache_packed_a1(k);
+	    const int a0 = packed0 & SUS2GateCache::kIndexMask;
+	    const int a1 = packed1 & SUS2GateCache::kIndexMask;
+	    const int slot0 = packed0 >> SUS2GateCache::kIndexBits;
+	    const int slot1 = packed1 >> SUS2GateCache::kIndexBits;
+	    const int out = d_alpha_times_out(k);
+	    const F_FLOAT val0 =
+	        d_two_layer_gate_cached_moment_vals(cache_row, slot0);
+	    const F_FLOAT val1 =
+	        d_two_layer_gate_cached_moment_vals(cache_row, slot1);
+	    const F_FLOAT adj_coeff =
+	        d_nbh_energy_ders_wrt_moments(ii, out) * d_alpha_times_coeff(k);
+	    d_nbh_energy_ders_wrt_moments(ii, a1) += adj_coeff * val0;
+	    d_nbh_energy_ders_wrt_moments(ii, a0) += adj_coeff * val1;
+	  }
+	  if (two_layer_gate_k_rank > 0) {
+	    backprop_two_layer_gate_k_rank_adjoints_kk(ii);
+	    for (int k = begin - 1; k >= 0; --k) {
+	      const int packed0 = d_two_layer_gate_cache_packed_a0(k);
+	      const int packed1 = d_two_layer_gate_cache_packed_a1(k);
+	      const int a0 = packed0 & SUS2GateCache::kIndexMask;
+	      const int a1 = packed1 & SUS2GateCache::kIndexMask;
+	      const int slot0 = packed0 >> SUS2GateCache::kIndexBits;
+	      const int slot1 = packed1 >> SUS2GateCache::kIndexBits;
+	      const int out = d_alpha_times_out(k);
+	      const F_FLOAT val0 =
+	          d_two_layer_gate_cached_moment_vals(cache_row, slot0);
+	      const F_FLOAT val1 =
+	          d_two_layer_gate_cached_moment_vals(cache_row, slot1);
+	      const F_FLOAT adj_coeff =
+	          d_nbh_energy_ders_wrt_moments(ii, out) * d_alpha_times_coeff(k);
+	      d_nbh_energy_ders_wrt_moments(ii, a1) += adj_coeff * val0;
+	      d_nbh_energy_ders_wrt_moments(ii, a0) += adj_coeff * val1;
+	    }
+	  }
+	}
+
+	template <class DeviceType>
+	KOKKOS_INLINE_FUNCTION void
 	PairSUS2MTPKokkos<DeviceType>::backprop_two_layer_gate_products_kk(
 	    const int ii, const bool use_cached_moments) const
 	{
+	  if (use_cached_moments && two_layer_gate_kk_compact_cache_enabled) {
+	    backprop_two_layer_gate_products_compact_cached_kk(ii);
+	    return;
+	  }
 	  const int atom_index = d_ilist(ii + chunk_offset);
 	  int begin = 0;
 	  int end = two_layer_gate_product_limit;

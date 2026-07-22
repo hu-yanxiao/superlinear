@@ -23,6 +23,7 @@ cp "$PKG_ROOT"/ML-SUS2/*.cpp "$PKG_ROOT"/ML-SUS2/*.h "$LAMMPS_SRC/ML-SUS2/"
 cp "$PKG_ROOT"/ML-SUS2/*.cpp "$PKG_ROOT"/ML-SUS2/*.h "$LAMMPS_SRC/"
 cp "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.cpp \
    "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.h \
+   "$PKG_ROOT"/ML-SUS2-KK/sus2_mtp_gate_cache_layout.h \
    "$LAMMPS_SRC/KOKKOS/"
 cp "$PKG_ROOT"/MAKE/OPTIONS/Makefile.ml_sus2_* \
    "$LAMMPS_SRC/MAKE/OPTIONS/"
@@ -52,4 +53,4 @@ fi
 
 echo "Installed ML-SUS2 LAMMPS interface into $LAMMPS_ROOT"
 echo "CPU source files: $LAMMPS_SRC/ML-SUS2 and $LAMMPS_SRC"
-echo "Kokkos files: $LAMMPS_SRC/KOKKOS/pair_sus2_mtp_kokkos.*"
+echo "Kokkos files: pair_sus2_mtp_kokkos.{cpp,h} and sus2_mtp_gate_cache_layout.h"
