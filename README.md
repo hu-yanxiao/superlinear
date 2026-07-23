@@ -4,6 +4,9 @@ SUS2-SH is the spherical-harmonic line of SUS2. It keeps the original C++
 SUS2 training flow, BFGS optimizer, CFG/MTP file conventions, and model I/O,
 while replacing moment-tensor angular channels with real spherical harmonics.
 
+The current formal line is **SUS2-SH Release 3**, branch `release3`, released
+on 2026-07-23.
+
 The basic SH channel is
 
 ```text
@@ -221,11 +224,11 @@ Gate-specific options:
 | `--two-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate1 scalar subgraph. It defaults to the outer mode and cannot be richer than `--sh-factor-pruning`. |
 | `--two-layer-gate-site-mode=neighbor` | Gate acts on neighbor endpoint `j`; `neighbor` is the only release mode. |
 | `--two-layer-gate-shared-radial` | Compatibility switch for the default behavior: gate models use an independent first-layer radial contraction table. |
-| `--two-layer-gate-readout` | Add an experimental linear energy head on the first-layer gate scalars. It is supported by standalone training/evaluation but not by the release3 LAMMPS interfaces. |
+| `--two-layer-gate-readout` | Add a linear energy head on the first-layer gate scalars. Release3 standalone, CPU LAMMPS, and Kokkos LAMMPS support the compatible single-layer neighbor-site form. |
 | `--outer-k-rank=<R>` | Contract the outer `k` channels to rank `R` before building the outer scalar graph. `0`/omitted keeps the full graph; `R=1` uses the direct-radial form. |
 | `--two-layer-gate-k-rank=<R_g>` | Independently contract the first-layer gate `k` channels. It currently requires an outer-rank model. |
 | `--second-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate2 scalar subgraph for `--multi-layer-gate`. It defaults to gate1 and cannot be richer than the outer mode. |
-| `--multi-layer-gate` | Add release3 gate2 on the gate1 endpoint coefficients. |
+| `--multi-layer-gate` | Add release3 gate2 on the gate1 endpoint coefficients. This topology is supported by the standalone runtime, but not by the release3 LAMMPS pair styles. |
 | `--second-layer-gate-body-order=<int>` | Gate2 scalar body-order cutoff in `[2, --body-order]`; default is the outer body order. |
 | `--inline-sh-model=<path>` | In `train train.cfg --init-sh`, create this file if missing or continue from it if it already exists. |
 | `--two-layer-residual` | Experimental residual two-layer mode `E=E0+E1`; not the current production gate path. |
@@ -240,6 +243,10 @@ fully define each gate subgraph, so inference and LAMMPS readers do not need a
 runtime pruning-mode branch. Rank-model mathematics, constraints, and runtime
 compatibility are documented in
 [`docs/release3-k-rank.md`](docs/release3-k-rank.md).
+
+Gate readout is defined only for the single-layer neighbor-site gate topology.
+It is mutually exclusive with outer/gate `K` rank, two-layer residual,
+edge-L1, and multi-layer-gate modes.
 
 ## Effective Pair Energy CLI
 
@@ -390,12 +397,23 @@ Table radial types such as `RBChebyshev_sss_lmp`,
 `RBLaguerre_log1p_pos_lmp`, and `RBJacobi_sss_lmp` enable list-based radial
 evaluation in LAMMPS. The `tabstep` keyword controls table spacing.
 
-The release3 CPU and Kokkos pair styles accept both the historical full-`K`
-models and the optional outer/gate `K`-rank models documented in
-[`docs/release3-k-rank.md`](docs/release3-k-rank.md). Gate readout remains a
-standalone-only feature; both LAMMPS pair styles reject it explicitly. The
+The release3 CPU and Kokkos pair styles accept the historical full-`K` models,
+optional outer/gate `K`-rank models, and compatible single-layer gate-readout
+models documented in
+[`docs/release3-k-rank.md`](docs/release3-k-rank.md). Readout remains
+incompatible with rank, residual, edge-L1, and multi-layer-gate topologies.
+Multi-layer gate models are not supported by either LAMMPS pair style. The
 standalone decoupled gate-scaling mode is likewise not implemented by the
 release3 LAMMPS pair styles and is rejected with an explicit diagnostic.
+
+The final Kokkos stride-guard overlay keeps the million-atom ranked-gate
+workspace exact while reusing mutually exclusive device phases. On one
+A100-80GB at `chunksize=1054560`, the measured peak fell from 51,147 MiB to
+30,831 MiB. A four-GPU run reduced the largest per-rank peak from 13,236 MiB
+to 8,158 MiB and retained energy, force, and stress parity. The final
+1,000-step ABBA comparison measured 1,588.3750 s versus 1,589.8275 s for its
+immediate predecessor, so the memory reduction did not introduce a measured
+speed penalty.
 The Kokkos pair style requires a half neighbor-list package configuration with
 Newton pair forces enabled, for example
 `-k on g 1 -sf kk -pk kokkos neigh half newton on`; the input should also keep

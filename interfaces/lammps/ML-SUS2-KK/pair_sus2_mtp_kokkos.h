@@ -51,7 +51,8 @@ namespace LAMMPS_NS {
 		  struct TagPairSUS2MTPComputeGateFirstFinalize {};
 		  struct TagPairSUS2MTPComputeGateFullForward {};
 		  struct TagPairSUS2MTPComputeGateSignalDers {};
-	  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateSignalAdjointDers {};
+		  struct TagPairSUS2MTPComputeGateReadoutAdjointSeeds {};
 		  struct TagPairSUS2MTPComputeGateAdjointDers {};
 		  struct TagPairSUS2MTPComputeGateAdjointDersCached {};
 		  struct TagPairSUS2MTPComputeGateFullScalarAdjoints {};
@@ -147,11 +148,7 @@ namespace LAMMPS_NS {
 	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu) const;
 	  KOKKOS_INLINE_FUNCTION double two_layer_gate_mu_deriv_kk(
 	      const int jtype, const int mu) const;
-	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_mu_signal_kk(
-	      const int atom_index, const int mu) const;
 	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_edge_l1_projection_kk(
-	      const int atom_index, const int mu, const F_FLOAT *sh_values) const;
-	  KOKKOS_INLINE_FUNCTION F_FLOAT two_layer_gate_edge_l1_signal_kk(
 	      const int atom_index, const int mu, const F_FLOAT *sh_values) const;
 	  KOKKOS_INLINE_FUNCTION void accumulate_two_layer_gate_edge_l1_adjoint_kk(
 	      const int atom_index, const int mu, const F_FLOAT gate_adjoint_mu,
@@ -226,6 +223,14 @@ namespace LAMMPS_NS {
 
 		  KOKKOS_INLINE_FUNCTION
 		  void operator()(TagPairSUS2MTPComputeGateSignalAdjointDers, const int &ii) const;
+
+			  KOKKOS_INLINE_FUNCTION
+			  void operator()(
+			      TagPairSUS2MTPComputeGateReadoutAdjointSeeds,
+			      const typename Kokkos::TeamPolicy<
+			          DeviceType,
+			          TagPairSUS2MTPComputeGateReadoutAdjointSeeds>::member_type
+			          &team) const;
 
 			  KOKKOS_INLINE_FUNCTION
 			  void operator()(TagPairSUS2MTPComputeGateAdjointDers, const int &ii) const;
@@ -467,13 +472,24 @@ namespace LAMMPS_NS {
 
   // Global working buffers.
   Kokkos::View<moment_buffer_value_type **, DeviceType> d_moment_tensor_vals;
-  Kokkos::View<nbh_der_buffer_value_type **, DeviceType> d_nbh_energy_ders_wrt_moments;
+  Kokkos::View<nbh_der_buffer_value_type **, DeviceType>
+      d_nbh_energy_ders_storage;
+  // The semantic adjoint View is unmanaged so the ranked Device path can bind
+  // it either to the separate fallback allocation or to a phase-local slice of
+  // d_moment_tensor_vals.  The corresponding owning View always remains a
+  // member of this functor while a kernel can access the facade.
+  Kokkos::View<nbh_der_buffer_value_type **, DeviceType,
+               Kokkos::MemoryTraits<Kokkos::Unmanaged>>
+      d_nbh_energy_ders_wrt_moments;
 	  Kokkos::View<double *, DeviceType> d_env_gate_values;
 	  Kokkos::View<double *, DeviceType> d_env_gate_der_prefactors;
 	  Kokkos::View<double *, DeviceType> d_env_gate_rho_chain_values;
 	  Kokkos::View<moment_buffer_value_type **, DeviceType> d_env_gate_activation_basic_vals;
-		  Kokkos::View<double *, DeviceType> d_two_layer_gate_values;
-		  Kokkos::View<double *, DeviceType> d_two_layer_gate_adjoints;
+		  // Device-aware communication phase-overlays these two semantic views.
+		  // Host-staged communication keeps them separate because legacy host
+		  // sorting can retain forward ghost values across consecutive steps.
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_signal_storage;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_adjoint_storage;
 		  Kokkos::View<moment_buffer_value_type **, DeviceType>
 		      d_two_layer_gate_cached_moment_vals;
 		  Kokkos::View<double ***, DeviceType> d_two_layer_gate_first_derivs;
@@ -482,9 +498,10 @@ namespace LAMMPS_NS {
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_body_bucket;
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_scalar_signal_index;
 		  Kokkos::View<int *, DeviceType> d_two_layer_gate_body_signal_buckets;
-	  Kokkos::View<int *, DeviceType> d_two_layer_gate_full_signal_group_for_mu;
-	  Kokkos::View<double *, DeviceType> d_two_layer_gate_weights;
-	  Kokkos::View<double *, DeviceType> d_two_layer_gate_body_mix_weights;
+		  Kokkos::View<int *, DeviceType> d_two_layer_gate_full_signal_group_for_mu;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_weights;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_readout_coeffs;
+		  Kokkos::View<double *, DeviceType> d_two_layer_gate_body_mix_weights;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_scalar;
 	  Kokkos::View<double **, DeviceType> d_two_layer_gate_full_weights_by_signal;
 	  Kokkos::View<double *, DeviceType> d_two_layer_gate_additive_coeffs;
@@ -528,6 +545,7 @@ namespace LAMMPS_NS {
 	  int two_layer_gate_kk_signal_stride = 1;
 	  int two_layer_gate_kk_body_stride = 0;
 	  int two_layer_gate_kk_comm_stride = 1;
+	  int two_layer_gate_kk_signal_overlay = 0;
 	  int two_layer_gate_kk_edge_l1_active = 0;
 	  int two_layer_gate_kk_edge_l1_stride = 0;
 	  int two_layer_gate_kk_edge_l1_source_count = 0;

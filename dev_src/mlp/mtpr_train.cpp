@@ -2436,7 +2436,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.force_log_cosh_scale = force_log_cosh_scale;
 
 	if (prank == 0)
-		std::cout << "SUS2-MLIP developer version (2026-04-17)"
+		std::cout << "SUS2-SH Release 3 (2026-07-23)"
 		          << " | potential from " << args[0]
 		          << ", database: " << args[1] << std::endl;
 	if (prank == 0 && inline_sh_model)

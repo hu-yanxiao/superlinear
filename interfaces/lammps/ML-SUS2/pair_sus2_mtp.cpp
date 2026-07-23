@@ -2207,6 +2207,16 @@ void PairSUS2MTP::prepare_two_layer_gate_weight_layouts()
         two_layer_gate_scalar_moment_indices[q] = moment_index;
       two_layer_gate_scalar_body_bucket[q] = body_bucket;
     }
+    if (two_layer_gate_readout_enabled) {
+      std::vector<unsigned char> seen_moments(alpha_moment_count, 0);
+      for (int moment_index : two_layer_gate_scalar_moment_indices) {
+        if (seen_moments[moment_index])
+          error->all(
+              FLERR,
+              "SUS2-SH gate readout requires unique scalar moment indices.");
+        seen_moments[moment_index] = 1;
+      }
+    }
     const int body_stride = std::max(0, two_layer_gate_body_order_max - 1);
     if (body_stride > 0) {
       two_layer_gate_body_bucket_offsets.assign(body_stride + 1, 0);
@@ -4911,6 +4921,22 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
   const bool edge_l1_active = two_layer_gate_edge_l1_active();
   const bool gate_k_rank_active = two_layer_gate_k_rank > 0;
   const bool any_k_rank_active = outer_k_rank_enabled || gate_k_rank_active;
+  bool readout_has_nonzero_coeffs = false;
+  if (two_layer_gate_readout_enabled) {
+    if (two_layer_gate_readout_coeff_count !=
+            two_layer_gate_scalar_count ||
+        static_cast<int>(two_layer_gate_readout_coeffs.size()) !=
+            two_layer_gate_readout_coeff_count)
+      error->all(
+          FLERR,
+          "SUS2-SH gate readout coefficient layout is inconsistent.");
+    for (double coeff : two_layer_gate_readout_coeffs) {
+      if (coeff != 0.0) {
+        readout_has_nonzero_coeffs = true;
+        break;
+      }
+    }
+  }
   const int edge_l1_weighted_stride = two_layer_gate_edge_l1_weighted_stride();
   if (two_layer_gate_scalar_count != static_cast<int>(two_layer_gate_scalar_indices.size()) ||
       two_layer_gate_weight_count != expected_gate_weight_count ||
@@ -4990,6 +5016,7 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
       !compact_body_signal && gate_body_stride > 0 &&
       gate_body_stride <= kMaxBodyGateStrideFast &&
       !edge_l1_active && !gate_k_rank_active &&
+      !readout_has_nonzero_coeffs &&
       env_flag_enabled("SUS2_LAMMPS_GATE_SIGNAL_DERIV_CACHE");
   const bool gate_needs_product_backprop =
       gate_k_rank_active || gate_product_limit > 0 ||
@@ -5323,7 +5350,8 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
     const bool use_static_fixed_gate_cache =
         static_fixed_basic_cache_enabled && is_sh_model &&
         !eflag && !vflag && is_static_fixed_type(itype) &&
-        !edge_l1_active && !any_k_rank_active;
+        !edge_l1_active && !any_k_rank_active &&
+        !readout_has_nonzero_coeffs;
     if (use_static_fixed_gate_cache) {
       ensure_static_fixed_gate_cache();
       const bool gate_cache_tag_match =
@@ -5450,6 +5478,16 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 
 	    double profile_v2_sub_start = profile_gate_v2 ? MPI_Wtime() : 0.0;
 	    forward_two_layer_gate_products();
+    if (readout_has_nonzero_coeffs && (eflag_atom || eflag_global)) {
+      double readout_value = 0.0;
+      for (int q = 0; q < two_layer_gate_readout_coeff_count; q++)
+        readout_value +=
+            two_layer_gate_readout_coeffs[q] *
+            moment_tensor_vals[two_layer_gate_scalar_moment_indices[q]];
+      const double readout_energy = species_coeffs[itype] * readout_value;
+      if (eflag_atom) eatom[i] += readout_energy;
+      if (eflag_global) eng_vdwl += readout_energy;
+    }
     if (use_full_gate_batched_contraction) {
       double *__restrict scalar_cache =
           two_layer_gate_full_scalar_cache.data() + static_cast<size_t>(ii);
@@ -6372,7 +6410,9 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
         }
       }
     }
-    if (!has_gate_adjoint_center) continue;
+    const bool has_readout_adjoint_center =
+        readout_has_nonzero_coeffs && species_coeffs[itype] != 0.0;
+    if (!has_gate_adjoint_center && !has_readout_adjoint_center) continue;
 	    const size_t active_begin = two_layer_gate_edge_offsets[ii];
 	    const size_t active_end = two_layer_gate_edge_offsets[ii + 1];
 	    if (cache_body_signal_derivs) {
@@ -6562,6 +6602,20 @@ void PairSUS2MTP::compute_two_layer_gate_sh(int eflag, int vflag)
 	        }
 	      }
 	    }
+    if (has_readout_adjoint_center) {
+      const double center_linear = species_coeffs[itype];
+      for (int q = 0; q < two_layer_gate_readout_coeff_count; q++) {
+        const double adjoint =
+            center_linear * two_layer_gate_readout_coeffs[q];
+        if (adjoint == 0.0) continue;
+        if (use_compact_gate_force_adjoint)
+          gate_compact_force_adjoints[
+              two_layer_gate_scalar_compact_indices[q]] += adjoint;
+        else
+          nbh_energy_ders_wrt_moments[
+              two_layer_gate_scalar_moment_indices[q]] += adjoint;
+      }
+    }
 		      if (use_compact_gate_force_adjoint) {
 			        if (gate_needs_product_backprop)
 			          backprop_two_layer_gate_products_compact_adjoint(
@@ -7645,6 +7699,9 @@ access to the buffer size that is not provided in PFR.
   two_layer_gate_body_order_max = 0;
   two_layer_gate_scalar_count = 0;
   two_layer_gate_weight_count = 0;
+  two_layer_gate_readout_enabled = false;
+  two_layer_gate_readout_coeff_count = 0;
+  two_layer_gate_readout_coeffs.clear();
   two_layer_gate_body_mix_weight_count = 0;
   two_layer_gate_product_limit = 0;
   two_layer_gate_moment_cache_width = 0;
@@ -8995,14 +9052,60 @@ access to the buffer size that is not provided in PFR.
           error->one(FLERR, "SUS2-SH mu-scalar-full gate models should not contain body mix weights.");
       }
       if (keyword == "two_layer_gate_readout_enabled") {
-        if (parse_bool_assignment(post_scalar_line))
+        two_layer_gate_readout_enabled =
+            parse_bool_assignment(post_scalar_line);
+        if (!two_layer_gate_readout_enabled)
           error->one(
               FLERR,
-              "LAMMPS SUS2-SH CPU/Kokkos interfaces do not support "
-              "two_layer_gate_readout_enabled models; use standalone mlp-sus2.");
-        error->one(
-            FLERR,
-            "SUS2-SH disabled two_layer_gate_readout_enabled metadata should be omitted.");
+              "SUS2-SH disabled two_layer_gate_readout_enabled metadata should be omitted.");
+        if (two_layer_residual_enabled)
+          error->one(
+              FLERR,
+              "SUS2-SH gate readout is not compatible with residual mode.");
+        if (outer_k_rank_enabled || two_layer_gate_k_rank > 0)
+          error->one(
+              FLERR,
+              "SUS2-SH gate readout is not compatible with K-rank models.");
+
+        post_scalar_line = std::string(tfr.next_line());
+        if (first_keyword(post_scalar_line) !=
+            "two_layer_gate_readout_coeff_count")
+          error->one(
+              FLERR,
+              "SUS2-SH gate readout is missing coefficient count metadata.");
+        two_layer_gate_readout_coeff_count =
+            parse_int_assignment(post_scalar_line);
+        if (two_layer_gate_readout_coeff_count !=
+            two_layer_gate_scalar_count)
+          error->one(
+              FLERR,
+              "SUS2-SH gate readout coefficient count should match gate scalar count.");
+
+        post_scalar_line = std::string(tfr.next_line());
+        if (first_keyword(post_scalar_line) !=
+            "two_layer_gate_readout_coeffs")
+          error->one(FLERR,
+                     "SUS2-SH gate readout is missing coefficients.");
+        two_layer_gate_readout_coeffs =
+            parse_double_list_line(post_scalar_line);
+        if (static_cast<int>(two_layer_gate_readout_coeffs.size()) !=
+            two_layer_gate_readout_coeff_count)
+          error->one(
+              FLERR,
+              "SUS2-SH gate readout coefficient list has wrong size.");
+        for (double coeff : two_layer_gate_readout_coeffs)
+          if (!std::isfinite(coeff))
+            error->one(
+                FLERR,
+                "SUS2-SH gate readout coefficients should be finite.");
+
+        if (const char *next_line = tfr.next_line()) {
+          post_scalar_line = std::string(next_line);
+          keyword = first_keyword(post_scalar_line);
+        } else {
+          post_scalar_line.clear();
+          keyword.clear();
+        }
       }
       if (keyword == "two_layer_gate_edge_l1_enabled") {
         two_layer_gate_edge_l1_enabled = parse_bool_assignment(post_scalar_line);
@@ -9115,6 +9218,16 @@ access to the buffer size that is not provided in PFR.
           two_layer_gate_edge_l1_weights.clear();
         }
       }
+      if (two_layer_gate_readout_enabled &&
+          two_layer_gate_edge_l1_enabled)
+        error->one(
+            FLERR,
+            "SUS2-SH gate readout is not compatible with edge-L1.");
+      if (keyword == "multi_layer_gate_enabled")
+        error->one(
+            FLERR,
+            "LAMMPS SUS2-SH CPU/Kokkos interfaces do not support "
+            "multi_layer_gate_enabled models; use standalone mlp-sus2.");
       if (keyword == "two_layer_residual_e0_coeff_count")
         error->one(FLERR, "LAMMPS SUS2-SH interface does not support residual two-layer models.");
 
@@ -9269,6 +9382,8 @@ access to the buffer size that is not provided in PFR.
       two_layer_gate_full_scalar_weights ? 1 : 0;
   int two_layer_gate_center_enabled_int = two_layer_gate_center_enabled ? 1 : 0;
   int two_layer_residual_enabled_int = two_layer_residual_enabled ? 1 : 0;
+  int two_layer_gate_readout_enabled_int =
+      two_layer_gate_readout_enabled ? 1 : 0;
   int two_layer_gate_edge_l1_enabled_int =
       two_layer_gate_edge_l1_enabled ? 1 : 0;
   MPI_Bcast(&two_layer_gate_enabled_int, 1, MPI_INT, 0, world);
@@ -9294,6 +9409,7 @@ access to the buffer size that is not provided in PFR.
   MPI_Bcast(&two_layer_gate_full_scalar_weights_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_center_enabled_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_residual_enabled_int, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_readout_enabled_int, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_edge_l1_enabled_int, 1, MPI_INT, 0, world);
   two_layer_gate_enabled = (two_layer_gate_enabled_int != 0);
   outer_k_rank_enabled = (outer_k_rank_enabled_int != 0);
@@ -9308,12 +9424,15 @@ access to the buffer size that is not provided in PFR.
       (two_layer_gate_full_scalar_weights_int != 0);
   two_layer_gate_center_enabled = (two_layer_gate_center_enabled_int != 0);
   two_layer_residual_enabled = (two_layer_residual_enabled_int != 0);
+  two_layer_gate_readout_enabled =
+      (two_layer_gate_readout_enabled_int != 0);
   two_layer_gate_edge_l1_enabled =
       (two_layer_gate_edge_l1_enabled_int != 0);
   MPI_Bcast(&two_layer_gate_tanh_amplitude, 1, MPI_DOUBLE, 0, world);
   MPI_Bcast(&two_layer_gate_body_order_max, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_scalar_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_weight_count, 1, MPI_INT, 0, world);
+  MPI_Bcast(&two_layer_gate_readout_coeff_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_body_mix_weight_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_edge_l1_source_count, 1, MPI_INT, 0, world);
   MPI_Bcast(&two_layer_gate_edge_l1_weight_count, 1, MPI_INT, 0, world);
@@ -9336,6 +9455,8 @@ access to the buffer size that is not provided in PFR.
     two_layer_gate_k_rank_weights.resize(two_layer_gate_k_rank_weight_count);
     two_layer_gate_scalar_indices.resize(two_layer_gate_scalar_count);
     two_layer_gate_weights.resize(two_layer_gate_weight_count);
+    two_layer_gate_readout_coeffs.resize(
+        two_layer_gate_readout_coeff_count);
     two_layer_gate_body_mix_weights.resize(two_layer_gate_body_mix_weight_count);
     two_layer_gate_radial_coeffs.resize(two_layer_gate_radial_count);
     two_layer_gate_additive_coeffs.resize(two_layer_gate_additive_count);
@@ -9367,6 +9488,10 @@ access to the buffer size that is not provided in PFR.
   if (two_layer_gate_weight_count > 0) {
     MPI_Bcast(two_layer_gate_weights.data(), two_layer_gate_weight_count,
               MPI_DOUBLE, 0, world);
+  }
+  if (two_layer_gate_readout_coeff_count > 0) {
+    MPI_Bcast(two_layer_gate_readout_coeffs.data(),
+              two_layer_gate_readout_coeff_count, MPI_DOUBLE, 0, world);
   }
   if (two_layer_gate_body_mix_weight_count > 0) {
     MPI_Bcast(two_layer_gate_body_mix_weights.data(),
@@ -9401,6 +9526,33 @@ access to the buffer size that is not provided in PFR.
     if ((outer_k_rank_enabled || two_layer_gate_k_rank > 0) &&
         !two_layer_gate_explicit_scalar_moments)
       error->all(FLERR, "SUS2-SH rank gate requires explicit scalar moment metadata.");
+    if (two_layer_gate_readout_enabled) {
+      if (two_layer_gate_readout_coeff_count !=
+              two_layer_gate_scalar_count ||
+          static_cast<int>(two_layer_gate_readout_coeffs.size()) !=
+              two_layer_gate_readout_coeff_count)
+        error->all(
+            FLERR,
+            "SUS2-SH gate readout coefficient layout is inconsistent.");
+      if (outer_k_rank_enabled || two_layer_gate_k_rank > 0)
+        error->all(
+            FLERR,
+            "SUS2-SH gate readout is not compatible with K-rank models.");
+      if (two_layer_residual_enabled || two_layer_gate_edge_l1_enabled)
+        error->all(
+            FLERR,
+            "SUS2-SH gate readout is not compatible with residual or edge-L1 modes.");
+      for (double coeff : two_layer_gate_readout_coeffs)
+        if (!std::isfinite(coeff))
+          error->all(
+              FLERR,
+              "SUS2-SH gate readout coefficients should be finite.");
+    } else if (two_layer_gate_readout_coeff_count != 0 ||
+               !two_layer_gate_readout_coeffs.empty()) {
+      error->all(
+          FLERR,
+          "SUS2-SH disabled gate readout should not contain coefficients.");
+    }
     if (!two_layer_gate_explicit_scalar_moments)
       two_layer_gate_scalar_body_order.assign(two_layer_gate_scalar_count, 0);
     std::vector<int> body_order_counts(two_layer_gate_body_order_max + 1, 0);

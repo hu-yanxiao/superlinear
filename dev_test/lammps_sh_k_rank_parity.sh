@@ -239,10 +239,17 @@ if "default-mode-outer2-gate1" in name:
     replace_vector("two_layer_gate_body_mix_weights", [
         0.17 - 0.023 * (q % 9) * (-1.0 if q % 4 == 1 else 1.0)
         for q in range(len(mix))])
-if "readout-rejected" in name:
+if name.startswith("readout-") and name != "readout-zero":
     readout = vector("two_layer_gate_readout_coeffs")
-    readout[0] = 0.037
+    for q in range(len(readout)):
+        readout[q] = (0.013 + 0.0007 * (q % 17)) * (
+            -1.0 if q % 4 == 1 else 1.0)
     replace_vector("two_layer_gate_readout_coeffs", readout)
+    if "zero-gate" in name:
+        # The readout is an independent linear head on the first gate scalars.
+        # Zeroing the ordinary gate contraction makes accidental routing
+        # through two_layer_gate_weights immediately visible in E/F/virial.
+        replace_vector("two_layer_gate_weights", [0.0] * len(gate))
 
 text = text.replace("radial_basis_type = RBChebyshev_sss",
                     "radial_basis_type = RBChebyshev_sss_lmp", 1)
@@ -271,11 +278,36 @@ pair_style $style $model $style_args tabstep 0.0005
 pair_coeff * *
 neighbor 1.0 bin
 neigh_modify every 1 delay 0 check yes
+compute atom_energy all pe/atom
+compute sum_atom_energy all reduce sum c_atom_energy
 # The pair style accumulates only global virial[].  The stress/atom compute
 # requests per-atom vatom, which this pair style does not fill, so it is not
 # a valid virial source here.  In metal units P*V/1602176.6208 is eV.
-thermo_style custom step pe pxx pyy pzz pyz pxz pxy vol
+thermo_style custom step pe c_sum_atom_energy pxx pyy pzz pyz pxz pxy vol
 thermo_modify format float %.17g
+thermo 1
+run 0 post no
+write_dump all custom $tmp_dir/dump.$label id type x y z fx fy fz modify sort id format float %.17g
+LAMMPS
+}
+
+make_force_only_input() {
+  local model="$1" label="$2" style="$3"
+  local style_args=""
+  if [[ "$style" == sus2mtp/kk ]]; then
+    style_args="chunksize $KOKKOS_CHUNKSIZE"
+  fi
+  cat > "$tmp_dir/in.$label" <<LAMMPS
+units metal
+atom_style atomic
+boundary p p p
+newton on
+read_data $data
+pair_style $style $model $style_args tabstep 0.0005
+pair_coeff * *
+neighbor 1.0 bin
+neigh_modify every 1 delay 0 check yes
+thermo_style custom step
 thermo 1
 run 0 post no
 write_dump all custom $tmp_dir/dump.$label id type x y z fx fy fz modify sort id format float %.17g
@@ -285,6 +317,18 @@ LAMMPS
 run_lammps() {
   local executable="$1" ranks="$2" style="$3" model="$4" label="$5"
   make_input "$model" "$label" "$style"
+  local -a extra=()
+  if [[ "$style" == sus2mtp/kk ]]; then
+    read -r -a extra <<<"$KOKKOS_ARGS"
+  fi
+  "$MPI_RUN" -n "$ranks" "$executable" "${extra[@]}" \
+    -in "$tmp_dir/in.$label" -log "$tmp_dir/log.$label" \
+    >"$tmp_dir/stdout.$label" 2>"$tmp_dir/stderr.$label"
+}
+
+run_force_only_lammps() {
+  local executable="$1" ranks="$2" style="$3" model="$4" label="$5"
+  make_force_only_input "$model" "$label" "$style"
   local -a extra=()
   if [[ "$style" == sus2mtp/kk ]]; then
     read -r -a extra <<<"$KOKKOS_ARGS"
@@ -316,7 +360,7 @@ assert_model_rejected() {
   echo "$label: unsupported-model rejection ok"
 }
 
-cases=(rank0 outer-rank1-direct outer-rank2 outer-rankK-identity gate1-outer1 gate2-outer2 outer2-gate1 outer1-gate2 default-mode-outer2-gate1)
+cases=(rank0 outer-rank1-direct outer-rank2 outer-rankK-identity gate1-outer1 gate2-outer2 outer2-gate1 outer1-gate2 default-mode-outer2-gate1 readout-full-zero-gate readout-body-zero-gate readout-full-mixed readout-zero)
 models=()
 model="$(prepare_model rank0)" || exit 1; models+=("$model")
 model="$(prepare_model outer-rank1-direct --outer-k-rank=1)" || exit 1; models+=("$model")
@@ -327,10 +371,15 @@ model="$(prepare_model gate2-outer2 --outer-k-rank=2 --two-layer-gate-k-rank=2)"
 model="$(prepare_model outer2-gate1 --outer-k-rank=2 --two-layer-gate-k-rank=1)" || exit 1; models+=("$model")
 model="$(prepare_model outer1-gate2 --outer-k-rank=1 --two-layer-gate-k-rank=2)" || exit 1; models+=("$model")
 model="$(prepare_model default-mode-outer2-gate1 --outer-k-rank=2 --two-layer-gate-k-rank=1 --two-layer-gate-mode=mu-body-linear-combo)" || exit 1; models+=("$model")
-readout_model="$(prepare_model readout-rejected --two-layer-gate-readout)" || exit 1
+model="$(prepare_model readout-full-zero-gate --two-layer-gate-readout)" || exit 1; models+=("$model")
+model="$(prepare_model readout-body-zero-gate --two-layer-gate-readout --two-layer-gate-mode=mu-body-linear-combo)" || exit 1; models+=("$model")
+model="$(prepare_model readout-full-mixed --two-layer-gate-readout)" || exit 1; models+=("$model")
+model="$(prepare_model readout-zero --two-layer-gate-readout)" || exit 1; models+=("$model")
 decoupled_model="$(prepare_model decoupled-scaling-rejected \
   --outer-k-rank=2 --two-layer-gate-k-rank=1 \
   --two-layer-gate-decoupled-scaling)" || exit 1
+multi_layer_model="$(prepare_model multi-layer-rejected \
+  --multi-layer-gate)" || exit 1
 
 for index in "${!cases[@]}"; do
   case_name="${cases[$index]}"
@@ -344,21 +393,40 @@ for index in "${!cases[@]}"; do
   fi
 done
 
+for force_only_case in readout-full-zero-gate readout-body-zero-gate \
+    readout-full-mixed; do
+  for index in "${!cases[@]}"; do
+    if [[ "${cases[$index]}" != "$force_only_case" ]]; then
+      continue
+    fi
+    model="${models[$index]}"
+    if [[ -n "$CPU_LAMMPS_BIN" ]]; then
+      run_force_only_lammps "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
+        "$model" "cpu.force-only.$force_only_case"
+    fi
+    if [[ -n "$KOKKOS_LAMMPS_BIN" ]]; then
+      run_force_only_lammps "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" \
+        sus2mtp/kk "$model" "kk.force-only.$force_only_case"
+    fi
+    break
+  done
+done
+
 if [[ -n "$CPU_LAMMPS_BIN" ]]; then
-  assert_model_rejected "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
-    "$readout_model" cpu.readout-rejected \
-    "do not support two_layer_gate_readout_enabled"
   assert_model_rejected "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
     "$decoupled_model" cpu.decoupled-scaling-rejected \
     "do not support two_layer_gate_scaling_mode=decoupled"
+  assert_model_rejected "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
+    "$multi_layer_model" cpu.multi-layer-rejected \
+    "do not support multi_layer_gate_enabled models"
 fi
 if [[ -n "$KOKKOS_LAMMPS_BIN" ]]; then
   assert_model_rejected "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk \
-    "$readout_model" kk.readout-rejected \
-    "do not support two_layer_gate_readout_enabled"
-  assert_model_rejected "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk \
     "$decoupled_model" kk.decoupled-scaling-rejected \
     "do not support two_layer_gate_scaling_mode=decoupled"
+  assert_model_rejected "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk \
+    "$multi_layer_model" kk.multi-layer-rejected \
+    "do not support multi_layer_gate_enabled models"
 fi
 
 python3 - "$tmp_dir" "${cases[@]}" <<'PY'
@@ -400,18 +468,23 @@ def standalone(path):
 
 def lammps(label):
     log = (root / f"log.{label}").read_text().splitlines()
-    energy = stress = None
+    energy = atom_energy = stress = None
     for pos, raw in enumerate(log):
         header = raw.split()
-        if header[:2] != ["Step", "PotEng"] or len(header) != 9:
+        if "Step" not in header or "PotEng" not in header or \
+                "c_sum_atom_energy" not in header:
             continue
         row = log[pos + 1].split()
-        if len(row) == 9 and row[0] == "0":
-            volume = float(row[8])
+        if len(row) == len(header) and row[header.index("Step")] == "0":
+            volume = float(row[header.index("Volume")])
             # LAMMPS metal pressure is bar and its global virial has the same
             # sign convention as PlusStress.  1 eV/A^3 = 1602176.6208 bar.
-            energy = float(row[1])
-            stress = [float(x) * volume / 1602176.6208 for x in row[2:8]]
+            energy = float(row[header.index("PotEng")])
+            atom_energy = float(row[header.index("c_sum_atom_energy")])
+            stress = [
+                float(row[header.index(key)]) * volume / 1602176.6208
+                for key in ("Pxx", "Pyy", "Pzz", "Pyz", "Pxz", "Pxy")
+            ]
     dump = (root / f"dump.{label}").read_text().splitlines()
     forces = None
     for pos, raw in enumerate(dump):
@@ -424,9 +497,35 @@ def lammps(label):
                 fields = line.split()
                 if fields: rows.append((int(fields[ids]), [float(fields[c]) for c in cols]))
             rows.sort(); forces = [x for _, f in rows for x in f]; break
-    if energy is None or stress is None or forces is None or len(forces) != 24:
+    if energy is None or atom_energy is None or stress is None or \
+            forces is None or len(forces) != 24:
         raise SystemExit(f"cannot parse LAMMPS E/F/virial: {label}")
+    if abs(energy - atom_energy) > 5e-12:
+        raise SystemExit(
+            f"{label}: sum(per-atom energy) differs from global energy by "
+            f"{abs(energy - atom_energy):.3e}")
     return energy, forces, stress
+
+def dump_forces(label):
+    dump = (root / f"dump.{label}").read_text().splitlines()
+    for pos, raw in enumerate(dump):
+        if raw.startswith("ITEM: ATOMS"):
+            header = raw.split()[2:]
+            ids = header.index("id")
+            cols = [header.index(x) for x in ("fx", "fy", "fz")]
+            rows = []
+            for line in dump[pos + 1:]:
+                if line.startswith("ITEM:"):
+                    break
+                fields = line.split()
+                if fields:
+                    rows.append(
+                        (int(fields[ids]), [float(fields[c]) for c in cols]))
+            rows.sort()
+            forces = [x for _, force in rows for x in force]
+            if len(forces) == 24:
+                return forces
+    raise SystemExit(f"cannot parse LAMMPS forces: {label}")
 
 def check(case, engine, reference, candidate):
     e0, f0, s0 = reference; e1, f1, s1 = candidate
@@ -448,5 +547,25 @@ for case in cases:
     for engine in ("cpu", "kk"):
         if (root / f"log.{engine}.{case}").exists():
             check(case, engine, ref, lammps(f"{engine}.{case}"))
+        force_only = root / f"dump.{engine}.force-only.{case}"
+        if force_only.exists():
+            regular_forces = lammps(f"{engine}.{case}")[1]
+            force_only_values = dump_forces(f"{engine}.force-only.{case}")
+            error = max(abs(x-y) for x, y in zip(
+                regular_forces, force_only_values))
+            if error > 5e-12:
+                raise SystemExit(
+                    f"{case}/{engine}/force-only: dF={error:.3e}")
+            print(f"{case}/{engine}/force-only: dF={error:.3e}")
+
+zero_ref = standalone(root / "rank0.standalone.cfg")
+zero_readout_ref = standalone(root / "readout-zero.standalone.cfg")
+zero_error = max(
+    abs(zero_ref[0] - zero_readout_ref[0]),
+    max(abs(x-y) for x, y in zip(zero_ref[1], zero_readout_ref[1])),
+    max(abs(x-y) for x, y in zip(zero_ref[2], zero_readout_ref[2])))
+if zero_error > 5e-12:
+    raise SystemExit(
+        f"zero readout metadata changed standalone output by {zero_error:.3e}")
 print("LAMMPS_SH_K_RANK_PARITY: ok")
 PY

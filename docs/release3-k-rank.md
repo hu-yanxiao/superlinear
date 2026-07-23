@@ -173,48 +173,50 @@ communication (jobs 3966777 and 3966778).
 
 ### Million-atom GPU capacity check
 
-The final overflow-safe candidate was also exercised on one A100-80GB with
-1,054,560 atoms (`48 * 130 * 13 * 13`), a full neighbor list containing
-138,147,360 entries, and both outer-rank models. The chunk-dependent pair
-workspace is exactly
+The final Kokkos candidate was exercised with 1,054,560 atoms
+(`48 * 130 * 13 * 13`) and the rank-two `_lmp` table model. The model uses
+`radial_basis_type = RBChebyshev_sss_lmp`; `tabstep 0.0001` constructs the
+55,001-point radial table through the 5.5-A cutoff. These results therefore
+measure the requested table-lookup path, not analytic radial evaluation.
 
-```text
-M_chunk = 2 * chunk_size * alpha_moments_count * sizeof(double).
-```
+Two exact storage overlays remove the old requirement that mutually exclusive
+Kokkos phases own separate device buffers. Gate signal forward/reverse storage
+and ranked-gate work storage are overlaid only when the device views have the
+expected `LayoutLeft`, contiguous layout, and column stride. A stride guard
+selects the historical separate allocation for host, legacy, padded, or
+otherwise incompatible layouts. The force chain and model mathematics are
+unchanged.
 
-This is 55,120 bytes per chunk atom for rank one
-(`alpha_moments_count=3445`) and 61,728 bytes for rank two
-(`alpha_moments_count=3858`). The per-atom gate cache and LAMMPS/Kokkos atom,
-ghost, and neighbor storage are separate from this workspace.
+The full-system chunk now fits on one A100-80GB:
 
-Both tested model files explicitly use
-`radial_basis_type = RBChebyshev_sss_lmp`. The pair input supplies
-`tabstep 0.0001`; the runtime log confirms construction of the preinterpolation
-table with 55,001 grid points through the 5.5-A cutoff. Therefore the capacity
-and timing numbers below are for the `_lmp` table-lookup path, not analytic
-radial evaluation.
+| One-GPU case | `chunksize` | Peak GPU memory (MiB) | Change |
+| --- | ---: | ---: | ---: |
+| immediate pre-overlay candidate | 1,054,560 | 51,147 | reference |
+| final stride-guard overlay | 1,054,560 | 30,831 | -20,316 MiB (-39.72%) |
 
-| Model | Largest routine sweep chunk | Peak GPU memory (MiB) | Two-step loop (s) | Result |
-| --- | ---: | ---: | ---: | --- |
-| rank 1 | 655,360 | 71,749 | 3.39233 | pass |
-| rank 2 | 655,360 | 75,881 | 3.42359 | pass |
+The same full-chunk configuration passed on four A100 GPUs. The largest
+per-rank peak fell from 13,236 MiB to 8,158 MiB, a reduction of 5,078 MiB
+(38.37%). The final numerical comparison reported:
 
-At `chunksize=65536`, the rank-one step-zero energy was
-`-6811553.6046968848 eV` and pressure was `-152632.04171433244 bar`, agreeing
-with ten replicas of the 105,456-atom reference. Forces were finite, the atom
-count remained 1,054,560 through two NVE steps, and stderr was empty for every
-successful chunk/model case.
+| Four-GPU parity quantity | Maximum absolute difference |
+| --- | ---: |
+| energy per atom | `8.831e-16 eV/atom` |
+| force component | `2.515e-14 eV/angstrom` |
+| stress component | `2.116e-10 bar` |
 
-A focused rank-two upper-bound test succeeded at chunk sizes 688,128, 720,896,
-and 737,280, with respective peaks 77,809, 79,737, and 80,701 MiB. The next
-case, 753,664, failed cleanly during allocation of a 34.05-GiB Kokkos view.
-Thus the measured hard limit lies in `[737280, 753664)`. Because 737,280 leaves
-only about 1.2 GiB free, 655,360 is the largest tested setting with roughly
-6 GiB margin, while 524,288 is the more conservative default recommendation
-for this model/system (68,165 MiB peak). Larger chunks did not monotonically
-reduce the short loop time after launch overhead was amortized. Artifacts are
-under `SUS2-SH-release3-rank-million-smoke-20260722/job_3966782` and
-`upper_job_3966785` on the reference server.
+The final 1,000-step full-chunk ABBA comparison used
+`chunksize=1054560` and recorded `timed_steps=1000` in every run:
+
+| Candidate | Eight-run mean (s) | Relative to predecessor |
+| --- | ---: | ---: |
+| immediate pre-stride-guard overlay | 1,589.8275 | reference |
+| final stride-guard overlay | 1,588.3750 | 0.0914% faster |
+
+Thus the exact overlay delivered the intended device-memory reduction without
+a measured speed regression. The one-GPU, four-GPU, and final ABBA records are
+jobs 3968771, 3968794, and 3968817/3968818, respectively. Larger chunks remain
+useful when they fit, but `chunksize` is still bounded by the complete
+LAMMPS/Kokkos atom, ghost, neighbor, and pair workspace of the actual system.
 
 ## CLI
 
@@ -252,17 +254,17 @@ serialization. Models containing outer/gate rank or gate readout use
 `version = 1.2.0`. The release3 standalone reader accepts both versions and
 canonicalizes the version from the actual feature set when saving.
 
-| Runtime | rank=0 | outer rank | gate + outer rank | gate readout |
-| --- | --- | --- | --- | --- |
-| release3 standalone | yes | yes | yes | yes |
-| release3 CPU LAMMPS `sus2mtp` | yes | yes | yes | no, explicit error |
-| release3 Kokkos LAMMPS `sus2mtp/kk` | yes | yes | yes | no, explicit error |
-| older LAMMPS/other backends | 1.1 models only unless separately updated | not declared compatible | not declared compatible | not declared compatible |
+| Runtime | full `K` | outer rank | gate + outer rank | single-layer gate readout | multi-layer gate |
+| --- | --- | --- | --- | --- | --- |
+| release3 standalone | yes | yes | yes | yes | yes |
+| release3 CPU LAMMPS `sus2mtp` | yes | yes | yes | yes | no |
+| release3 Kokkos LAMMPS `sus2mtp/kk` | yes | yes | yes | yes | no |
+| older LAMMPS/other backends | 1.1 models only unless separately updated | not declared compatible | not declared compatible | not declared compatible | not declared compatible |
 
 The CPU and Kokkos interfaces share the same host-side model reader, including
-the `1.2.0` and unsupported-readout checks. Their forward contraction and
-transpose force chain are separate CPU/device implementations and must both
-pass the standalone/LAMMPS energy, force, and virial parity test before a
+the `1.2.0`, rank, and readout metadata. Their rank and readout forward paths
+and transpose force chains are separate CPU/device implementations and must
+both pass the standalone/LAMMPS energy, force, and virial parity test before a
 binary is published.
 
 Additional current limits:
@@ -270,18 +272,25 @@ Additional current limits:
 - the LAMMPS SH reader supports `0 <= l_max <= 4`;
 - `PruneSpecies` is not implemented for rank or readout models;
 - disabling rank performs no contraction and writes no rank metadata;
-- readout remains a standalone-only experimental feature in this release;
+- readout is limited to the single-layer neighbor-site gate topology and is
+  incompatible with outer/gate rank, residual, edge-L1, and multi-layer-gate
+  modes;
+- multi-layer gate models are not supported by the CPU or Kokkos LAMMPS pair
+  styles;
 - standalone `two_layer_gate_scaling_mode=decoupled` models are not supported
   by the CPU or Kokkos LAMMPS pair styles and are rejected explicitly.
 
 ## Required checks
 
 ```bash
+dev_test/sh_release3_version_banner_check.sh
 dev_test/sh_k_rank_cli_smoke.sh ./bin/mlp-sus2
 dev_test/sh_k_rank_active_math_check.sh ./bin/mlp-sus2
 dev_test/sh_k_rank_mpi_smoke.sh ./bin/mlp-sus2
 dev_test/sh_release3_model_format_check.sh ./bin/mlp-sus2
 dev_test/lammps_kk_rank_clear_overflow_check.sh
+dev_test/lammps_kk_gate_signal_overlay_check.sh
+dev_test/lammps_kk_rank_work_phase_overlay_check.sh
 
 dev_test/lammps_sh_k_rank_parity.sh \
   --mlp ./bin/mlp-sus2 \
@@ -300,9 +309,10 @@ cache boundaries.
 The LAMMPS parity matrix covers rank-off, outer rank-one direct radial, outer
 rank two with asymmetric weights, `R=K` identity, gate/outer ranks `1/1` and
 `2/2`, both independent mixed-rank layouts `R_g/R=1/2` and `2/1`, and a
-default `mu-body-linear-combo` gate-rank case. It also checks that CPU and
-Kokkos reject dynamic readout and decoupled gate-scaling models with explicit
-diagnostics. Active
+default `mu-body-linear-combo` gate-rank case. It also covers compatible
+single-layer readout models, including both scalar projection modes and a
+zero-readout control, and checks that CPU and Kokkos reject decoupled
+gate-scaling models with explicit diagnostics. Active
 parameter-gradient, energy/force/stress directional-derivative, coordinate and
 cell finite-difference, roundtrip, and serial/MPI checks are kept in the
 standalone test suite.

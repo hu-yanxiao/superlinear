@@ -43,7 +43,7 @@ files for users who prefer the historical single-package distribution.
 Start from a clean LAMMPS source tree, then run:
 
 ```bash
-cd /path/to/SUS2-MLIP/interfaces/lammps
+cd /path/to/SUS2-SH/interfaces/lammps
 scripts/install_into_lammps.sh /path/to/lammps
 ```
 
@@ -173,3 +173,32 @@ including `two_layer_gate_edge_l1` / full-L1 metadata. Kokkos pair styles
 support no-gate SUS2-SH models, plain release additive-node two-layer-gate
 models, and `two_layer_gate_edge_l1` / full-L1 models. Center two-layer-gate
 models are still CPU-only.
+
+Release3 model-topology support is:
+
+| Model topology | CPU `sus2mtp` | Kokkos `sus2mtp/kk` |
+| --- | --- | --- |
+| historical full-`K` | yes | yes |
+| outer `K` rank | yes | yes |
+| gate + outer `K` rank | yes | yes |
+| compatible single-layer gate readout | yes | yes |
+| multi-layer gate | no | no |
+
+The supported readout form is the single-layer neighbor-site gate with the
+first-layer scalar energy head. Readout is incompatible with outer/gate rank,
+residual, edge-L1, and multi-layer-gate modes. Multi-layer gate models must use
+the standalone runtime. The standalone
+`two_layer_gate_scaling_mode=decoupled` form is also unsupported by the CPU and
+Kokkos pair styles.
+
+For large Kokkos runs, the final stride-guard overlay reuses storage only when
+the device views are layout- and stride-compatible; every other layout takes
+the separate-workspace fallback. This is an exact storage optimization, not a
+change to the model mathematics. With the rank-two `_lmp` table model and
+`chunksize=1054560`, the measured one-A100 peak fell from 51,147 MiB to
+30,831 MiB. The four-GPU million-atom run reduced the largest per-rank peak
+from 13,236 MiB to 8,158 MiB. Its maximum force difference was
+`2.515e-14 eV/angstrom`, with energy-per-atom and stress differences of
+`8.831e-16 eV/atom` and `2.116e-10 bar`, respectively. A 1,000-step ABBA
+comparison measured 1,588.3750 s for the final overlay and 1,589.8275 s for
+its immediate predecessor.

@@ -180,6 +180,9 @@ class PairSUS2MTP : public Pair {
   int two_layer_gate_body_order_max = 0;
   int two_layer_gate_scalar_count = 0;
   int two_layer_gate_weight_count = 0;
+  bool two_layer_gate_readout_enabled = false;
+  int two_layer_gate_readout_coeff_count = 0;
+  std::vector<double> two_layer_gate_readout_coeffs;
 	  int two_layer_gate_body_mix_weight_count = 0;
 	  int two_layer_gate_product_limit = 0;
 	  int two_layer_gate_moment_cache_width = 0;

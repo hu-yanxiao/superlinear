@@ -97,9 +97,26 @@ kk_cpp = (root / "interfaces/lammps/ML-SUS2-KK/pair_sus2_mtp_kokkos.cpp").read_t
 if 'model_file_version == "1.1.0" || model_file_version == "1.2.0"' not in cpu:
     raise SystemExit("LAMMPS host reader does not explicitly accept 1.1.0 and 1.2.0")
 if 'keyword == "two_layer_gate_readout_enabled"' not in cpu:
-    raise SystemExit("LAMMPS host reader lacks an explicit gate-readout guard")
-if "CPU/Kokkos interfaces do not support" not in cpu:
-    raise SystemExit("LAMMPS gate-readout error does not identify CPU/Kokkos support")
+    raise SystemExit("LAMMPS host reader lacks gate-readout metadata support")
+if 'keyword == "multi_layer_gate_enabled"' not in cpu or \
+        "do not support multi_layer_gate_enabled models" not in cpu:
+    raise SystemExit("LAMMPS host reader lacks explicit multi-layer rejection")
+for token in (
+    "two_layer_gate_readout_coeff_count",
+    "two_layer_gate_readout_coeffs",
+    "readout_has_nonzero_coeffs",
+):
+    if token not in cpu:
+        raise SystemExit(f"LAMMPS host reader/compute lacks {token}")
+if "d_two_layer_gate_readout_coeffs" not in kk_h or \
+        "ComputeGateReadoutEnergy" not in kk_cpp or \
+        "ComputeGateReadoutAdjointSeeds" not in kk_cpp:
+    raise SystemExit("LAMMPS Kokkos gate-readout path is incomplete")
+seed = kk_cpp.find('"ComputeGateReadoutAdjointSeeds"')
+full = kk_cpp.find('"ComputeGateFullScalarAdjointsTeam"', seed)
+body = kk_cpp.find('"ComputeGateAdjointDers', seed)
+if seed < 0 or (full < 0 and body < 0):
+    raise SystemExit("LAMMPS Kokkos readout seeds are not ordered before backprop")
 if "public PairSUS2MTP" not in kk_h or "PairSUS2MTP::settings(" not in kk_cpp:
     raise SystemExit("Kokkos no longer demonstrably reuses the guarded host reader")
 PY

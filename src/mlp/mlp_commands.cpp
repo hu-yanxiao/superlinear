@@ -23,7 +23,7 @@
 #include "../../src/mlp/train.h"
 #include "../../src/mlp/calc_errors.h"
 
-const char version_str[] = "2026-04-17 developer version";
+const char version_str[] = "SUS2-SH Release 3 (2026-07-23)";
 
 using namespace std;
 
