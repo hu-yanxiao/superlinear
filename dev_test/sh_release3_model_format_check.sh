@@ -99,7 +99,7 @@ if 'model_file_version == "1.1.0" || model_file_version == "1.2.0"' not in cpu:
 if 'keyword == "two_layer_gate_readout_enabled"' not in cpu:
     raise SystemExit("LAMMPS host reader lacks gate-readout metadata support")
 if 'keyword == "multi_layer_gate_enabled"' not in cpu or \
-        '"do not support "' not in cpu or \
+        '"LAMMPS SUS2-SH CPU/Kokkos interfaces do not support "' not in cpu or \
         '"multi_layer_gate_enabled models; use standalone mlp-sus2."' not in cpu:
     raise SystemExit("LAMMPS host reader lacks explicit multi-layer rejection")
 for token in (
