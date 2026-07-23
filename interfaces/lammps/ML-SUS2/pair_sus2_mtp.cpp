@@ -1868,7 +1868,8 @@ bool PairSUS2MTP::two_layer_gate_edge_l1_active() const
 bool PairSUS2MTP::requires_two_layer_gate_sh() const
 {
   return is_sh_model && two_layer_gate_enabled &&
-         (outer_k_rank_enabled || has_nonzero_two_layer_gate_weights() ||
+         (outer_k_rank_enabled || two_layer_gate_readout_enabled ||
+          has_nonzero_two_layer_gate_weights() ||
           has_nonzero_two_layer_gate_edge_l1_weights());
 }
 

@@ -109,6 +109,12 @@ for token in (
 ):
     if token not in cpu:
         raise SystemExit(f"LAMMPS host reader/compute lacks {token}")
+dispatch_begin = cpu.find("bool PairSUS2MTP::requires_two_layer_gate_sh() const")
+dispatch_end = cpu.find("int PairSUS2MTP::two_layer_gate_signal_stride() const",
+                        dispatch_begin)
+if dispatch_begin < 0 or dispatch_end < 0 or \
+        "two_layer_gate_readout_enabled" not in cpu[dispatch_begin:dispatch_end]:
+    raise SystemExit("LAMMPS host dispatch can bypass an independent gate readout")
 if "d_two_layer_gate_readout_coeffs" not in kk_h or \
         "ComputeGateReadoutEnergy" not in kk_cpp or \
         "ComputeGateReadoutAdjointSeeds" not in kk_cpp:
