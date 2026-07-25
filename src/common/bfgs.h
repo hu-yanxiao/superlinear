@@ -351,6 +351,7 @@ private:
 	void DenseMatVec(const Array1D& v, Array1D& out);
 	void FormDenseDirection(const Array1D& g);
 	void MirrorUpperToLower();
+	void ResetTransientIterationState();
 
 protected:
 	int size = 0;										//!< size of x, g, etc.

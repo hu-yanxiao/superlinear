@@ -501,16 +501,29 @@ void BFGS::UpdateInvHess(const Array1D& g)
 	}
 }
 
-void BFGS::Set_x(const double * x, int _size) {
-	Resize(_size);
-	memcpy(&x_[0], &x[0], _size * sizeof(double));
+void BFGS::ResetTransientIterationState()
+{
+	// Set_x()/Restart() establish a new reverse-communication base point.
+	// Search directions and line-search anchors belong to the old base (and,
+	// after a coordinate rechart, to the old coordinate chart), so none of
+	// them may participate in the first directional-derivative test.
+	std::fill(p.begin(), p.end(), 0.0);
+	std::copy(x_.begin(), x_.end(), x_start.begin());
+	std::fill(g_start.begin(), g_start.end(), 0.0);
+	std::fill(delta_grad.begin(), delta_grad.end(), 0.0);
+	std::fill(yC.begin(), yC.end(), 0.0);
+	p_dot_g = 0.0;
 	f_start = HUGE_DOUBLE;
 	p_dot_g_start = HUGE_DOUBLE;
-
-	// reset linesearch
 	linesearch.Reset();
 	is_in_linesearch_ = false;
 	armijo_value_only_trial_ready_ = false;
+}
+
+void BFGS::Set_x(const double * x, int _size) {
+	Resize(_size);
+	memcpy(&x_[0], &x[0], _size * sizeof(double));
+	ResetTransientIterationState();
 }
 
 void BFGS::Restart() {
@@ -526,9 +539,5 @@ void BFGS::Restart() {
 			distributed_inv_hess_rows_[local_row * size + global_row] = 1.0;
 		}
 	}
-	f_start = HUGE_DOUBLE;
-	p_dot_g_start = HUGE_DOUBLE;
-	linesearch.Reset();
-	is_in_linesearch_ = false;
-	armijo_value_only_trial_ready_ = false;
+	ResetTransientIterationState();
 }

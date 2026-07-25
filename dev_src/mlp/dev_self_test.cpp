@@ -680,6 +680,41 @@ TEST("optimizer accepted snapshot excludes BFGS next trial") {
 		FAIL("recharted accepted base retained a stale pending-trial state")
 } END_TEST;
 
+TEST("BFGS restart discards a stale coordinate-chart direction") {
+	class RestartProbe : public BFGS {
+	public:
+		void PoisonTransientState()
+		{
+			p[0] = -1.0e101;
+			x_start[0] = 1.0e50;
+			g_start[0] = -1.0e75;
+			p_dot_g = -1.0e101;
+			p_dot_g_start = -1.0e101;
+			f_start = 1.0;
+		}
+	};
+
+	Array1D base(1);
+	base[0] = 2.0;
+	Array1D gradient(1);
+	gradient[0] = 3.0;
+
+	RestartProbe bfgs;
+	bfgs.Set_x(base);
+	bfgs.PoisonTransientState();
+	bfgs.Restart();
+	bfgs.Set_x(base);
+	bfgs.Iterate(4.5, gradient);
+
+	// A fresh identity-Hessian BFGS step is x - g = -1.  Before the reset
+	// fix, the stale |p.g| exceeded the HUGE_DOUBLE sentinel and BFGS reused
+	// the poisoned old-chart x_start + p instead.
+	if (!bfgs.is_in_linesearch())
+		FAIL("fresh BFGS base did not start a new line search")
+	if (std::abs(bfgs.x(0) + 1.0) > 1.0e-12)
+		FAIL("BFGS restart reused a stale coordinate-chart direction")
+} END_TEST;
+
 TEST("EAMSimple CalcEnergyGrad test by finite difference") {
 	Configuration cfg, cfg1, cfg2;
 	double diffstep = 1e-5;
