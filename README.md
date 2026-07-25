@@ -155,6 +155,11 @@ Common training options:
 | `--shift` | Disable the trainer's internal shift correction. |
 | `--update-mindist` | Update model `min_dist` from the training-set minimum distance. |
 
+Best-checkpoint writes remain atomic and accepted-point-only, but their
+per-improvement messages are quiet by default. Set
+`SUS2_SH_CHECKPOINT_UPDATE_TRACE=1` only when those diagnostic messages are
+needed.
+
 ## Gate Model Training CLI
 
 The release3 production gate is a linear additive-node update. It does not use

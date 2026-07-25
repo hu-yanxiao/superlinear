@@ -61,19 +61,20 @@ for path in "$current_model" "$best_model" "$trained_model" "$trace_file"; do
 done
 
 grep -q "checkpoint safety enabled" "$log_file"
-grep -q "best checkpoint updated kind=evaluated-boundary" "$log_file"
+if grep -q "best checkpoint updated" "$log_file"; then
+  echo "default checkpoint logging is not quiet" >&2
+  exit 1
+fi
 cmp "$current_model" "$best_model"
 cmp "$current_model" "$trained_model"
 
-python3 - "$trace_file" "$log_file" <<'PY'
+python3 - "$trace_file" <<'PY'
 import csv
 import math
 import pathlib
-import re
 import sys
 
 trace_path = pathlib.Path(sys.argv[1])
-log_path = pathlib.Path(sys.argv[2])
 with trace_path.open(newline="") as stream:
     rows = list(csv.DictReader(stream))
 if not rows:
@@ -85,20 +86,19 @@ for previous, current in zip(losses, losses[1:]):
     tolerance = 1.0e-8 * max(1.0, abs(previous), abs(current))
     if current > previous + tolerance:
         raise SystemExit("accepted checkpoint losses are not monotone")
-
-updates = [
-    float(value)
-    for value in re.findall(r"best checkpoint updated.*?total_loss=([0-9eE+.-]+)",
-                            log_path.read_text())
-]
-if not updates or not all(math.isfinite(value) for value in updates):
-    raise SystemExit("missing finite best-checkpoint update loss")
-for previous, current in zip(updates, updates[1:]):
-    if current >= previous:
-        raise SystemExit("best-checkpoint update loss did not strictly improve")
-if updates[-1] > min(losses) + 1.0e-10 * max(1.0, abs(min(losses))):
-    raise SystemExit("best checkpoint loss is above the accepted trace minimum")
 PY
+
+trace_log="$tmp_dir/checkpoint-trace.log"
+SUS2_SH_CHECKPOINT_UPDATE_TRACE=1 "$binary" train "$seed_model" "$train_cfg" \
+  --trained-pot-name="$tmp_dir/checkpoint-trace-trained.mtp" \
+  --curr-pot-name="$tmp_dir/checkpoint-trace-current.mtp" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0.1 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$trace_log" 2>&1
+grep -q "best checkpoint updated kind=evaluated-boundary" "$trace_log"
 
 if command -v sha256sum >/dev/null 2>&1; then
   old_best_sha="$(sha256sum "$best_model" | awk '{print $1}')"

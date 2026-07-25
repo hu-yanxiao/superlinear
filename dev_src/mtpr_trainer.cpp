@@ -3056,6 +3056,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (io_failed != 0)
 			ERROR("Checkpoint I/O failed during " + context + ": " + io_error);
 	};
+	const bool trace_checkpoint_updates =
+		EnvFlagEnabled("SUS2_SH_CHECKPOINT_UPDATE_TRACE");
 	auto update_best_checkpoint_collective = [&]
 		(double root_loss, int step, const std::string& point_kind) {
 		int update_best = 0;
@@ -3072,7 +3074,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				prepare_best_checkpoint();
 				save_potential_atomically_root(resolved_best_checkpoint_path_);
 			});
-		if (prank == 0) {
+		if (prank == 0 && trace_checkpoint_updates) {
 			std::cerr << "[" << CurrentTimestamp() << "] "
 			          << optimizer_log_name
 			          << " best checkpoint updated"
