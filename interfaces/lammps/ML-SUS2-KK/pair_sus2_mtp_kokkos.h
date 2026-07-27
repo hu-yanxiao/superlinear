@@ -436,24 +436,30 @@ namespace LAMMPS_NS {
   using radial_table_value_type = double;
   bool do_list = false;                                      // Enable/disable preinterpolation table
   double inv_dr = 0.0;                                       // 1/dr for table indexing
-  Kokkos::View<radial_table_value_type***, DeviceType,
+  Kokkos::View<radial_table_value_type***, Kokkos::LayoutRight, DeviceType,
                Kokkos::MemoryTraits<Kokkos::RandomAccess>>
       d_radial_list;                                         // Values: [species_pairs][grid_size][basic_mu_group_count]
-  Kokkos::View<radial_table_value_type***, DeviceType,
+  Kokkos::View<radial_table_value_type***, Kokkos::LayoutRight, DeviceType,
                Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 	      d_radial_der_list;                                     // Derivatives: [species_pairs][grid_size][basic_mu_group_count]
   Kokkos::View<radial_table_value_type *, DeviceType,
                Kokkos::MemoryTraits<Kokkos::RandomAccess>>
       d_radial_vd_list;                                      // Interleaved [value,derivative] for force kernels
-	  Kokkos::View<radial_table_value_type***, DeviceType,
+	  Kokkos::View<radial_table_value_type***, Kokkos::LayoutRight, DeviceType,
 	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 	      d_two_layer_gate_radial_list;                           // Values: [species_pairs][grid_size][basic_mu_group_count]
-		  Kokkos::View<radial_table_value_type***, DeviceType,
+		  Kokkos::View<radial_table_value_type***, Kokkos::LayoutRight, DeviceType,
 		               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 		      d_two_layer_gate_radial_der_list;                       // Derivatives: [species_pairs][grid_size][basic_mu_group_count]
 		  Kokkos::View<radial_table_value_type *, DeviceType,
 		               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 		      d_two_layer_gate_radial_vd_list;                        // Interleaved [value,derivative] for gate force kernels
+	  Kokkos::View<double **, DeviceType,
+	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
+	      d_two_layer_gate_radial_coeffs_direct;                  // [mu][radial_basis]
+	  Kokkos::View<double **, DeviceType,
+	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
+	      d_two_layer_gate_type_coeffs_direct;                    // [species][mu]
 	  Kokkos::View<radial_table_value_type***, DeviceType,
 	               Kokkos::MemoryTraits<Kokkos::RandomAccess>>
 	      d_env_gate_radial_list;                                 // Values: [species_pairs][grid_size][6]

@@ -68,9 +68,16 @@ class PairSUS2MTP : public Pair {
   double actual_dr = 0.0;
   int list_grid_size = 0;
   bool tabstep_set_by_user = false;
+  enum RadialEvaluationMode {
+    RADIAL_MODE_AUTO = 0,
+    RADIAL_MODE_DIRECT = 1,
+    RADIAL_MODE_TABLE = 2
+  };
+  int radial_evaluation_mode = RADIAL_MODE_AUTO;
   int *pair_to_table_index = nullptr;
   int used_species_count = 0;
   int used_pair_count = 0;
+  bool radial_table_requested() const;
 
   void read_file(FILE *, const char *);       //Parsing file using LAMMPS utils
   std::string potential_name = "Untitled";    //An optional name which isn't currently used.

@@ -140,19 +140,31 @@ make -C "$LAMMPS_ROOT/src" no-all purge
 CPU:
 
 ```lammps
-pair_style sus2mtp p.mtp tabstep 1.0e-4
+pair_style sus2mtp p.mtp radial_mode table tabstep 1.0e-4
 pair_coeff * *
 ```
 
 GPU:
 
 ```lammps
-pair_style sus2mtp/kk p.mtp chunksize 129600 tabstep 1.0e-4
+pair_style sus2mtp/kk p.mtp chunksize 129600 radial_mode table tabstep 1.0e-4
 pair_coeff * *
 ```
 
-`tabstep` is optional and defaults to `1.0e-4 A`. The table is built only for
-species pairs that appear in the active simulation atom types.
+`radial_mode` is optional and accepts `auto`, `table`, or `direct`. The default
+`auto` mode preserves the historical behavior: `_lmp` radial-basis names use
+the table and the corresponding names without `_lmp` use direct evaluation.
+For a table-capable `_lmp` model, an explicit override lets that same model file
+be benchmarked or run through direct evaluation without editing its metadata,
+for example:
+
+```lammps
+pair_style sus2mtp/kk p.mtp chunksize 129600 radial_mode direct
+```
+
+`tabstep` is optional and defaults to `1.0e-4 A`; it is used only in table
+mode. Explicit table mode requires an `_lmp` radial basis. The table is built
+only for species pairs that appear in the active simulation atom types.
 
 The current table path supports:
 
@@ -165,8 +177,11 @@ RBJacobi_sss_lmp
 ```
 
 Other radial basis names are parsed by the CPU side when implemented in the
-SUS2 interface sources, but only the `_lmp` variants above use the
-preinterpolation table.
+SUS2 interface sources. Kokkos direct evaluation currently supports
+`RBChebyshev_sss[_lmp]`, `RBLaguerre_log1p[_lmp]`, and
+`RBLaguerre_log1p_pos[_lmp]`; unsupported explicit direct requests fail with a
+diagnostic instead of silently selecting a different formula. The same check
+applies when `auto` resolves a non-`_lmp` model to direct evaluation.
 
 CPU `pair_style sus2mtp` supports release additive-node two-layer-gate models,
 including `two_layer_gate_edge_l1` / full-L1 metadata. Kokkos pair styles

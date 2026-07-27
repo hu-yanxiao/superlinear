@@ -514,13 +514,15 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::coeff(int narg, 
 template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int narg, char **arg)
 {
   // We may need to process in chunks to deal with memory limitations
-  // For now we expect the user to specify the chunk size, with an optional tabstep.
+  // For now we expect the user to specify the chunk size, with optional
+  // tabstep and radial-mode overrides.
   if (narg < 3 || (narg - 1) % 2 != 0)
     error->all(
         FLERR,
         "Pair sus2mtp/kk requires a potential file plus keyword/value pairs, including \"chunksize\".");
 
   int tabstep_arg_idx = -1;
+  int radial_mode_arg_idx = -1;
   bool found_chunksize = false;
   for (int i = 1; i < narg; i += 2) {
     const std::string keyword = LAMMPS_NS::utils::lowercase(arg[i]);
@@ -533,9 +535,14 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
       tabstep_arg_idx = i;
       continue;
     }
+    if (keyword == "radial_mode") {
+      radial_mode_arg_idx = i;
+      continue;
+    }
 
     error->all(FLERR,
-               "Pair sus2mtp/kk only supports the keywords \"chunksize\" and \"tabstep\".");
+               "Pair sus2mtp/kk only supports the keywords \"chunksize\", "
+               "\"tabstep\", and \"radial_mode\".");
   }
 
   if (!found_chunksize)
@@ -543,15 +550,33 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   if (input_chunk_size <= 0)
     error->all(FLERR, "Pair sus2mtp/kk chunksize must be positive.");
 
-  char *base_args[3] = {arg[0], nullptr, nullptr};
+  char *base_args[5] = {arg[0], nullptr, nullptr, nullptr, nullptr};
   int base_narg = 1;
   if (tabstep_arg_idx >= 0) {
     base_args[base_narg++] = arg[tabstep_arg_idx];
     base_args[base_narg++] = arg[tabstep_arg_idx + 1];
   }
+  if (radial_mode_arg_idx >= 0) {
+    base_args[base_narg++] = arg[radial_mode_arg_idx];
+    base_args[base_narg++] = arg[radial_mode_arg_idx + 1];
+  }
 
   PairSUS2MTP::settings(
       base_narg, base_args);    // This also calls read_file which parses and loads the arrays in host
+
+  const bool kokkos_direct_radial_supported =
+      radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS ||
+      radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP;
+  if (!radial_table_requested() && !kokkos_direct_radial_supported)
+    error->all(
+        FLERR,
+        "Pair sus2mtp/kk direct radial evaluation supports only "
+        "RBChebyshev_sss[_lmp], RBLaguerre_log1p[_lmp], and "
+        "RBLaguerre_log1p_pos[_lmp] radial bases.");
 
   SUS2GateCache::CompactLayout compact_gate_cache_layout;
   SUS2RankPhase::CompactLayout rank_phase_layout;
@@ -873,6 +898,25 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	         two_layer_gate_full_identity_signal) ? 1 : 0;
 	    if (two_layer_gate_kk_signal_stride <= 0)
 	      error->all(FLERR, "Pair sus2mtp/kk two-layer gate signal stride is invalid.");
+	    const int expected_gate_radial_count =
+	        radial_func_count * radial_basis_size;
+	    const int expected_gate_type_count =
+	        species_count * radial_func_count;
+	    if (static_cast<int>(two_layer_gate_radial_coeffs.size()) !=
+	            expected_gate_radial_count ||
+	        static_cast<int>(two_layer_gate_type_coeffs.size()) !=
+	            expected_gate_type_count)
+	      error->all(
+	          FLERR,
+	          "SUS2-SH Kokkos direct gate radial coefficient layout is inconsistent.");
+	    MemKK::realloc_kokkos(
+	        d_two_layer_gate_radial_coeffs_direct,
+	        "sus2mtp/kk:two_layer_gate_radial_coeffs_direct",
+	        radial_func_count, radial_basis_size);
+	    MemKK::realloc_kokkos(
+	        d_two_layer_gate_type_coeffs_direct,
+	        "sus2mtp/kk:two_layer_gate_type_coeffs_direct",
+	        species_count, radial_func_count);
 	    MemKK::realloc_kokkos(d_two_layer_gate_weight_moment_indices,
 	                          "sus2mtp/kk:two_layer_gate_weight_moment_indices",
 	                          std::max(1, two_layer_gate_scalar_count));
@@ -974,6 +1018,10 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   auto h_pair_to_table_index = Kokkos::create_mirror_view(d_pair_to_table_index);
 	  auto h_regression_coeffs = Kokkos::create_mirror_view(d_regression_coeffs);
 	  auto h_shift_coeffs = Kokkos::create_mirror_view(d_shift_coeffs);
+	  auto h_two_layer_gate_radial_coeffs_direct =
+	      Kokkos::create_mirror_view(d_two_layer_gate_radial_coeffs_direct);
+	  auto h_two_layer_gate_type_coeffs_direct =
+	      Kokkos::create_mirror_view(d_two_layer_gate_type_coeffs_direct);
 	  auto h_two_layer_gate_weight_moment_indices =
 	      Kokkos::create_mirror_view(d_two_layer_gate_weight_moment_indices);
 	  auto h_two_layer_gate_scalar_body_bucket =
@@ -1136,6 +1184,16 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	    h_shift_coeffs(i) = PairSUS2MTP::regression_coeffs[shift_coeffs_offset + i];
 	  }
 	  if (two_layer_gate_enabled) {
+	    for (int mu = 0; mu < radial_func_count; mu++)
+	      for (int ri = 0; ri < radial_basis_size; ri++)
+	        h_two_layer_gate_radial_coeffs_direct(mu, ri) =
+	            two_layer_gate_radial_coeffs[
+	                static_cast<size_t>(mu) * radial_basis_size + ri];
+	    for (int species = 0; species < species_count; species++)
+	      for (int mu = 0; mu < radial_func_count; mu++)
+	        h_two_layer_gate_type_coeffs_direct(species, mu) =
+	            two_layer_gate_type_coeffs[
+	                static_cast<size_t>(species) * radial_func_count + mu];
 	    for (int q = 0; q < two_layer_gate_scalar_count; q++) {
 	      h_two_layer_gate_weight_moment_indices(q) =
 	          two_layer_gate_scalar_moment_indices[q];
@@ -1270,10 +1328,14 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
   Kokkos::deep_copy(d_basic_mu_values, h_basic_mu_values);
   Kokkos::deep_copy(d_basic_grouped_indices, h_basic_grouped_indices);
   Kokkos::deep_copy(d_alpha_basic_mu_group, h_alpha_basic_mu_group);
-  Kokkos::deep_copy(d_pair_to_table_index, h_pair_to_table_index);
+	  Kokkos::deep_copy(d_pair_to_table_index, h_pair_to_table_index);
 	  Kokkos::deep_copy(d_regression_coeffs, h_regression_coeffs);
 	  Kokkos::deep_copy(d_shift_coeffs, h_shift_coeffs);  // CRITICAL FIX: Copy shift_coeffs
 	  if (two_layer_gate_enabled) {
+	    Kokkos::deep_copy(d_two_layer_gate_radial_coeffs_direct,
+	                      h_two_layer_gate_radial_coeffs_direct);
+	    Kokkos::deep_copy(d_two_layer_gate_type_coeffs_direct,
+	                      h_two_layer_gate_type_coeffs_direct);
 	    Kokkos::deep_copy(d_two_layer_gate_weight_moment_indices,
 	                      h_two_layer_gate_weight_moment_indices);
 	    Kokkos::deep_copy(d_two_layer_gate_scalar_body_bucket,
@@ -1358,10 +1420,7 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::settings(int nar
 	void PairSUS2MTPKokkos<DeviceType>::build_preinterpolation_table()
 {
   // Check if preinterpolation table should be used
-  if (radial_basis_type_index != SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP &&
-      radial_basis_type_index != SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP &&
-      radial_basis_type_index != SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP &&
-      radial_basis_type_index != SUS2RadialMTPBasis::JACOBI_SSS_LMP) {
+  if (!radial_table_requested()) {
     do_list = false;
     return;
   }
@@ -1759,26 +1818,140 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 	{
 	  val = static_cast<KK_FLOAT>(0.0);
 	  der = static_cast<KK_FLOAT>(0.0);
-	  if (!do_list || d_two_layer_gate_radial_list.extent(0) == 0) return;
+	  if (do_list && d_two_layer_gate_radial_list.extent(0) > 0) {
+	    int r_list = (int) Kokkos::floor(dist * inv_dr);
+	    const int last_interval = list_grid_size - 2;
+	    if (r_list < 0) r_list = 0;
+	    if (r_list > last_interval) r_list = last_interval;
+	    const int r_next = r_list + 1;
+	    const int shift = itype * species_count + jtype;
+	    const int table_index = d_pair_to_table_index(shift);
+	    if (table_index >= 0) {
+	      F_FLOAT ddr = dist * inv_dr - r_list;
+	      if (ddr < 0.0) ddr = 0.0;
+	      if (ddr > 1.0) ddr = 1.0;
+	      const F_FLOAT v1 =
+	          d_two_layer_gate_radial_list(table_index, r_list, mu_group);
+	      const F_FLOAT v2 =
+	          d_two_layer_gate_radial_list(table_index, r_next, mu_group);
+	      const F_FLOAT d1 =
+	          d_two_layer_gate_radial_der_list(table_index, r_list, mu_group);
+	      const F_FLOAT d2 =
+	          d_two_layer_gate_radial_der_list(table_index, r_next, mu_group);
+	      val = v1 + ddr * (v2 - v1);
+	      der = d1 + ddr * (d2 - d1);
+	      return;
+	    }
+	  }
 
-	  int r_list = (int) Kokkos::floor(dist * inv_dr);
-	  const int last_interval = list_grid_size - 2;
-	  if (r_list < 0) r_list = 0;
-	  if (r_list > last_interval) r_list = last_interval;
-	  const int r_next = r_list + 1;
-	  const int shift = itype * species_count + jtype;
-	  const int table_index = d_pair_to_table_index(shift);
-	  if (table_index < 0) return;
+	  const int mu = d_basic_mu_values(mu_group);
+	  const int pairs_count = species_count * species_count;
+	  const int k_scaling = d_mu_to_K(mu);
+	  const int scal_idx =
+	      species_count + k_scaling * 2 * pairs_count +
+	      itype * species_count + jtype;
+	  const int shift_idx =
+	      species_count + k_scaling * 2 * pairs_count + pairs_count +
+	      itype * species_count + jtype;
+	  const F_FLOAT scal = d_regression_coeffs[scal_idx];
+	  const F_FLOAT shift = d_regression_coeffs[shift_idx];
+	  const F_FLOAT species_factor =
+	      d_two_layer_gate_type_coeffs_direct(itype, mu) *
+	      d_two_layer_gate_type_coeffs_direct(jtype, mu);
+	  const bool use_laguerre =
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P ||
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP;
+	  const bool use_laguerre_pos =
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+	      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP;
 
-	  F_FLOAT ddr = dist * inv_dr - r_list;
-	  if (ddr < 0.0) ddr = 0.0;
-	  if (ddr > 1.0) ddr = 1.0;
-	  const F_FLOAT v1 = d_two_layer_gate_radial_list(table_index, r_list, mu_group);
-	  const F_FLOAT v2 = d_two_layer_gate_radial_list(table_index, r_next, mu_group);
-	  const F_FLOAT d1 = d_two_layer_gate_radial_der_list(table_index, r_list, mu_group);
-	  const F_FLOAT d2 = d_two_layer_gate_radial_der_list(table_index, r_next, mu_group);
-	  val = v1 + ddr * (v2 - v1);
-		  der = d1 + ddr * (d2 - d1);
+	  if (use_laguerre) {
+	    const F_FLOAT scal_eff =
+	        use_laguerre_pos ? laguerre_positive_param_kk(scal) : scal;
+	    const F_FLOAT shift_eff =
+	        use_laguerre_pos ? laguerre_positive_param_kk(shift) : shift;
+	    const F_FLOAT rho =
+	        (shift_eff > 1.0e-8) ? shift_eff : static_cast<F_FLOAT>(1.0e-8);
+	    const F_FLOAT u = scal_eff * Kokkos::log(1.0 + dist / rho);
+	    const F_FLOAT u_r = scal_eff / (rho + dist);
+	    const F_FLOAT Dr = dist - max_cutoff;
+	    const F_FLOAT cutoff = Dr * Dr;
+	    const F_FLOAT cutoff_der = 2.0 * Dr;
+	    const F_FLOAT exp_factor = Kokkos::exp(-0.5 * u);
+
+	    F_FLOAT phi_prev = 0.0;
+	    F_FLOAT dphi_prev = 0.0;
+	    F_FLOAT phi_curr = scaling * cutoff * exp_factor;
+	    F_FLOAT dphi_curr =
+	        scaling * cutoff_der * exp_factor - 0.5 * u_r * phi_curr;
+
+	    F_FLOAT coeff =
+	        d_two_layer_gate_radial_coeffs_direct(mu, 0) * species_factor;
+	    val = coeff * phi_curr;
+	    der = coeff * dphi_curr;
+	    for (int ri = 1; ri < radial_basis_size; ri++) {
+	      const F_FLOAT inv_ri = 1.0 / static_cast<F_FLOAT>(ri);
+	      const F_FLOAT recurrence =
+	          (2.0 * static_cast<F_FLOAT>(ri) - 1.0 - u) * inv_ri;
+	      const F_FLOAT prev_coeff =
+	          static_cast<F_FLOAT>(ri - 1) * inv_ri;
+	      const F_FLOAT phi_next =
+	          recurrence * phi_curr - prev_coeff * phi_prev;
+	      const F_FLOAT dphi_next =
+	          -u_r * inv_ri * phi_curr + recurrence * dphi_curr -
+	          prev_coeff * dphi_prev;
+	      coeff = d_two_layer_gate_radial_coeffs_direct(mu, ri) *
+	              species_factor;
+	      val = Kokkos::fma(coeff, phi_next, val);
+	      der = Kokkos::fma(coeff, dphi_next, der);
+	      phi_prev = phi_curr;
+	      dphi_prev = dphi_curr;
+	      phi_curr = phi_next;
+	      dphi_curr = dphi_next;
+	    }
+	    return;
+	  }
+
+	  const F_FLOAT transformed = scal * (dist - shift) / 2.0;
+	  const F_FLOAT ksi = Kokkos::tanh(transformed);
+	  const F_FLOAT Dr = dist - max_cutoff;
+	  const F_FLOAT cutoff = Dr * Dr;
+	  const F_FLOAT der_ksi = 1.0 - ksi * ksi;
+	  const F_FLOAT mult = der_ksi * scal / 2.0;
+	  F_FLOAT basis_prev2 = scaling * cutoff;
+	  F_FLOAT der_prev2 = 2.0 * Dr * scaling;
+	  F_FLOAT coeff =
+	      d_two_layer_gate_radial_coeffs_direct(mu, 0) * species_factor;
+	  val = coeff * basis_prev2;
+	  der = coeff * der_prev2;
+	  if (radial_basis_size == 1) return;
+
+	  F_FLOAT basis_prev1 = scaling * ksi * cutoff;
+	  F_FLOAT der_prev1 =
+	      scaling * (mult * cutoff + 2.0 * ksi * Dr);
+	  coeff =
+	      d_two_layer_gate_radial_coeffs_direct(mu, 1) * species_factor;
+	  val = Kokkos::fma(coeff, basis_prev1, val);
+	  der = Kokkos::fma(coeff, der_prev1, der);
+	  for (int ri = 2; ri < radial_basis_size; ri++) {
+	    const F_FLOAT basis =
+	        Kokkos::fma(2.0f * ksi, basis_prev1, -basis_prev2);
+	    const F_FLOAT der_basis =
+	        Kokkos::fma(
+	            2.0f,
+	            Kokkos::fma(mult, basis_prev1, ksi * der_prev1),
+	            -der_prev2);
+	    coeff =
+	        d_two_layer_gate_radial_coeffs_direct(mu, ri) * species_factor;
+	    val = Kokkos::fma(coeff, basis, val);
+	    der = Kokkos::fma(coeff, der_basis, der);
+	    basis_prev2 = basis_prev1;
+	    basis_prev1 = basis;
+	    der_prev2 = der_prev1;
+	    der_prev1 = der_basis;
+	  }
 		}
 
 		template <class DeviceType>
@@ -1806,24 +1979,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 		    const int itype, const int jtype, const KK_FLOAT dist, const int mu_group,
 		    KK_FLOAT &val) const
 	{
-	  val = static_cast<KK_FLOAT>(0.0);
-	  if (!do_list || d_two_layer_gate_radial_list.extent(0) == 0) return;
-
-	  int r_list = (int) Kokkos::floor(dist * inv_dr);
-	  const int last_interval = list_grid_size - 2;
-	  if (r_list < 0) r_list = 0;
-	  if (r_list > last_interval) r_list = last_interval;
-	  const int r_next = r_list + 1;
-	  const int shift = itype * species_count + jtype;
-	  const int table_index = d_pair_to_table_index(shift);
-	  if (table_index < 0) return;
-
-	  F_FLOAT ddr = dist * inv_dr - r_list;
-	  if (ddr < 0.0) ddr = 0.0;
-	  if (ddr > 1.0) ddr = 1.0;
-	  const F_FLOAT v1 = d_two_layer_gate_radial_list(table_index, r_list, mu_group);
-	  const F_FLOAT v2 = d_two_layer_gate_radial_list(table_index, r_next, mu_group);
-	  val = v1 + ddr * (v2 - v1);
+	  F_FLOAT der_unused = static_cast<F_FLOAT>(0.0);
+	  eval_gate_radial_basic_mu_group(
+	      itype, jtype, dist, mu_group, val, der_unused);
 	}
 
 	template <class DeviceType>
@@ -2354,9 +2512,22 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	  for (int n = 0; n < 6; n++) ev.v[n] = 0.0;
 
 	  if (two_layer_gate_enabled) {
-		    if (!do_list || d_two_layer_gate_radial_list.extent(0) == 0)
-		      error->all(FLERR,
-		                 "Pair sus2mtp/kk/device two-layer gate requires a preinterpolated shared-radial table.");
+	    if (!do_list &&
+	        (static_cast<int>(
+	             d_two_layer_gate_radial_coeffs_direct.extent(0)) !=
+	             radial_func_count ||
+	         static_cast<int>(
+	             d_two_layer_gate_radial_coeffs_direct.extent(1)) !=
+	             radial_basis_size ||
+	         static_cast<int>(
+	             d_two_layer_gate_type_coeffs_direct.extent(0)) !=
+	             species_count ||
+	         static_cast<int>(
+	             d_two_layer_gate_type_coeffs_direct.extent(1)) !=
+	             radial_func_count))
+	      error->all(
+	          FLERR,
+	          "Pair sus2mtp/kk/device direct two-layer gate radial storage is inconsistent.");
 
 		    profile_begin();
 	    max_neighs = 1;
@@ -3897,7 +4068,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 				            d_two_layer_gate_radial_list(table_index, r_next, mu_group);
 				        s_radial_vals(thread, mu_group) = v1 + ddr * (v2 - v1);
 				      } else {
-				        s_radial_vals(thread, mu_group) = static_cast<F_FLOAT>(0.0);
+				        eval_gate_radial_value_basic_mu_group(
+				            itype, jtype, dist, mu_group,
+				            s_radial_vals(thread, mu_group));
 				      }
 				    }
 	    F_FLOAT sh_values[kMaxSHComponentsKK];
@@ -4313,6 +4486,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 			      if (table_index >= 0) {
 			        eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 			                                                ddr, mu_group, val, der);
+			      } else {
+			        eval_gate_radial_basic_mu_group(
+			            itype, jtype, dist, mu_group, val, der);
 			      }
 		      if (is_sh_model) {
 		        F_FLOAT dot_y = 0.0;
@@ -4446,6 +4622,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 		        if (table_index >= 0) {
 		          eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                  ddr, mu_group, val, der);
+		        } else {
+		          eval_gate_radial_basic_mu_group(
+		              itype, jtype, dist, mu_group, val, der);
 		        }
 	        F_FLOAT dot_y = 0.0;
 	        F_FLOAT dot_d0 = 0.0;
@@ -4474,6 +4653,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 		        if (table_index >= 0) {
 		          eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                  ddr, mu_group, val, der);
+		        } else {
+		          eval_gate_radial_basic_mu_group(
+		              itype, jtype, dist, mu_group, val, der);
 		        }
 	        for (int grouped_idx = d_basic_mu_offsets(mu_group);
 	             grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {
@@ -5687,6 +5869,9 @@ KOKKOS_INLINE_FUNCTION void
 		        if (table_index >= 0) {
 		          eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                  ddr, mu_group, val, der);
+		        } else {
+		          eval_gate_radial_basic_mu_group(
+		              itype, jtype, dist, mu_group, val, der);
 		        }
 	        F_FLOAT dot_y = static_cast<F_FLOAT>(0.0);
 	        F_FLOAT dot_d0 = static_cast<F_FLOAT>(0.0);
@@ -5715,6 +5900,9 @@ KOKKOS_INLINE_FUNCTION void
 		      if (table_index >= 0) {
 		        eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                ddr, mu_group, val, der);
+		      } else {
+		        eval_gate_radial_basic_mu_group(
+		            itype, jtype, dist, mu_group, val, der);
 		      }
 	        for (int grouped_idx = d_basic_mu_offsets(mu_group);
 	             grouped_idx < d_basic_mu_offsets(mu_group + 1); grouped_idx++) {

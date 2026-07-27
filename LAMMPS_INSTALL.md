@@ -90,4 +90,8 @@ Current validated binaries:
 /work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
 ```
 
-Use `RBChebyshev_sss_lmp` or `RBChebyshev_sss_rational_lmp` to enable the radial table path. The default `tabstep` is `1.0e-4 A`.
+Use an `_lmp` radial-basis name to select the table path under the default
+`radial_mode auto`. The runtime override `radial_mode table|direct` selects the
+evaluation path explicitly without changing the model file; Kokkos direct mode
+accepts only the analytic radial bases listed in `interfaces/lammps/README.md`.
+The default table spacing remains `tabstep 1.0e-4 A`.

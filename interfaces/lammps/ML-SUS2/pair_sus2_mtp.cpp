@@ -1718,6 +1718,13 @@ void eval_real_sh(const double *rvec, double inv_r, int lmax, double *values, do
 
 }    // namespace
 
+bool PairSUS2MTP::radial_table_requested() const
+{
+  if (radial_evaluation_mode == RADIAL_MODE_DIRECT) return false;
+  if (radial_evaluation_mode == RADIAL_MODE_TABLE) return true;
+  return uses_preinterpolation_table(radial_basis_type_index);
+}
+
 PairSUS2MTP::PairSUS2MTP(LAMMPS *lmp) : Pair(lmp)
 {
   single_enable = 0;
@@ -7586,6 +7593,7 @@ void PairSUS2MTP::settings(int narg, char **arg)
 {
   requested_tabstep = 1.0e-4;
   tabstep_set_by_user = false;
+  radial_evaluation_mode = RADIAL_MODE_AUTO;
   static_fixed_types_arg.clear();
 
   if (narg < 1) error->all(FLERR, "Pair sus2mtp requires a potential file.");
@@ -7606,9 +7614,24 @@ void PairSUS2MTP::settings(int narg, char **arg)
       static_fixed_types_arg = arg[i + 1];
       continue;
     }
+    if (keyword == "radial_mode") {
+      const std::string mode = LAMMPS_NS::utils::lowercase(arg[i + 1]);
+      if (mode == "auto") {
+        radial_evaluation_mode = RADIAL_MODE_AUTO;
+      } else if (mode == "direct") {
+        radial_evaluation_mode = RADIAL_MODE_DIRECT;
+      } else if (mode == "table") {
+        radial_evaluation_mode = RADIAL_MODE_TABLE;
+      } else {
+        error->all(FLERR,
+                   "Pair sus2mtp radial_mode must be \"auto\", \"direct\", or \"table\".");
+      }
+      continue;
+    }
 
     error->all(FLERR,
-               "Pair sus2mtp only supports optional keywords \"tabstep\" and \"static_fixed_types\".");
+               "Pair sus2mtp only supports optional keywords \"tabstep\", "
+               "\"radial_mode\", and \"static_fixed_types\".");
   }
 
   FILE *mtp_file = utils::open_potential(arg[0], lmp, nullptr);
@@ -9945,7 +9968,26 @@ access to the buffer size that is not provided in PFR.
     }
   }
 
-  if (uses_preinterpolation_table(radial_basis_type_index)) {
+  const bool use_preinterpolation_table = radial_table_requested();
+  if (radial_evaluation_mode == RADIAL_MODE_TABLE) {
+    if (!uses_preinterpolation_table(radial_basis_type_index))
+      error->all(FLERR,
+                 "Pair sus2mtp radial_mode table requires an _lmp radial basis.");
+  }
+
+  if (comm->me == 0) {
+    const char *resolved_mode = use_preinterpolation_table ? "table" : "direct";
+    const char *requested_mode =
+        radial_evaluation_mode == RADIAL_MODE_DIRECT ? "direct" :
+        radial_evaluation_mode == RADIAL_MODE_TABLE ? "table" : "auto";
+    utils::logmesg(
+        lmp,
+        "SUS2 radial evaluation: resolved_mode={}, requested_mode={}, "
+        "model_basis={}\n",
+        resolved_mode, requested_mode, radial_basis_type_str);
+  }
+
+  if (use_preinterpolation_table) {
     do_list = true;
     list_grid_size = static_cast<int>(std::ceil(max_cutoff / requested_tabstep)) + 1;
     if (list_grid_size < 2) list_grid_size = 2;
@@ -10095,7 +10137,8 @@ access to the buffer size that is not provided in PFR.
   } else if (tabstep_set_by_user && comm->me == 0) {
     utils::logmesg(
         lmp,
-        "Ignoring tabstep={} A because radial_basis_type={} does not use the preinterpolation table.\n",
+        "Ignoring tabstep={} A because the resolved radial evaluation mode is direct "
+        "(model_basis={}).\n",
         requested_tabstep, radial_basis_type_str);
   }
 

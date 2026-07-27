@@ -15,6 +15,9 @@ MPI_RUN="${MPI_RUN:-mpirun}"
 KOKKOS_ARGS="${KOKKOS_ARGS:--k on g 1 -sf kk -pk kokkos neigh half newton on}"
 KOKKOS_CHUNKSIZE="${KOKKOS_CHUNKSIZE:-2048}"
 PARITY_K_MAX="${SUS2_SH_PARITY_K_MAX:-4}"
+RADIAL_MODE="${SUS2_SH_PARITY_RADIAL_MODE:-auto}"
+RADIAL_BASIS_TYPE="${SUS2_SH_PARITY_RADIAL_BASIS_TYPE:-RBChebyshev_sss}"
+INIT_RADIAL_BASIS_TYPE="${SUS2_SH_PARITY_INIT_RADIAL_BASIS_TYPE:-$RADIAL_BASIS_TYPE}"
 KEEP="${SUS2_SH_TEST_KEEP_TMP:-0}"
 
 usage() {
@@ -31,6 +34,10 @@ for a site-specific GPU/host Kokkos launch configuration.  KOKKOS_CHUNKSIZE
 may be set to a positive integer to exercise multi-chunk execution.
 SUS2_SH_PARITY_K_MAX may be set to an integer >= 2 (default: 4); using 3
 exercises the Kokkos no-moment-cache recomputation path.
+SUS2_SH_PARITY_RADIAL_MODE selects auto, table, or direct (default: auto).
+SUS2_SH_PARITY_RADIAL_BASIS_TYPE selects the serialized radial basis; when a
+desired basis cannot be emitted directly by init-sh,
+SUS2_SH_PARITY_INIT_RADIAL_BASIS_TYPE may select its initialization basis.
 EOF
 }
 
@@ -58,6 +65,10 @@ if ! [[ "$PARITY_K_MAX" =~ ^[0-9]+$ ]] || ((PARITY_K_MAX < 2)); then
   echo "SUS2_SH_PARITY_K_MAX must be an integer >= 2" >&2
   exit 2
 fi
+case "$RADIAL_MODE" in
+  auto|table|direct) ;;
+  *) echo "SUS2_SH_PARITY_RADIAL_MODE must be auto, table, or direct" >&2; exit 2 ;;
+esac
 [[ -x "$MLP_BIN" ]] || { echo "MLP binary is not executable: $MLP_BIN" >&2; exit 2; }
 [[ -z "$CPU_LAMMPS_BIN" || -x "$CPU_LAMMPS_BIN" ]] || {
   echo "CPU LAMMPS binary is not executable: $CPU_LAMMPS_BIN" >&2; exit 2; }
@@ -128,7 +139,7 @@ DATA
 common_init=(
   --species-count=2 --l-max=4 --k-max="$PARITY_K_MAX" --body-order=6
   --body-l-max=4,4,4,2,1 --radial-basis-size=4
-  --radial-basis-type=RBChebyshev_sss --cutoff=5.0
+  --radial-basis-type="$INIT_RADIAL_BASIS_TYPE" --cutoff=5.0
   --sh-factor-pruning=q-total --two-layer-gate
   --two-layer-gate-factor-pruning=q-total
   --two-layer-gate-mode=mu-scalar-full --two-layer-gate-body-order=5
@@ -142,11 +153,12 @@ prepare_model() {
   local model="$tmp_dir/$name.lmp.mtp"
   "$MLP_BIN" init-sh "$init" "${common_init[@]}" "$@" >/dev/null || return
   "$MLP_BIN" roundtrip-model-dev "$init" "$materialized" >/dev/null || return
-  python3 - "$materialized" "$model" "$name" "$PARITY_K_MAX" <<'PY' || return
+  python3 - "$materialized" "$model" "$name" "$PARITY_K_MAX" \
+    "$RADIAL_BASIS_TYPE" "$INIT_RADIAL_BASIS_TYPE" <<'PY' || return
 import re
 import sys
 
-source, target, name, kmax_text = sys.argv[1:]
+source, target, name, kmax_text, radial_basis_type, init_radial_basis_type = sys.argv[1:]
 kmax = int(kmax_text)
 lmax = 4
 text = open(source, encoding="utf-8").read()
@@ -251,8 +263,11 @@ if name.startswith("readout-") and name != "readout-zero":
         # through two_layer_gate_weights immediately visible in E/F/virial.
         replace_vector("two_layer_gate_weights", [0.0] * len(gate))
 
-text = text.replace("radial_basis_type = RBChebyshev_sss",
-                    "radial_basis_type = RBChebyshev_sss_lmp", 1)
+direct_marker = f"radial_basis_type = {init_radial_basis_type}"
+table_marker = f"radial_basis_type = {radial_basis_type}_lmp"
+if direct_marker not in text:
+    raise SystemExit(f"{name}: missing radial basis marker {direct_marker}")
+text = text.replace(direct_marker, table_marker, 1)
 open(target, "w", encoding="utf-8").write(text)
 PY
   [[ -s "$model" ]] || {
@@ -274,7 +289,7 @@ atom_style atomic
 boundary p p p
 newton on
 read_data $data
-pair_style $style $model $style_args tabstep 0.0005
+pair_style $style $model $style_args radial_mode $RADIAL_MODE tabstep 0.0005
 pair_coeff * *
 neighbor 1.0 bin
 neigh_modify every 1 delay 0 check yes
@@ -303,7 +318,7 @@ atom_style atomic
 boundary p p p
 newton on
 read_data $data
-pair_style $style $model $style_args tabstep 0.0005
+pair_style $style $model $style_args radial_mode $RADIAL_MODE tabstep 0.0005
 pair_coeff * *
 neighbor 1.0 bin
 neigh_modify every 1 delay 0 check yes
@@ -392,6 +407,25 @@ for index in "${!cases[@]}"; do
     run_lammps "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk "$model" "kk.$case_name"
   fi
 done
+
+if [[ "$RADIAL_MODE" == direct ]]; then
+  for engine in cpu kk; do
+    if [[ "$engine" == cpu && -z "$CPU_LAMMPS_BIN" ]] ||
+       [[ "$engine" == kk && -z "$KOKKOS_LAMMPS_BIN" ]]; then
+      continue
+    fi
+    for case_name in "${cases[@]}"; do
+      grep -Fq \
+        'SUS2 radial evaluation: resolved_mode=direct, requested_mode=direct' \
+        "$tmp_dir/log.$engine.$case_name"
+      if grep -Fq 'Preinterpolation table built successfully' \
+          "$tmp_dir/log.$engine.$case_name"; then
+        echo "$engine.$case_name unexpectedly built a radial table" >&2
+        exit 1
+      fi
+    done
+  done
+fi
 
 for force_only_case in readout-full-zero-gate readout-body-zero-gate \
     readout-full-mixed; do

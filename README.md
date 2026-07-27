@@ -400,7 +400,11 @@ scripts/install_into_lammps.sh /path/to/lammps
 Table radial types such as `RBChebyshev_sss_lmp`,
 `RBChebyshev_sss_rational_lmp`, `RBLaguerre_log1p_lmp`,
 `RBLaguerre_log1p_pos_lmp`, and `RBJacobi_sss_lmp` enable list-based radial
-evaluation in LAMMPS. The `tabstep` keyword controls table spacing.
+evaluation in LAMMPS. The `tabstep` keyword controls table spacing and defaults
+to `1.0e-4 A`. For radial bases supported by the selected CPU or Kokkos
+backend, the optional `radial_mode auto|table|direct` keyword can run a
+table-capable `_lmp` model through direct evaluation without editing the model
+file; `auto` remains the backward-compatible default.
 
 The release3 CPU and Kokkos pair styles accept the historical full-`K` models,
 optional outer/gate `K`-rank models, and compatible single-layer gate-readout
