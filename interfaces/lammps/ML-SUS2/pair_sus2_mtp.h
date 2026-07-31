@@ -409,6 +409,7 @@ class PairSUS2MTP : public Pair {
   void calc_pair_radial_values(int, int, double, bool, const double * = nullptr,
                                bool = false, int = -1, int = -2, int = 0,
                                double = 0.0, bool = false);
+  void calc_compact_k_radial_basis_cache(int, int, double, double *, double *);
   bool calc_pair_radial_values_for_basic_mus(int, int, double, bool, int = -2,
                                              int = 0, double = 0.0);
   int find_two_layer_gate_edge_l1_raw_source_moment_index(int) const;

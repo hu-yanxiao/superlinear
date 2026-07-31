@@ -3619,6 +3619,32 @@ bool PairSUS2MTP::calc_gate_additive_table_radial_values(int jtype,
   return true;
 }
 
+#if defined(__GNUC__) || defined(__INTEL_COMPILER)
+__attribute__((noinline))
+#endif
+void PairSUS2MTP::calc_compact_k_radial_basis_cache(
+    int itype,
+    int jtype,
+    double dist,
+    double *values,
+    double *derivatives)
+{
+  const int C = species_count;
+  const int R = radial_basis_size;
+  const int pairs_count = C * C;
+  for (int k_ = 0; k_ < K_scaling; ++k_) {
+    const double scal =
+        regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
+    const double shift = regression_coeffs[
+        C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
+    radial_basis->calc_radial_basis_ders(dist, scal, shift, k_);
+    for (int ri = 0; ri < R; ++ri) {
+      values[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
+      derivatives[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
+    }
+  }
+}
+
 void PairSUS2MTP::calc_pair_radial_values(int itype,
                                           int jtype,
                                           double dist,
@@ -3849,16 +3875,9 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
       }
     }
   } else if (compact_k_scaling) {
-    for (int k_ = 0; k_ < K_scaling; k_++) {
-      const int sigma = k_;
-      const double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
-      const double shift = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
-      radial_basis->calc_radial_basis_ders(dist, scal, shift, sigma);
-      for (int ri = 0; ri < R; ri++) {
-        two_layer_radial_cache_vals[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
-        two_layer_radial_cache_ders[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
-      }
-    }
+    calc_compact_k_radial_basis_cache(
+        itype, jtype, dist, two_layer_radial_cache_vals,
+        two_layer_radial_cache_ders);
   } else {
     for (int k_ = 0; k_ < K_scaling; k_++) {
       const int sigma = mu_to_sigma[k_];
@@ -7232,23 +7251,8 @@ void PairSUS2MTP::compute(int eflag, int vflag)
           }
         }
       } else if (compact_k_scaling) {
-        for (int k_ = 0; k_ < K_; k_++) {
-          const int sigma = k_;
-
-          // Read s1 and s2 from unified regression_coeffs array
-          // SUS2-MLIP formula: regression_coeffs[C + 2*k_*C*C + C*type_central + type_outer]
-          double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
-          double s = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
-
-          // Call RB_Calc with s1 and s2 parameters
-          radial_basis->calc_radial_basis_ders(dist, scal, s, sigma);
-
-          // Store scaled values in temporary arrays
-          for (int ri = 0; ri < R; ri++) {
-            val_temp[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
-            der_temp[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
-          }
-        }
+        calc_compact_k_radial_basis_cache(
+            itype, jtype, dist, val_temp.data(), der_temp.data());
       } else {
         for (int k_ = 0; k_ < K_; k_++) {
           const int sigma = mu_to_sigma[k_];
