@@ -425,6 +425,9 @@ optional outer/gate `K`-rank models, and compatible single-layer gate-readout
 models documented in
 [`docs/release3-k-rank.md`](docs/release3-k-rank.md). Readout remains
 incompatible with rank, residual, edge-L1, and multi-layer-gate topologies.
+Both pair styles accept `scaling_map=K` as well as the default `LK` map.  The
+compact `K` map shares only `scal/s` across angular channels; it does not
+collapse the full `mu=(k,l)` radial, SH, gate, or rank channels.
 Multi-layer gate models are not supported by either LAMMPS pair style. The
 standalone decoupled gate-scaling mode is likewise not implemented by the
 release3 LAMMPS pair styles and is rejected with an explicit diagnostic.

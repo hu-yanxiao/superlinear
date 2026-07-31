@@ -454,19 +454,139 @@ if max(abs(analytic), abs(finite_difference)) <= 1.0e-8:
 PY
 
 # The main chain-rule risk is a shared K scal/s coefficient receiving the sum
-# of all l-channel contributions.  Check that coefficient block explicitly.
-"$bin" check-loss-gradient-dev "$tmp_dir/RBChebyshev_sss-K.mtp" "$one_cfg" \
+# of all l-channel contributions.  An untrained init-params=same model has a
+# zero scalar head, so its physical loss is independent of scal/s and a
+# finite-difference check would pass vacuously (worst_index=-1, analytic=0).
+# First activate the radial/scalar path on one configuration, then check it on
+# a different configuration.  Keep an exactly expanded LK copy to verify that
+# activation did not weaken the K/LK mathematical-equivalence check.
+main_k_active="$tmp_dir/main-K-active.mtp"
+main_lk_active="$tmp_dir/main-LK-active.mtp"
+"$bin" train "$tmp_dir/RBChebyshev_sss-K.mtp" "$one_cfg" \
+  --trained-pot-name="$main_k_active" \
+  --max-iter=1 \
+  --skip-preinit \
+  --shift \
+  --energy-weight=1 \
+  --force-weight=0.2 \
+  --stress-weight=0 \
+  --radial-smooth=0 >/dev/null
+make_k_lk_equivalent "$main_k_active" "$main_lk_active"
+"$bin" calc-efs "$main_k_active" "$probe_cfg" \
+  "$tmp_dir/main-K-active.cfg" >/dev/null
+"$bin" calc-efs "$main_lk_active" "$probe_cfg" \
+  "$tmp_dir/main-LK-active.cfg" >/dev/null
+compare_cfg "$tmp_dir/main-K-active.cfg" "$tmp_dir/main-LK-active.cfg"
+
+# Resolve the main scal/s block from the serialized coefficient layout instead
+# of assuming that the two species shifts will always occupy indices [0,2).
+main_layout=$("$bin" check-loss-gradient-dev "$main_k_active" "$probe_cfg" \
   --max-configs=1 \
   --energy-weight=1 \
-  --force-weight=1 \
-  --stress-weight=1 \
+  --force-weight=0.2 \
+  --stress-weight=0 \
   --radial-smooth=0 \
   --gate-x-l2=0 \
-  --coeff-start=2 \
-  --coeff-end=18 \
-  --displacement=1.0e-3 \
+  --coeff-start=0 \
+  --coeff-end=1 \
+  --displacement=1.0e-6 \
+  --abs-tolerance=1.0e99 \
+  --rel-tolerance=1.0e99 | grep 'checked_coeffs=')
+main_radial_begin=$(awk '{for (i=1; i<=NF; ++i) if ($i ~ /^radial_begin=/) {sub(/^[^=]*=/, "", $i); print $i}}' <<<"$main_layout")
+main_scaling_count=16
+if [[ ! $main_radial_begin =~ ^[0-9]+$ ||
+      $main_radial_begin -lt $main_scaling_count ]]; then
+  echo "failed to resolve main K scal/s coefficient range" >&2
+  exit 1
+fi
+main_scaling_end=$main_radial_begin
+main_scaling_begin=$((main_scaling_end - main_scaling_count))
+
+main_direction_output=$("$bin" check-loss-gradient-direction-dev \
+  "$main_k_active" "$probe_cfg" \
+  --max-configs=1 \
+  --energy-weight=1 \
+  --force-weight=0.2 \
+  --stress-weight=0 \
+  --radial-smooth=0 \
+  --gate-x-l2=0 \
+  --coeff-start="$main_scaling_begin" \
+  --coeff-end="$main_scaling_end" \
+  --displacement=1.0e-4 \
   --abs-tolerance=2.0e-5 \
-  --rel-tolerance=2.0e-4
+  --rel-tolerance=2.0e-4 | grep 'checked_coeffs=')
+echo "$main_direction_output"
+python3 - "$main_direction_output" "$main_scaling_count" <<'PY'
+import math
+import re
+import sys
+
+line, expected_count = sys.argv[1], int(sys.argv[2])
+checked = int(re.search(r"checked_coeffs=([^ ]+)", line).group(1))
+analytic = float(re.search(r"analytic_directional=([^ ]+)", line).group(1))
+finite_difference = float(re.search(r"finite_difference=([^ ]+)", line).group(1))
+base_loss = float(re.search(r"base_loss=([^ ]+)", line).group(1))
+if checked != expected_count:
+    raise SystemExit(f"main K scal/s checked {checked} coefficients, expected {expected_count}")
+if not all(math.isfinite(value) for value in (analytic, finite_difference, base_loss)):
+    raise SystemExit("main K scal/s gradient probe produced a non-finite value")
+if base_loss <= 0.0:
+    raise SystemExit("main K scal/s gradient probe has no positive physical loss")
+if min(abs(analytic), abs(finite_difference)) <= 1.0e-8:
+    raise SystemExit("main K scal/s directional gradient probe is inactive")
+PY
+
+check_main_scaling_coordinate() {
+  local offset=$1
+  local label=$2
+  local begin=$((main_scaling_begin + offset))
+  local end=$((begin + 1))
+  local output
+
+  output=$("$bin" check-loss-gradient-direction-dev \
+    "$main_k_active" "$probe_cfg" \
+    --max-configs=1 \
+    --energy-weight=1 \
+    --force-weight=0.2 \
+    --stress-weight=0 \
+    --radial-smooth=0 \
+    --gate-x-l2=0 \
+    --coeff-start="$begin" \
+    --coeff-end="$end" \
+    --displacement=1.0e-4 \
+    --abs-tolerance=2.0e-5 \
+    --rel-tolerance=2.0e-4 | grep 'checked_coeffs=')
+  echo "main K scal/s coordinate=$label $output"
+  python3 - "$output" "$label" <<'PY'
+import math
+import re
+import sys
+
+line, label = sys.argv[1:]
+checked = int(re.search(r"checked_coeffs=([^ ]+)", line).group(1))
+analytic = float(re.search(r"analytic_directional=([^ ]+)", line).group(1))
+finite_difference = float(re.search(r"finite_difference=([^ ]+)", line).group(1))
+base_loss = float(re.search(r"base_loss=([^ ]+)", line).group(1))
+if checked != 1:
+    raise SystemExit(f"main K scal/s {label} checked {checked} coefficients, expected 1")
+if not all(math.isfinite(value) for value in (analytic, finite_difference, base_loss)):
+    raise SystemExit(f"main K scal/s {label} gradient probe is non-finite")
+if base_loss <= 0.0:
+    raise SystemExit(f"main K scal/s {label} probe has no positive physical loss")
+if min(abs(analytic), abs(finite_difference)) <= 1.0e-8:
+    raise SystemExit(f"main K scal/s {label} directional gradient probe is inactive")
+PY
+}
+
+# The single-species probe activates pair (0,0).  In each K block the four
+# slopes precede the four shifts, so these offsets independently exercise both
+# coefficient kinds in both K channels.  Each coefficient is shared by all
+# three l channels; therefore every finite difference checks their summed
+# chain-rule contribution.
+check_main_scaling_coordinate 0 slope-k0-pair00
+check_main_scaling_coordinate 4 shift-k0-pair00
+check_main_scaling_coordinate 8 slope-k1-pair00
+check_main_scaling_coordinate 12 shift-k1-pair00
 
 # Inline initialization must recognize --scaling-map as an SH construction
 # option instead of falling back to the historical malformed train command.

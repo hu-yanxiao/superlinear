@@ -706,6 +706,16 @@ Consequently an already trained `LK` model cannot be silently converted to
 `K`: such a conversion is exact only when all `l` blocks at each fixed `k`
 already have identical `scal/s` values.
 
+The release3 LAMMPS interfaces preserve this sharing without changing the
+full-\(\mu\) descriptor.  In the CPU direct-radial path, all angular channels
+at fixed \(k\) reuse one radial-coordinate recurrence whenever the basis does
+not require a separate \(\mu\)-local sigma.  The Kokkos interface deliberately
+uses the original release3 generic CUDA kernels for both compact `K` models
+and their exactly expanded `LK` counterparts; only the host-side mapping of
+`scal/s` differs.  This keeps the established `LK` machine path unchanged and
+prevents a K-only specialization from slowing existing models.  The LAMMPS
+table path is likewise shared by `K` and `LK` after table construction.
+
 As of the inline-init update, `init-sh` writes only the SH topology and radial
 metadata. It intentionally omits `species_coeffs` and `moment_coeffs`, so
 `MLMTPR::Load()` treats the model as uninitialized and the ordinary training

@@ -3826,6 +3826,8 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
   const int R = radial_basis_size;
   const int pairs_count = C * C;
   const bool per_mu_sigma = basis_requires_per_mu_sigma(radial_basis_type_index);
+  const bool compact_k_scaling =
+      is_sh_model && K_scaling < radial_func_count;
   const int radial_cache_count = per_mu_sigma ? radial_func_count : K_scaling;
   const int temp_size = radial_cache_count * R;
   if (two_layer_radial_cache_size < temp_size) {
@@ -3846,9 +3848,20 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
         two_layer_radial_cache_ders[mu * R + ri] = radial_basis->radial_basis_ders[ri];
       }
     }
+  } else if (compact_k_scaling) {
+    for (int k_ = 0; k_ < K_scaling; k_++) {
+      const int sigma = k_;
+      const double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
+      const double shift = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
+      radial_basis->calc_radial_basis_ders(dist, scal, shift, sigma);
+      for (int ri = 0; ri < R; ri++) {
+        two_layer_radial_cache_vals[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
+        two_layer_radial_cache_ders[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
+      }
+    }
   } else {
     for (int k_ = 0; k_ < K_scaling; k_++) {
-      const int sigma = scaling_block_to_sigma[k_];
+      const int sigma = mu_to_sigma[k_];
       const double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
       const double shift = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
       radial_basis->calc_radial_basis_ders(dist, scal, shift, sigma);
@@ -7197,6 +7210,8 @@ void PairSUS2MTP::compute(int eflag, int vflag)
 
       if (!used_precomputed_table) {
       const bool per_mu_sigma = basis_requires_per_mu_sigma(radial_basis_type_index);
+      const bool compact_k_scaling =
+          is_sh_model && K_ < radial_func_count;
       const int radial_cache_count = per_mu_sigma ? radial_func_count : K_;
       int temp_size = radial_cache_count * R;
       std::vector<double> val_temp(temp_size, 0.0);
@@ -7216,9 +7231,9 @@ void PairSUS2MTP::compute(int eflag, int vflag)
             der_temp[mu * R + ri] = radial_basis->radial_basis_ders[ri];
           }
         }
-      } else {
+      } else if (compact_k_scaling) {
         for (int k_ = 0; k_ < K_; k_++) {
-          const int sigma = scaling_block_to_sigma[k_];
+          const int sigma = k_;
 
           // Read s1 and s2 from unified regression_coeffs array
           // SUS2-MLIP formula: regression_coeffs[C + 2*k_*C*C + C*type_central + type_outer]
@@ -7229,6 +7244,22 @@ void PairSUS2MTP::compute(int eflag, int vflag)
           radial_basis->calc_radial_basis_ders(dist, scal, s, sigma);
 
           // Store scaled values in temporary arrays
+          for (int ri = 0; ri < R; ri++) {
+            val_temp[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
+            der_temp[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
+          }
+        }
+      } else {
+        for (int k_ = 0; k_ < K_; k_++) {
+          const int sigma = mu_to_sigma[k_];
+
+          // Preserve the historical LK hot loop byte-for-byte: the K/LK
+          // topology decision is made once outside this loop.
+          double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
+          double s = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
+
+          radial_basis->calc_radial_basis_ders(dist, scal, s, sigma);
+
           for (int ri = 0; ri < R; ri++) {
             val_temp[k_ * R + ri] = radial_basis->radial_basis_vals[ri];
             der_temp[k_ * R + ri] = radial_basis->radial_basis_ders[ri];
@@ -8591,12 +8622,28 @@ access to the buffer size that is not provided in PFR.
       error->one(FLERR, "Error reading MTP file. Alpha moment count not found.");
     alpha_index_basic_count = line_tokens.next_int();
 
+    // PFR reads model metadata one physical line at a time. Tiny SH graphs
+    // can have short alpha lists yet long, counted gate/rank lists later in
+    // the file. Grow the buffer monotonically before every such list.
+    long mtp_line_buffer = 0;
+    auto ensure_mtp_line_buffer = [&](long item_count,
+                                      long chars_per_item,
+                                      long overhead) {
+      if (item_count < 0 || chars_per_item <= 0 || overhead < 0)
+        error->one(FLERR, "Invalid SUS2-SH MTP metadata line-buffer request.");
+      const long requested =
+          std::max(128L, item_count * chars_per_item + overhead);
+      if (requested > 100000000L)
+        error->one(FLERR, "SUS2-SH MTP metadata line is too large.");
+      if (requested > mtp_line_buffer) {
+        tfr.set_bufsize(static_cast<int>(requested));
+        mtp_line_buffer = requested;
+      }
+    };
+
     // Read the basic alphas
     int radial_func_max = 0;
-    tfr.set_bufsize(
-        (alpha_index_basic_count * 20 + 20) *
-        sizeof(
-            char));    // Adjust the buffer size. This needed to ensure cross-compatability since the MLIP files stores all the alpha indicies on the same line.
+    ensure_mtp_line_buffer(alpha_index_basic_count, 20, 20);
     line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
 
     keyword = line_tokens.next_string();
@@ -8648,10 +8695,7 @@ access to the buffer size that is not provided in PFR.
 
     // Read the legacy alpha-times line. SUS2-SH keeps this empty and stores the
     // canonical real-SH tensor product graph in sh_products.
-    tfr.set_bufsize(
-        std::max(std::max(legacy_alpha_index_times_count, 1) * 32 + 20, 128) *
-        sizeof(
-            char));    // Adjust the buffer size. This needed to ensure cross-compatability since the MLIP files stores all the alpha indicies on the same line.
+    ensure_mtp_line_buffer(std::max(legacy_alpha_index_times_count, 1), 32, 20);
     line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
 
     keyword = line_tokens.next_string();
@@ -8667,7 +8711,7 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "SUS2-SH model is missing sh_product_count.");
       alpha_index_times_count = line_tokens.next_int();
 
-      tfr.set_bufsize((std::max(alpha_index_times_count, 1) * 64 + 20) * sizeof(char));
+      ensure_mtp_line_buffer(std::max(alpha_index_times_count, 1), 64, 20);
       line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
       keyword = line_tokens.next_string();
       if (keyword != "sh_products")
@@ -8700,6 +8744,9 @@ access to the buffer size that is not provided in PFR.
     alpha_scalar_count = line_tokens.next_int();
 
     //Read the alpha moment mappings
+    // 64 chars/item covers both the integer mapping and later double-valued
+    // moment-coefficient metadata, even when the gate uses only a subset.
+    ensure_mtp_line_buffer(alpha_scalar_count, 64, 1024);
     line_tokens = ValueTokenizer(tfr.next_line(), separators + "{},");
 
     keyword = line_tokens.next_string();
@@ -8716,6 +8763,7 @@ access to the buffer size that is not provided in PFR.
       const int info_count = parse_int_assignment(post_scalar_line);
       if (info_count != alpha_scalar_count)
         error->one(FLERR, "SUS2-SH sh_scalar_info_count should match alpha_scalar_moments.");
+      ensure_mtp_line_buffer(static_cast<long>(info_count) * 7, 16, 1024);
       std::string info_line = std::string(tfr.next_line());
       if (first_keyword(info_line) != "sh_scalar_info")
         error->one(FLERR, "Cannot read SUS2-SH scalar metadata.");
@@ -8762,6 +8810,7 @@ access to the buffer size that is not provided in PFR.
         if (first_keyword(post_scalar_line) != "outer_k_rank1_weight_count")
           error->one(FLERR, "SUS2-SH rank model is missing outer_k_rank1_weight_count.");
         const int weight_count = parse_int_assignment(post_scalar_line);
+        ensure_mtp_line_buffer(weight_count, 32, 1024);
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "outer_k_rank1_weights")
           error->one(FLERR, "SUS2-SH rank model is missing outer_k_rank1_weights.");
@@ -8796,6 +8845,7 @@ access to the buffer size that is not provided in PFR.
       if (first_keyword(post_scalar_line) != "two_layer_gate_k_rank_weight_count")
         error->one(FLERR, "SUS2-SH rank gate is missing weight_count.");
       const int weight_count = parse_int_assignment(post_scalar_line);
+      ensure_mtp_line_buffer(weight_count, 32, 1024);
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_k_rank_weights")
         error->one(FLERR, "SUS2-SH rank gate is missing weights.");
@@ -8896,6 +8946,7 @@ access to the buffer size that is not provided in PFR.
           const int expected_gate_radial_count = radial_func_count * radial_basis_size;
           if (gate_radial_count != expected_gate_radial_count)
             error->one(FLERR, "SUS2-SH two-layer gate radial coefficient count is inconsistent.");
+          ensure_mtp_line_buffer(gate_radial_count, 32, 1024);
           post_scalar_line = std::string(tfr.next_line());
           if (first_keyword(post_scalar_line) != "two_layer_gate_radial_coeffs")
             error->one(FLERR, "SUS2-SH two-layer gate is missing radial coeffs.");
@@ -8931,6 +8982,7 @@ access to the buffer size that is not provided in PFR.
         if (additive_count != expected_additive_count &&
             additive_count != species_count)
           error->one(FLERR, "SUS2-SH two-layer gate additive coefficient count is inconsistent.");
+        ensure_mtp_line_buffer(additive_count, 32, 1024);
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "two_layer_gate_additive_coeffs")
           error->one(FLERR, "SUS2-SH two-layer gate is missing additive coeffs.");
@@ -8958,6 +9010,7 @@ access to the buffer size that is not provided in PFR.
         if (gate_type_count != expected_gate_type_count &&
             gate_type_count != species_count)
           error->one(FLERR, "SUS2-SH two-layer gate type coefficient count is inconsistent.");
+        ensure_mtp_line_buffer(gate_type_count, 32, 1024);
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "two_layer_gate_type_coeffs")
           error->one(FLERR, "SUS2-SH two-layer gate is missing type coeffs.");
@@ -8997,25 +9050,8 @@ access to the buffer size that is not provided in PFR.
         two_layer_gate_scalar_count =
             two_layer_gate_weight_count / radial_func_count;
       }
-      {
-        const long sh_product_line_buffer =
-            (std::max(alpha_index_times_count, 1) * 64L + 20L) *
-            static_cast<long>(sizeof(char));
-        const long moment_coeff_line_buffer =
-            std::max(1, alpha_scalar_count) * 64L + 1024L;
-        const long gate_line_buffer =
-            std::max(4096L,
-                     std::max(static_cast<long>(two_layer_gate_weight_count),
-                              static_cast<long>(two_layer_gate_scalar_count)) *
-                             32L +
-                         1024L);
-        const long post_gate_line_buffer =
-            std::max(gate_line_buffer,
-                     std::max(sh_product_line_buffer, moment_coeff_line_buffer));
-        if (post_gate_line_buffer > 100000000L)
-          error->one(FLERR, "SUS2-SH two-layer gate metadata line is too large.");
-        tfr.set_bufsize(static_cast<int>(post_gate_line_buffer));
-      }
+      ensure_mtp_line_buffer(two_layer_gate_weight_count, 32, 1024);
+      ensure_mtp_line_buffer(two_layer_gate_scalar_count, 32, 1024);
 
       post_scalar_line = std::string(tfr.next_line());
       if (first_keyword(post_scalar_line) != "two_layer_gate_scalar_indices")
@@ -9064,6 +9100,7 @@ access to the buffer size that is not provided in PFR.
             radial_func_count * (two_layer_gate_body_order_max - 1);
         if (two_layer_gate_body_mix_weight_count != expected_mix_count)
           error->one(FLERR, "SUS2-SH two-layer gate body mix weight count is inconsistent.");
+        ensure_mtp_line_buffer(two_layer_gate_body_mix_weight_count, 32, 1024);
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) != "two_layer_gate_body_mix_weights")
           error->one(FLERR, "SUS2-SH two-layer gate is missing body mix weights.");
@@ -9108,6 +9145,8 @@ access to the buffer size that is not provided in PFR.
           error->one(
               FLERR,
               "SUS2-SH gate readout coefficient count should match gate scalar count.");
+
+        ensure_mtp_line_buffer(two_layer_gate_readout_coeff_count, 32, 1024);
 
         post_scalar_line = std::string(tfr.next_line());
         if (first_keyword(post_scalar_line) !=
@@ -9164,6 +9203,7 @@ access to the buffer size that is not provided in PFR.
           if (two_layer_gate_edge_l1_source_count <= 0)
             error->one(FLERR, "SUS2-SH edge L1 gate source count should be positive.");
 
+          ensure_mtp_line_buffer(two_layer_gate_edge_l1_source_count, 16, 1024);
           post_scalar_line = std::string(tfr.next_line());
           keyword = first_keyword(post_scalar_line);
           if (has_source_moments) {
@@ -9221,6 +9261,7 @@ access to the buffer size that is not provided in PFR.
               expected_edge_l1_weight_count)
             error->one(FLERR, "SUS2-SH edge L1 gate weight count is inconsistent.");
 
+          ensure_mtp_line_buffer(two_layer_gate_edge_l1_weight_count, 32, 1024);
           post_scalar_line = std::string(tfr.next_line());
           keyword = first_keyword(post_scalar_line);
           if (keyword != "two_layer_gate_edge_l1_weights" &&
@@ -9927,11 +9968,6 @@ access to the buffer size that is not provided in PFR.
   // SUS2-MLIP mapping arrays
   MPI_Bcast(mu_to_K, radial_func_count, MPI_INT, 0, world);
   MPI_Bcast(mu_to_sigma, radial_func_count, MPI_INT, 0, world);
-  scaling_block_to_sigma.resize(K_scaling);
-  for (int block = 0; block < K_scaling; ++block)
-    scaling_block_to_sigma[block] =
-        (scaling_map == "K") ? block : mu_to_sigma[block];
-
   prepare_two_layer_gate_additive_ratios();
 
   do_list = false;

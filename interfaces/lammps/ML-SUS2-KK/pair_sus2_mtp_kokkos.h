@@ -44,7 +44,7 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPUnpackReverseComm {};
 	  struct TagPairSUS2MTPComputeEnvGate {};
 	  struct TagPairSUS2MTPApplyEnvGate {};
-	  template <bool GROUPED_K> struct TagPairSUS2MTPComputeGateFirstLayer {};
+	  struct TagPairSUS2MTPComputeGateFirstLayer {};
 	  struct TagPairSUS2MTPComputeGateProducts {};
 	  struct TagPairSUS2MTPComputeGateProductAdjoints {};
 	  struct TagPairSUS2MTPComputeGateProductAdjointsCached {};
@@ -61,22 +61,21 @@ namespace LAMMPS_NS {
 	  struct TagPairSUS2MTPComputeGateEdgeL1SeedAdjoints {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivs {};
 	  struct TagPairSUS2MTPComputeGateFirstDerivsTeam {};
-	  template <bool GROUPED_K> struct TagPairSUS2MTPComputeGateMainAlphaBasic {};
-	  template <bool GROUPED_K> struct TagPairSUS2MTPComputeAlphaBasic {};
+	  struct TagPairSUS2MTPComputeGateMainAlphaBasic {};
+	  struct TagPairSUS2MTPComputeAlphaBasic {};
 	  struct TagPairSUS2MTPComputeAlphaTimes {};
 	  struct TagPairSUS2MTPSetScalarNbhDers {};
 	  struct TagPairSUS2MTPComputeNbhDers {};
 	  struct TagPairSUS2MTPComputeEnvRhoChain {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateMainForce {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateChainForce {};
-	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS, bool GROUPED_K>
+	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
 	  struct TagPairSUS2MTPComputeGateMainForceTeam {};
 	  template <int NEIGHFLAG> struct TagPairSUS2MTPComputeGateChainForceTeam {};
-	  template <int NEIGHFLAG, int EVFLAG, bool GROUPED_K>
-	  struct TagPairSUS2MTPComputeGateChainForceDirectTeam {};
+	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeGateChainForceDirectTeam {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeZBLForce {};
 	  template <int NEIGHFLAG, int EVFLAG> struct TagPairSUS2MTPComputeForce {};
-	  template <int NEIGHFLAG, bool GROUPED_K> struct TagPairSUS2MTPComputeForceTeam {};
+	  template <int NEIGHFLAG> struct TagPairSUS2MTPComputeForceTeam {};
 
   enum { EnabledNeighFlags = HALF | HALFTHREAD };
   enum { COUL_FLAG = 0 };
@@ -118,33 +117,6 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION void eval_radial_basic_mu_group(const int itype, const int jtype,
 	                                                         const F_FLOAT dist, const int mu_group,
 	                                                         F_FLOAT &val, F_FLOAT &der) const;
-	  struct RadialScalingGroupValues {
-	    F_FLOAT v0, v1, v2, v3, v4;
-	    F_FLOAT d0, d1, d2, d3, d4;
-	    int count;
-
-	    KOKKOS_INLINE_FUNCTION F_FLOAT value(const int local) const
-	    {
-	      if (local == 0) return v0;
-	      if (local == 1) return v1;
-	      if (local == 2) return v2;
-	      if (local == 3) return v3;
-	      return v4;
-	    }
-
-	    KOKKOS_INLINE_FUNCTION F_FLOAT derivative(const int local) const
-	    {
-	      if (local == 0) return d0;
-	      if (local == 1) return d1;
-	      if (local == 2) return d2;
-	      if (local == 3) return d3;
-	      return d4;
-	    }
-	  };
-	  KOKKOS_INLINE_FUNCTION int eval_radial_scaling_group(
-	      const int itype, const int jtype, const F_FLOAT dist, const int scaling_group,
-	      const bool gate_radial, const bool need_derivatives,
-	      RadialScalingGroupValues &result) const;
 	  KOKKOS_INLINE_FUNCTION void eval_radial_packed_basic_mu_group(
 	      const int table_index, const int r_list, const int r_next, const F_FLOAT ddr,
 	      const int mu_group, F_FLOAT &val, F_FLOAT &der) const;
@@ -224,11 +196,10 @@ namespace LAMMPS_NS {
 	  KOKKOS_INLINE_FUNCTION
 	  void operator()(TagPairSUS2MTPApplyEnvGate, const int &ii) const;
 
-		  template <bool GROUPED_K>
 		  KOKKOS_INLINE_FUNCTION
 		  void
-		  operator()(TagPairSUS2MTPComputeGateFirstLayer<GROUPED_K>,
-		             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer<GROUPED_K>>::member_type
+		  operator()(TagPairSUS2MTPComputeGateFirstLayer,
+		             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>::member_type
 		                 &team) const;
 
 			  KOKKOS_INLINE_FUNCTION
@@ -292,19 +263,17 @@ namespace LAMMPS_NS {
 		             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstDerivsTeam>::member_type
 		                 &team) const;
 
-		  template <bool GROUPED_K>
 		  KOKKOS_INLINE_FUNCTION
 	  void
-	  operator()(TagPairSUS2MTPComputeGateMainAlphaBasic<GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainAlphaBasic<GROUPED_K>>::member_type
+	  operator()(TagPairSUS2MTPComputeGateMainAlphaBasic,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainAlphaBasic>::member_type
 	                 &team) const;
 
-	  template <bool GROUPED_K>
 	  KOKKOS_INLINE_FUNCTION
 	  void
-	  operator()(TagPairSUS2MTPComputeAlphaBasic<GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic<GROUPED_K>>::member_type
-	                 &team) const;
+	  operator()(TagPairSUS2MTPComputeAlphaBasic,
+             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic>::member_type
+                 &team) const;
 
   KOKKOS_INLINE_FUNCTION
   void operator()(TagPairSUS2MTPComputeAlphaTimes, const int &ii) const;
@@ -328,10 +297,10 @@ namespace LAMMPS_NS {
 	  operator()(TagPairSUS2MTPComputeGateMainForce<NEIGHFLAG, EVFLAG>, const int &ii,
 	             EV_FLOAT &) const;
 
-	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS, bool GROUPED_K>
+	  template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
 	  KOKKOS_INLINE_FUNCTION void
-	  operator()(TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS, GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS, GROUPED_K>>::member_type
+	  operator()(TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>>::member_type
 	                 &team) const;
 
 	  template <int NEIGHFLAG, int EVFLAG>
@@ -350,17 +319,17 @@ namespace LAMMPS_NS {
 	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceTeam<NEIGHFLAG>>::member_type
 	                 &team) const;
 
-	  template <int NEIGHFLAG, int EVFLAG, bool GROUPED_K>
+	  template <int NEIGHFLAG, int EVFLAG>
 	  KOKKOS_INLINE_FUNCTION void
-	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>>::member_type
+	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
 	                 &team,
 	             EV_FLOAT &) const;
 
-	  template <int NEIGHFLAG, int EVFLAG, bool GROUPED_K>
+	  template <int NEIGHFLAG, int EVFLAG>
 	  KOKKOS_INLINE_FUNCTION void
-	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>>::member_type
+	  operator()(TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
 	                 &team) const;
 
 	  template <int NEIGHFLAG, int EVFLAG>
@@ -383,10 +352,10 @@ namespace LAMMPS_NS {
 	  operator()(TagPairSUS2MTPComputeForce<NEIGHFLAG, EVFLAG>, const int &ii,
 	             EV_FLOAT &) const;    // With global energy reduction as needed
 
-	  template <int NEIGHFLAG, bool GROUPED_K>
+	  template <int NEIGHFLAG>
 	  KOKKOS_INLINE_FUNCTION void
-	  operator()(TagPairSUS2MTPComputeForceTeam<NEIGHFLAG, GROUPED_K>,
-	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<NEIGHFLAG, GROUPED_K>>::member_type
+	  operator()(TagPairSUS2MTPComputeForceTeam<NEIGHFLAG>,
+	             const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<NEIGHFLAG>>::member_type
 	                 &team) const;
 
  protected:

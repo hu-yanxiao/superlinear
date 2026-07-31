@@ -19,6 +19,10 @@ MPI_RUN="${MPI_RUN:-mpirun}"
 KOKKOS_ARGS="${KOKKOS_ARGS:--k on g 1 -sf kk -pk kokkos neigh half newton on}"
 KOKKOS_CHUNKSIZE="${KOKKOS_CHUNKSIZE:-128}"
 KEEP="${SUS2_SH_TEST_KEEP_TMP:-0}"
+SH_L_MAX="${SH_L_MAX:-2}"
+SH_K_MAX="${SH_K_MAX:-2}"
+SH_RADIAL_BASIS_SIZE="${SH_RADIAL_BASIS_SIZE:-4}"
+PREPARE_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -28,8 +32,9 @@ Usage: dev_test/lammps_sh_scaling_map_k_parity.sh [options]
   --cpu PATH       CPU LAMMPS binary using pair_style sus2mtp
   --kokkos PATH    Kokkos LAMMPS binary using pair_style sus2mtp/kk
   --keep           retain temporary files
+  --prepare-only   generate exact K/LK fixtures, then exit before LAMMPS
 
-At least one of --cpu or --kokkos is required.  CPU_MPI_RANKS,
+Unless --prepare-only is used, at least one of --cpu or --kokkos is required.  CPU_MPI_RANKS,
 KOKKOS_MPI_RANKS, MPI_RUN, KOKKOS_ARGS, and KOKKOS_CHUNKSIZE may be
 overridden for the local installation.  The script runs only tiny run-0
 calculations; it does not submit a scheduler job.
@@ -42,12 +47,13 @@ while (($#)); do
     --cpu) CPU_LAMMPS_BIN="$2"; shift 2 ;;
     --kokkos) KOKKOS_LAMMPS_BIN="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --prepare-only) PREPARE_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-if [[ -z "$CPU_LAMMPS_BIN" && -z "$KOKKOS_LAMMPS_BIN" ]]; then
+if (( ! PREPARE_ONLY )) && [[ -z "$CPU_LAMMPS_BIN" && -z "$KOKKOS_LAMMPS_BIN" ]]; then
   echo "provide --cpu and/or --kokkos" >&2
   usage >&2
   exit 2
@@ -66,6 +72,12 @@ fi
 }
 if ! [[ "$KOKKOS_CHUNKSIZE" =~ ^[1-9][0-9]*$ ]]; then
   echo "KOKKOS_CHUNKSIZE must be a positive integer" >&2
+  exit 2
+fi
+if ! [[ "$SH_L_MAX" =~ ^[0-4]$ ]] || \
+   ! [[ "$SH_K_MAX" =~ ^[1-9][0-9]*$ ]] || \
+   ! [[ "$SH_RADIAL_BASIS_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SH_L_MAX must be 0..4; SH_K_MAX and SH_RADIAL_BASIS_SIZE must be positive" >&2
   exit 2
 fi
 
@@ -106,11 +118,11 @@ DATA
 
 common_init=(
   --species-count=2
-  --l-max=2
-  --k-max=2
+  --l-max="$SH_L_MAX"
+  --k-max="$SH_K_MAX"
   --body-order=4
-  --body-l-max=2,2,2,2
-  --radial-basis-size=4
+  --body-l-max="$SH_L_MAX,$SH_L_MAX,$SH_L_MAX,$SH_L_MAX"
+  --radial-basis-size="$SH_RADIAL_BASIS_SIZE"
   --radial-basis-type=RBChebyshev_sss
   --cutoff=5.0
   --sh-factor-pruning=q-total
@@ -127,7 +139,8 @@ prepare_pair() {
   "$MLP_BIN" init-sh "$init_model" "${common_init[@]}" "$@" >/dev/null
   "$MLP_BIN" roundtrip-model-dev "$init_model" "$materialized" >/dev/null
 
-  python3 - "$materialized" "$tmp_dir" "$case_name" <<'PY'
+  python3 - "$materialized" "$tmp_dir" "$case_name" \
+    "$SH_K_MAX" "$((SH_L_MAX + 1))" <<'PY'
 import pathlib
 import re
 import sys
@@ -135,12 +148,12 @@ import sys
 source = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 case = sys.argv[3]
+kmax = int(sys.argv[4])
+lchannels = int(sys.argv[5])
 text = source.read_text(encoding="utf-8")
 number = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
 
 species = 2
-kmax = 2
-lchannels = 3
 pairs = species * species
 block_width = 2 * pairs
 
@@ -307,10 +320,16 @@ gate_args=(
   --two-layer-gate-site-mode=neighbor
   --two-layer-gate-shared-radial
 )
+outer_rank=$((SH_K_MAX < 2 ? SH_K_MAX : 2))
 
 prepare_pair full
 prepare_pair gate "${gate_args[@]}"
-prepare_pair rank "${gate_args[@]}" --outer-k-rank=2 --two-layer-gate-k-rank=1
+prepare_pair rank "${gate_args[@]}" --outer-k-rank="$outer_rank" --two-layer-gate-k-rank=1
+
+if ((PREPARE_ONLY)); then
+  echo "LAMMPS_SH_SCALING_MAP_K_FIXTURES: $tmp_dir"
+  exit 0
+fi
 
 make_input() {
   local model=$1
