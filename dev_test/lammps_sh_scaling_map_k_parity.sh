@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Verify that an SH scaling_map=K model is mathematically identical in LAMMPS
 # to the exact scaling_map=LK expansion that repeats every k block for all l.
-# The test covers the CPU and/or Kokkos pair style, direct and _lmp table
-# radial paths, and plain-full, gate-full, and gate+rank model layouts.
+# The test covers the CPU and/or Kokkos pair style, Chebyshev and Laguerre
+# radial bases, direct and _lmp table paths, and plain-full, gate-full, and
+# gate+rank model layouts.
 set -Eeuo pipefail
 trap 'echo "LAMMPS scaling_map=K parity failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
@@ -279,20 +280,23 @@ if len(vector("scal_coeffs", lk_text)) != kmax * lchannels * block_width:
 if radial_section(k_text) != radial_section(lk_text):
     raise SystemExit(f"{case}: LK expansion changed mu-local radial coefficients")
 
-for mode, basis_suffix in (("direct", ""), ("table", "_lmp")):
-    for mapping, content in (("K", k_text), ("LK", lk_text)):
-        if basis_suffix:
+for basis_label, basis_type in (
+    ("chebyshev", "RBChebyshev_sss"),
+    ("laguerre", "RBLaguerre_log1p"),
+):
+    for mode, basis_suffix in (("direct", ""), ("table", "_lmp")):
+        for mapping, content in (("K", k_text), ("LK", lk_text)):
             content, count = re.subn(
                 r"^radial_basis_type\s*=\s*RBChebyshev_sss\s*$",
-                "radial_basis_type = RBChebyshev_sss_lmp",
+                f"radial_basis_type = {basis_type}{basis_suffix}",
                 content,
                 count=1,
                 flags=re.M,
             )
             if count != 1:
                 raise SystemExit(f"{case}: missing direct radial marker")
-        target = root / f"{case}.{mode}.{mapping}.mtp"
-        target.write_text(content, encoding="utf-8")
+            target = root / f"{case}.{basis_label}.{mode}.{mapping}.mtp"
+            target.write_text(content, encoding="utf-8")
 PY
 }
 
@@ -357,17 +361,19 @@ run_lammps() {
 }
 
 for case_name in full gate rank; do
-  for radial_mode in direct table; do
-    for mapping in K LK; do
-      model="$tmp_dir/$case_name.$radial_mode.$mapping.mtp"
-      if [[ -n "$CPU_LAMMPS_BIN" ]]; then
-        run_lammps "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
-          "$model" "cpu.$case_name.$radial_mode.$mapping" "$radial_mode"
-      fi
-      if [[ -n "$KOKKOS_LAMMPS_BIN" ]]; then
-        run_lammps "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk \
-          "$model" "kk.$case_name.$radial_mode.$mapping" "$radial_mode"
-      fi
+  for basis_name in chebyshev laguerre; do
+    for radial_mode in direct table; do
+      for mapping in K LK; do
+        model="$tmp_dir/$case_name.$basis_name.$radial_mode.$mapping.mtp"
+        if [[ -n "$CPU_LAMMPS_BIN" ]]; then
+          run_lammps "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
+            "$model" "cpu.$case_name.$basis_name.$radial_mode.$mapping" "$radial_mode"
+        fi
+        if [[ -n "$KOKKOS_LAMMPS_BIN" ]]; then
+          run_lammps "$KOKKOS_LAMMPS_BIN" "$KOKKOS_MPI_RANKS" sus2mtp/kk \
+            "$model" "kk.$case_name.$basis_name.$radial_mode.$mapping" "$radial_mode"
+        fi
+      done
     done
   done
 done
@@ -443,40 +449,47 @@ def max_error(lhs, rhs):
 seen = 0
 for engine in ("cpu", "kk"):
     for case in ("full", "gate", "rank"):
-        for mode in ("direct", "table"):
-            k_label = f"{engine}.{case}.{mode}.K"
-            lk_label = f"{engine}.{case}.{mode}.LK"
-            if not (root / f"log.{k_label}").exists():
-                continue
-            k_energy, k_forces, k_virial = parse(k_label)
-            l_energy, l_forces, l_virial = parse(lk_label)
-            errors = (
-                abs(k_energy - l_energy),
-                max_error(k_forces, l_forces),
-                max_error(k_virial, l_virial),
-            )
-            tolerance = 2.0e-10 if engine == "cpu" else 5.0e-6
-            scale = max(
-                1.0,
-                abs(k_energy),
-                *(abs(value) for value in k_forces),
-                *(abs(value) for value in k_virial),
-            )
-            if max(errors) > tolerance * scale:
-                raise SystemExit(
-                    f"{engine}/{case}/{mode}: K vs expanded-LK mismatch "
-                    f"dE={errors[0]:.3e} dF={errors[1]:.3e} "
-                    f"dV={errors[2]:.3e}, limit={tolerance * scale:.3e}"
+        for basis in ("chebyshev", "laguerre"):
+            for mode in ("direct", "table"):
+                k_label = f"{engine}.{case}.{basis}.{mode}.K"
+                lk_label = f"{engine}.{case}.{basis}.{mode}.LK"
+                if not (root / f"log.{k_label}").exists():
+                    continue
+                k_energy, k_forces, k_virial = parse(k_label)
+                l_energy, l_forces, l_virial = parse(lk_label)
+                errors = (
+                    abs(k_energy - l_energy),
+                    max_error(k_forces, l_forces),
+                    max_error(k_virial, l_virial),
                 )
-            if max(abs(value) for value in k_forces) < 1.0e-8:
-                raise SystemExit(f"{engine}/{case}/{mode}: trivial zero forces")
-            if max(abs(value) for value in k_virial) < 1.0e-8:
-                raise SystemExit(f"{engine}/{case}/{mode}: trivial zero virial")
-            print(
-                f"{engine}/{case}/{mode}: "
-                f"dE={errors[0]:.3e} dF={errors[1]:.3e} dV={errors[2]:.3e}"
-            )
-            seen += 1
+                tolerance = 2.0e-10 if engine == "cpu" else 5.0e-6
+                scale = max(
+                    1.0,
+                    abs(k_energy),
+                    *(abs(value) for value in k_forces),
+                    *(abs(value) for value in k_virial),
+                )
+                if max(errors) > tolerance * scale:
+                    raise SystemExit(
+                        f"{engine}/{case}/{basis}/{mode}: "
+                        f"K vs expanded-LK mismatch dE={errors[0]:.3e} "
+                        f"dF={errors[1]:.3e} dV={errors[2]:.3e}, "
+                        f"limit={tolerance * scale:.3e}"
+                    )
+                if max(abs(value) for value in k_forces) < 1.0e-8:
+                    raise SystemExit(
+                        f"{engine}/{case}/{basis}/{mode}: trivial zero forces"
+                    )
+                if max(abs(value) for value in k_virial) < 1.0e-8:
+                    raise SystemExit(
+                        f"{engine}/{case}/{basis}/{mode}: trivial zero virial"
+                    )
+                print(
+                    f"{engine}/{case}/{basis}/{mode}: "
+                    f"dE={errors[0]:.3e} dF={errors[1]:.3e} "
+                    f"dV={errors[2]:.3e}"
+                )
+                seen += 1
 
 if seen == 0:
     raise SystemExit("no LAMMPS result pair was checked")

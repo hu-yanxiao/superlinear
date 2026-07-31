@@ -33,6 +33,7 @@
 #include "update.h"
 
 #include <chrono>
+#include <type_traits>
 #include <cstdlib>
 #include <cmath>
 #include <limits>
@@ -1766,6 +1767,201 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
 }
 
 template <class DeviceType>
+KOKKOS_INLINE_FUNCTION int PairSUS2MTPKokkos<DeviceType>::eval_radial_scaling_group(
+    const int itype, const int jtype, const KK_FLOAT dist, const int scaling_group,
+    const bool gate_radial, const bool need_derivatives,
+    RadialScalingGroupValues &result) const
+{
+  const int group_begin = d_k_to_mu_offsets(scaling_group);
+  const int group_end = d_k_to_mu_offsets(scaling_group + 1);
+  const int group_count = group_end - group_begin;
+  const int pairs_count = species_count * species_count;
+  const int pair_offset = itype * species_count + jtype;
+  const int scal_idx =
+      species_count + scaling_group * 2 * pairs_count + pair_offset;
+  const int shift_idx = scal_idx + pairs_count;
+  const F_FLOAT scal = d_regression_coeffs[scal_idx];
+  const F_FLOAT shift = d_regression_coeffs[shift_idx];
+  result.count = group_count;
+  result.v0 = result.v1 = result.v2 = result.v3 = result.v4 =
+      static_cast<F_FLOAT>(0.0);
+  result.d0 = result.d1 = result.d2 = result.d3 = result.d4 =
+      static_cast<F_FLOAT>(0.0);
+
+  const int mu0 = group_count > 0 ? d_grouped_mu(group_begin) : 0;
+  const int mu1 = group_count > 1 ? d_grouped_mu(group_begin + 1) : 0;
+  const int mu2 = group_count > 2 ? d_grouped_mu(group_begin + 2) : 0;
+  const int mu3 = group_count > 3 ? d_grouped_mu(group_begin + 3) : 0;
+  const int mu4 = group_count > 4 ? d_grouped_mu(group_begin + 4) : 0;
+  F_FLOAT factor0 = static_cast<F_FLOAT>(0.0);
+  F_FLOAT factor1 = static_cast<F_FLOAT>(0.0);
+  F_FLOAT factor2 = static_cast<F_FLOAT>(0.0);
+  F_FLOAT factor3 = static_cast<F_FLOAT>(0.0);
+  F_FLOAT factor4 = static_cast<F_FLOAT>(0.0);
+
+#define SUS2_SH_KK_SET_GROUP_FACTOR(LOCAL, MU, FACTOR)                               \
+  do {                                                                               \
+    if (group_count > (LOCAL)) {                                                      \
+      if (gate_radial) {                                                             \
+        (FACTOR) = d_two_layer_gate_type_coeffs_direct(itype, (MU)) *                \
+            d_two_layer_gate_type_coeffs_direct(jtype, (MU));                        \
+      } else {                                                                       \
+        const int type_coeff_mu = legacy_global_outer_type_coeffs ? 0 : (MU);        \
+        const int type_coeff_offset = radial_coeffs_offset +                         \
+            d_mu_radial_offset(type_coeff_mu) + radial_basis_size;                   \
+        (FACTOR) = d_regression_coeffs[type_coeff_offset + itype] *                  \
+            d_regression_coeffs[type_coeff_offset + jtype];                          \
+      }                                                                              \
+    }                                                                                \
+  } while (0)
+
+  SUS2_SH_KK_SET_GROUP_FACTOR(0, mu0, factor0);
+  SUS2_SH_KK_SET_GROUP_FACTOR(1, mu1, factor1);
+  SUS2_SH_KK_SET_GROUP_FACTOR(2, mu2, factor2);
+  SUS2_SH_KK_SET_GROUP_FACTOR(3, mu3, factor3);
+  SUS2_SH_KK_SET_GROUP_FACTOR(4, mu4, factor4);
+
+#undef SUS2_SH_KK_SET_GROUP_FACTOR
+
+#define SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(LOCAL, MU, FACTOR, BASIS, DER_BASIS, RI)     \
+  do {                                                                               \
+    if (group_count > (LOCAL)) {                                                      \
+      const int coeff_offset = radial_coeffs_offset + d_mu_radial_offset((MU));       \
+      const F_FLOAT radial_coeff = gate_radial                                       \
+          ? d_two_layer_gate_radial_coeffs_direct((MU), (RI))                        \
+          : d_regression_coeffs[coeff_offset + (RI)];                                \
+      const F_FLOAT coeff = radial_coeff * (FACTOR);                                 \
+      result.v##LOCAL = coeff * (BASIS);                                              \
+      if (need_derivatives) result.d##LOCAL = coeff * (DER_BASIS);                   \
+    }                                                                                \
+  } while (0)
+
+#define SUS2_SH_KK_ACCUM_GROUP_CHANNEL(LOCAL, MU, FACTOR, BASIS, DER_BASIS, RI)      \
+  do {                                                                               \
+    if (group_count > (LOCAL)) {                                                      \
+      const int coeff_offset = radial_coeffs_offset + d_mu_radial_offset((MU));       \
+      const F_FLOAT radial_coeff = gate_radial                                       \
+          ? d_two_layer_gate_radial_coeffs_direct((MU), (RI))                        \
+          : d_regression_coeffs[coeff_offset + (RI)];                                \
+      const F_FLOAT coeff = radial_coeff * (FACTOR);                                 \
+      result.v##LOCAL = Kokkos::fma(coeff, (BASIS), result.v##LOCAL);                 \
+      if (need_derivatives)                                                          \
+        result.d##LOCAL = Kokkos::fma(coeff, (DER_BASIS), result.d##LOCAL);           \
+    }                                                                                \
+  } while (0)
+
+  const bool use_laguerre =
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP;
+  const bool use_laguerre_pos =
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+      radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP;
+
+  if (use_laguerre) {
+    const F_FLOAT scal_eff =
+        use_laguerre_pos ? laguerre_positive_param_kk(scal) : scal;
+    const F_FLOAT shift_eff =
+        use_laguerre_pos ? laguerre_positive_param_kk(shift) : shift;
+    const F_FLOAT rho =
+        shift_eff > static_cast<F_FLOAT>(1.0e-8)
+        ? shift_eff : static_cast<F_FLOAT>(1.0e-8);
+    const F_FLOAT u = scal_eff * Kokkos::log(1.0 + dist / rho);
+    const F_FLOAT u_r = scal_eff / (rho + dist);
+    const F_FLOAT Dr = dist - max_cutoff;
+    const F_FLOAT cutoff = Dr * Dr;
+    const F_FLOAT cutoff_der = static_cast<F_FLOAT>(2.0) * Dr;
+    const F_FLOAT exp_factor = Kokkos::exp(static_cast<F_FLOAT>(-0.5) * u);
+    F_FLOAT phi_prev = static_cast<F_FLOAT>(0.0);
+    F_FLOAT dphi_prev = static_cast<F_FLOAT>(0.0);
+    F_FLOAT phi_curr = scaling * cutoff * exp_factor;
+    F_FLOAT dphi_curr = static_cast<F_FLOAT>(0.0);
+    if (need_derivatives)
+      dphi_curr = scaling * cutoff_der * exp_factor -
+          static_cast<F_FLOAT>(0.5) * u_r * phi_curr;
+
+    SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(0, mu0, factor0, phi_curr, dphi_curr, 0);
+    SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(1, mu1, factor1, phi_curr, dphi_curr, 0);
+    SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(2, mu2, factor2, phi_curr, dphi_curr, 0);
+    SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(3, mu3, factor3, phi_curr, dphi_curr, 0);
+    SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(4, mu4, factor4, phi_curr, dphi_curr, 0);
+    for (int ri = 1; ri < radial_basis_size; ++ri) {
+      const F_FLOAT inv_ri = static_cast<F_FLOAT>(1.0) / static_cast<F_FLOAT>(ri);
+      const F_FLOAT recurrence =
+          (static_cast<F_FLOAT>(2.0 * ri - 1.0) - u) * inv_ri;
+      const F_FLOAT prev_coeff = static_cast<F_FLOAT>(ri - 1) * inv_ri;
+      const F_FLOAT phi_next = recurrence * phi_curr - prev_coeff * phi_prev;
+      F_FLOAT dphi_next = static_cast<F_FLOAT>(0.0);
+      if (need_derivatives)
+        dphi_next = -u_r * inv_ri * phi_curr + recurrence * dphi_curr -
+            prev_coeff * dphi_prev;
+      SUS2_SH_KK_ACCUM_GROUP_CHANNEL(0, mu0, factor0, phi_next, dphi_next, ri);
+      SUS2_SH_KK_ACCUM_GROUP_CHANNEL(1, mu1, factor1, phi_next, dphi_next, ri);
+      SUS2_SH_KK_ACCUM_GROUP_CHANNEL(2, mu2, factor2, phi_next, dphi_next, ri);
+      SUS2_SH_KK_ACCUM_GROUP_CHANNEL(3, mu3, factor3, phi_next, dphi_next, ri);
+      SUS2_SH_KK_ACCUM_GROUP_CHANNEL(4, mu4, factor4, phi_next, dphi_next, ri);
+      phi_prev = phi_curr;
+      dphi_prev = dphi_curr;
+      phi_curr = phi_next;
+      dphi_curr = dphi_next;
+    }
+    return group_count;
+  }
+
+  const F_FLOAT transformed = scal * (dist - shift) / static_cast<F_FLOAT>(2.0);
+  const F_FLOAT ksi = Kokkos::tanh(transformed);
+  const F_FLOAT Dr = dist - max_cutoff;
+  const F_FLOAT cutoff = Dr * Dr;
+  const F_FLOAT mult = need_derivatives
+      ? (static_cast<F_FLOAT>(1.0) - ksi * ksi) * scal /
+          static_cast<F_FLOAT>(2.0)
+      : static_cast<F_FLOAT>(0.0);
+  F_FLOAT basis_prev2 = scaling * cutoff;
+  F_FLOAT der_prev2 = need_derivatives
+      ? static_cast<F_FLOAT>(2.0) * Dr * scaling
+      : static_cast<F_FLOAT>(0.0);
+  SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(0, mu0, factor0, basis_prev2, der_prev2, 0);
+  SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(1, mu1, factor1, basis_prev2, der_prev2, 0);
+  SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(2, mu2, factor2, basis_prev2, der_prev2, 0);
+  SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(3, mu3, factor3, basis_prev2, der_prev2, 0);
+  SUS2_SH_KK_ASSIGN_GROUP_CHANNEL(4, mu4, factor4, basis_prev2, der_prev2, 0);
+  if (radial_basis_size == 1) return group_count;
+
+  F_FLOAT basis_prev1 = scaling * ksi * cutoff;
+  F_FLOAT der_prev1 = need_derivatives
+      ? scaling * (mult * cutoff + static_cast<F_FLOAT>(2.0) * ksi * Dr)
+      : static_cast<F_FLOAT>(0.0);
+  SUS2_SH_KK_ACCUM_GROUP_CHANNEL(0, mu0, factor0, basis_prev1, der_prev1, 1);
+  SUS2_SH_KK_ACCUM_GROUP_CHANNEL(1, mu1, factor1, basis_prev1, der_prev1, 1);
+  SUS2_SH_KK_ACCUM_GROUP_CHANNEL(2, mu2, factor2, basis_prev1, der_prev1, 1);
+  SUS2_SH_KK_ACCUM_GROUP_CHANNEL(3, mu3, factor3, basis_prev1, der_prev1, 1);
+  SUS2_SH_KK_ACCUM_GROUP_CHANNEL(4, mu4, factor4, basis_prev1, der_prev1, 1);
+  for (int ri = 2; ri < radial_basis_size; ++ri) {
+    const F_FLOAT basis =
+        Kokkos::fma(static_cast<F_FLOAT>(2.0) * ksi, basis_prev1, -basis_prev2);
+    F_FLOAT der_basis = static_cast<F_FLOAT>(0.0);
+    if (need_derivatives)
+      der_basis = Kokkos::fma(
+          static_cast<F_FLOAT>(2.0),
+          Kokkos::fma(mult, basis_prev1, ksi * der_prev1), -der_prev2);
+    SUS2_SH_KK_ACCUM_GROUP_CHANNEL(0, mu0, factor0, basis, der_basis, ri);
+    SUS2_SH_KK_ACCUM_GROUP_CHANNEL(1, mu1, factor1, basis, der_basis, ri);
+    SUS2_SH_KK_ACCUM_GROUP_CHANNEL(2, mu2, factor2, basis, der_basis, ri);
+    SUS2_SH_KK_ACCUM_GROUP_CHANNEL(3, mu3, factor3, basis, der_basis, ri);
+    SUS2_SH_KK_ACCUM_GROUP_CHANNEL(4, mu4, factor4, basis, der_basis, ri);
+    basis_prev2 = basis_prev1;
+    basis_prev1 = basis;
+    der_prev2 = der_prev1;
+    der_prev1 = der_basis;
+  }
+  return group_count;
+
+#undef SUS2_SH_KK_ASSIGN_GROUP_CHANNEL
+#undef SUS2_SH_KK_ACCUM_GROUP_CHANNEL
+}
+
+template <class DeviceType>
 KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_packed_basic_mu_group(
     const int table_index, const int r_list, const int r_next, const KK_FLOAT ddr,
     const int mu_group, KK_FLOAT &val, KK_FLOAT &der) const
@@ -2283,6 +2479,8 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
       MIN(input_chunk_size,
           inum);    // chunksize is the maximum atoms per pass as defined by the user
   chunk_offset = 0;
+	const bool grouped_k_direct =
+	    is_sh_model && scaling_map == "K" && !do_list;
 
   // Team sizes. We specify 32 for 1 warp per thread block.
   int team_size_default = 1;
@@ -2647,18 +2845,25 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      int team_size = alpha_basic_team_size;
 	      int vector_length = alpha_basic_vector_length;
 	      int team_count = chunk_size;
-	      check_team_size_for<TagPairSUS2MTPComputeGateFirstLayer>(team_count, team_size,
-	                                                               vector_length);
-	      const int radial_scratch_count = basic_mu_group_count;
-	      const int scratch_size = scratch_size_helper<F_FLOAT>(
-	          team_size * radial_scratch_count);
-	      Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>
-	          policy_gate_first(team_count, team_size, vector_length);
-		      policy_gate_first =
-		          policy_gate_first.set_scratch_size(0, Kokkos::PerTeam(scratch_size));
-				      profile_begin();
-				      Kokkos::parallel_for("ComputeGateFirstLayer", policy_gate_first, *this);
-				      profile_end(prof_first_layer);
+	      auto launch_gate_first = [&](auto grouped_constant) {
+	        constexpr bool grouped = decltype(grouped_constant)::value;
+	        using tag_type = TagPairSUS2MTPComputeGateFirstLayer<grouped>;
+	        check_team_size_for<tag_type>(team_count, team_size, vector_length);
+	        const int radial_scratch_count = basic_mu_group_count;
+	        const int scratch_size = scratch_size_helper<F_FLOAT>(
+	            team_size * radial_scratch_count);
+	        Kokkos::TeamPolicy<DeviceType, tag_type> policy_gate_first(
+	            team_count, team_size, vector_length);
+	        policy_gate_first = policy_gate_first.set_scratch_size(
+	            0, Kokkos::PerTeam(scratch_size));
+	        Kokkos::parallel_for("ComputeGateFirstLayer", policy_gate_first, *this);
+	      };
+		      profile_begin();
+	      if (grouped_k_direct)
+	        launch_gate_first(std::true_type{});
+	      else
+	        launch_gate_first(std::false_type{});
+		      profile_end(prof_first_layer);
 
 					      {
 					        profile_begin();
@@ -2963,17 +3168,24 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	      int team_size = alpha_basic_team_size;
 	      int vector_length = alpha_basic_vector_length;
 	      int team_count = chunk_size;
-	      check_team_size_for<TagPairSUS2MTPComputeGateMainAlphaBasic>(team_count, team_size,
-	                                                                   vector_length);
-	      const int radial_scratch_count = basic_mu_group_count;
-	      const int scratch_size = scratch_size_helper<F_FLOAT>(
-	          team_size * radial_scratch_count);
-	      Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainAlphaBasic>
-	          policy_gate_main(team_count, team_size, vector_length);
-		      policy_gate_main =
-		          policy_gate_main.set_scratch_size(0, Kokkos::PerTeam(scratch_size));
+	      auto launch_gate_main_alpha = [&](auto grouped_constant) {
+	        constexpr bool grouped = decltype(grouped_constant)::value;
+	        using tag_type = TagPairSUS2MTPComputeGateMainAlphaBasic<grouped>;
+	        check_team_size_for<tag_type>(team_count, team_size, vector_length);
+	        const int radial_scratch_count = basic_mu_group_count;
+	        const int scratch_size = scratch_size_helper<F_FLOAT>(
+	            team_size * radial_scratch_count);
+	        Kokkos::TeamPolicy<DeviceType, tag_type> policy_gate_main(
+	            team_count, team_size, vector_length);
+	        policy_gate_main = policy_gate_main.set_scratch_size(
+	            0, Kokkos::PerTeam(scratch_size));
+	        Kokkos::parallel_for("ComputeGateMainAlphaBasic", policy_gate_main, *this);
+	      };
 		      profile_begin();
-		      Kokkos::parallel_for("ComputeGateMainAlphaBasic", policy_gate_main, *this);
+	      if (grouped_k_direct)
+	        launch_gate_main_alpha(std::true_type{});
+	      else
+	        launch_gate_main_alpha(std::false_type{});
 		      profile_end(prof_main_basic);
 
 		      if (outer_k_rank_enabled || alpha_index_times_count > 0) {
@@ -3036,54 +3248,56 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	        const bool use_local_gate_force =
 	            two_layer_gate_body_linear_combo &&
 	            two_layer_gate_kk_signal_stride <= kMaxGateSignalStrideKK;
+	        auto launch_gate_main_force_team = [&](auto neigh_constant,
+	                                               auto local_constant,
+	                                               auto grouped_constant) {
+	          constexpr int neigh = decltype(neigh_constant)::value;
+	          constexpr int local = decltype(local_constant)::value;
+	          constexpr bool grouped = decltype(grouped_constant)::value;
+	          using tag_type =
+	              TagPairSUS2MTPComputeGateMainForceTeam<neigh, local, grouped>;
+	          int force_team_size = force_team_size_default;
+	          const int force_vector_length = 1;
+	          check_team_size_for<tag_type>(
+	              chunk_size, force_team_size, force_vector_length);
+	          Kokkos::TeamPolicy<DeviceType, tag_type> policy_force(
+	              chunk_size, force_team_size, force_vector_length);
+	          const int force_scratch_size =
+	              scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+	          policy_force = policy_force.set_scratch_size(
+	              0, Kokkos::PerTeam(force_scratch_size));
+	          Kokkos::parallel_for(
+	              local ? "ComputeGateMainForceTeamLocalAdjoint"
+	                    : "ComputeGateMainForceTeam",
+	              policy_force, *this);
+	        };
+	        auto dispatch_gate_main_force_team = [&](auto neigh_constant,
+	                                                 auto local_constant) {
+	          if (grouped_k_direct)
+	            launch_gate_main_force_team(neigh_constant, local_constant,
+	                                        std::true_type{});
+	          else
+	            launch_gate_main_force_team(neigh_constant, local_constant,
+	                                        std::false_type{});
+	        };
 	        if (neighflag == HALF) {
-		          int force_team_size = force_team_size_default;
-		          const int force_vector_length = 1;
-	          if (use_local_gate_force) {
-	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF, 1>>(
-	                chunk_size, force_team_size, force_vector_length);
-	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALF, 1>>
-	                policy_force(chunk_size, force_team_size, force_vector_length);
-	            const int force_scratch_size =
-	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	            policy_force = policy_force.set_scratch_size(
-	                0, Kokkos::PerTeam(force_scratch_size));
-	            Kokkos::parallel_for("ComputeGateMainForceTeamLocalAdjoint", policy_force, *this);
-	          } else {
-	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALF, 0>>(
-	                chunk_size, force_team_size, force_vector_length);
-	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALF, 0>>
-	                policy_force(chunk_size, force_team_size, force_vector_length);
-	            const int force_scratch_size =
-	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	            policy_force = policy_force.set_scratch_size(
-	                0, Kokkos::PerTeam(force_scratch_size));
-	            Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
-	          }
+	          if (use_local_gate_force)
+	            dispatch_gate_main_force_team(
+	                std::integral_constant<int, HALF>{},
+	                std::integral_constant<int, 1>{});
+	          else
+	            dispatch_gate_main_force_team(
+	                std::integral_constant<int, HALF>{},
+	                std::integral_constant<int, 0>{});
 	        } else if (neighflag == HALFTHREAD) {
-		          int force_team_size = force_team_size_default;
-		          const int force_vector_length = 1;
-	          if (use_local_gate_force) {
-	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 1>>(
-	                chunk_size, force_team_size, force_vector_length);
-	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 1>>
-	                policy_force(chunk_size, force_team_size, force_vector_length);
-	            const int force_scratch_size =
-	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	            policy_force = policy_force.set_scratch_size(
-	                0, Kokkos::PerTeam(force_scratch_size));
-	            Kokkos::parallel_for("ComputeGateMainForceTeamLocalAdjoint", policy_force, *this);
-	          } else {
-	            check_team_size_for<TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 0>>(
-	                chunk_size, force_team_size, force_vector_length);
-	            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<HALFTHREAD, 0>>
-	                policy_force(chunk_size, force_team_size, force_vector_length);
-	            const int force_scratch_size =
-	                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-	            policy_force = policy_force.set_scratch_size(
-	                0, Kokkos::PerTeam(force_scratch_size));
-	            Kokkos::parallel_for("ComputeGateMainForceTeam", policy_force, *this);
-	          }
+	          if (use_local_gate_force)
+	            dispatch_gate_main_force_team(
+	                std::integral_constant<int, HALFTHREAD>{},
+	                std::integral_constant<int, 1>{});
+	          else
+	            dispatch_gate_main_force_team(
+	                std::integral_constant<int, HALFTHREAD>{},
+	                std::integral_constant<int, 0>{});
 	        }
 		      }
 		      profile_end(prof_main_force);
@@ -3161,21 +3375,29 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		          }
 				          int chain_alpha_team_size = alpha_basic_team_size;
 				          int chain_alpha_vector_length = alpha_basic_vector_length;
-				          check_team_size_for<TagPairSUS2MTPComputeGateFirstLayer>(
-				              chunk_size, chain_alpha_team_size,
-				              chain_alpha_vector_length);
-				          const int chain_radial_scratch_count = basic_mu_group_count;
-				          const int chain_alpha_scratch_size =
-				              scratch_size_helper<F_FLOAT>(
-				                  chain_alpha_team_size * chain_radial_scratch_count);
-				          Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>
-				              policy_gate_chain_first(chunk_size, chain_alpha_team_size,
-				                                      chain_alpha_vector_length);
-				          policy_gate_chain_first =
-				              policy_gate_chain_first.set_scratch_size(
-				                  0, Kokkos::PerTeam(chain_alpha_scratch_size));
-				          Kokkos::parallel_for("ComputeGateChainFirstLayer",
-				                               policy_gate_chain_first, *this);
+				          auto launch_gate_chain_first = [&](auto grouped_constant) {
+				            constexpr bool grouped = decltype(grouped_constant)::value;
+				            using tag_type = TagPairSUS2MTPComputeGateFirstLayer<grouped>;
+				            check_team_size_for<tag_type>(
+				                chunk_size, chain_alpha_team_size,
+				                chain_alpha_vector_length);
+				            const int chain_radial_scratch_count = basic_mu_group_count;
+				            const int chain_alpha_scratch_size =
+				                scratch_size_helper<F_FLOAT>(
+				                    chain_alpha_team_size * chain_radial_scratch_count);
+				            Kokkos::TeamPolicy<DeviceType, tag_type>
+				                policy_gate_chain_first(chunk_size, chain_alpha_team_size,
+				                                        chain_alpha_vector_length);
+				            policy_gate_chain_first =
+				                policy_gate_chain_first.set_scratch_size(
+				                    0, Kokkos::PerTeam(chain_alpha_scratch_size));
+				            Kokkos::parallel_for("ComputeGateChainFirstLayer",
+				                                 policy_gate_chain_first, *this);
+				          };
+				          if (grouped_k_direct)
+				            launch_gate_chain_first(std::true_type{});
+				          else
+				            launch_gate_chain_first(std::false_type{});
 				          if (two_layer_gate_k_rank > 0 ||
 				              two_layer_gate_product_limit > 0) {
 				            typename Kokkos::RangePolicy<DeviceType,
@@ -3201,9 +3423,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		            if (neighflag == HALF) {
 		              int chain_team_size = chain_team_size_default;
 		              const int chain_vector_length = 1;
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>(
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0, false>>(
 		                  chunk_size, chain_team_size, chain_vector_length);
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0, false>>
 		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
 		              const int chain_scratch_size =
 		                  scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
@@ -3214,9 +3436,9 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 		            } else if (neighflag == HALFTHREAD) {
 		              int chain_team_size = chain_team_size_default;
 		              const int chain_vector_length = 1;
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>(
+		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0, false>>(
 		                  chunk_size, chain_team_size, chain_vector_length);
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>
+		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0, false>>
 		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
 		              const int chain_scratch_size =
 		                  scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
@@ -3320,62 +3542,64 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 			          const bool need_chain_tally =
 			              vflag_global || vflag_atom || cvflag_atom;
 			          detail_t0 = profile_detail_begin();
-			          if (neighflag == HALF) {
-		            int chain_team_size = chain_team_size_default;
-		            const int chain_vector_length = 1;
-		            if (need_chain_tally)
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 1>>(
-		                  chunk_size, chain_team_size, chain_vector_length);
-		            else
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>(
-		                  chunk_size, chain_team_size, chain_vector_length);
-		            const int chain_scratch_size =
-		                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-		            if (need_chain_tally) {
-		              EV_FLOAT ev_tmp;
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 1>>
-		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
-		              policy_chain =
-		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
-		              Kokkos::parallel_reduce("ComputeGateChainForceDirectTeamEV",
-		                                      policy_chain, *this, ev_tmp);
-		              ev += ev_tmp;
-		            } else {
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALF, 0>>
-		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
-		              policy_chain =
-		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
-		              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
-		                                   policy_chain, *this);
-		            }
-		          } else if (neighflag == HALFTHREAD) {
-		            int chain_team_size = chain_team_size_default;
-		            const int chain_vector_length = 1;
-		            if (need_chain_tally)
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 1>>(
-		                  chunk_size, chain_team_size, chain_vector_length);
-		            else
-		              check_team_size_for<TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>(
-		                  chunk_size, chain_team_size, chain_vector_length);
-		            const int chain_scratch_size =
-		                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
-		            if (need_chain_tally) {
-		              EV_FLOAT ev_tmp;
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 1>>
-		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
-		              policy_chain =
-		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
-		              Kokkos::parallel_reduce("ComputeGateChainForceDirectTeamEV",
-		                                      policy_chain, *this, ev_tmp);
-		              ev += ev_tmp;
-		            } else {
-		              Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<HALFTHREAD, 0>>
-		                  policy_chain(chunk_size, chain_team_size, chain_vector_length);
-		              policy_chain =
-		                  policy_chain.set_scratch_size(0, Kokkos::PerTeam(chain_scratch_size));
-			              Kokkos::parallel_for("ComputeGateChainForceDirectTeam",
-			                                   policy_chain, *this);
+			          auto launch_gate_chain_direct = [&](auto neigh_constant,
+			                                                   auto tally_constant,
+			                                                   auto grouped_constant) {
+			            constexpr int neigh = decltype(neigh_constant)::value;
+			            constexpr int tally = decltype(tally_constant)::value;
+			            constexpr bool grouped = decltype(grouped_constant)::value;
+			            using tag_type =
+			                TagPairSUS2MTPComputeGateChainForceDirectTeam<
+			                    neigh, tally, grouped>;
+			            int chain_team_size = chain_team_size_default;
+			            const int chain_vector_length = 1;
+			            check_team_size_for<tag_type>(
+			                chunk_size, chain_team_size, chain_vector_length);
+			            const int chain_scratch_size =
+			                scratch_size_helper<F_FLOAT>(alpha_index_basic_count);
+			            Kokkos::TeamPolicy<DeviceType, tag_type> policy_chain(
+			                chunk_size, chain_team_size, chain_vector_length);
+			            policy_chain = policy_chain.set_scratch_size(
+			                0, Kokkos::PerTeam(chain_scratch_size));
+			            if constexpr (tally) {
+			              EV_FLOAT ev_tmp;
+			              Kokkos::parallel_reduce(
+			                  "ComputeGateChainForceDirectTeamEV",
+			                  policy_chain, *this, ev_tmp);
+			              ev += ev_tmp;
+			            } else {
+			              Kokkos::parallel_for(
+			                  "ComputeGateChainForceDirectTeam",
+			                  policy_chain, *this);
 			            }
+			          };
+			          auto dispatch_gate_chain_direct = [&](auto neigh_constant,
+			                                                     auto tally_constant) {
+			            if (grouped_k_direct)
+			              launch_gate_chain_direct(
+			                  neigh_constant, tally_constant, std::true_type{});
+			            else
+			              launch_gate_chain_direct(
+			                  neigh_constant, tally_constant, std::false_type{});
+			          };
+			          if (neighflag == HALF) {
+			            if (need_chain_tally)
+			              dispatch_gate_chain_direct(
+			                  std::integral_constant<int, HALF>{},
+			                  std::integral_constant<int, 1>{});
+			            else
+			              dispatch_gate_chain_direct(
+			                  std::integral_constant<int, HALF>{},
+			                  std::integral_constant<int, 0>{});
+			          } else if (neighflag == HALFTHREAD) {
+			            if (need_chain_tally)
+			              dispatch_gate_chain_direct(
+			                  std::integral_constant<int, HALFTHREAD>{},
+			                  std::integral_constant<int, 1>{});
+			            else
+			              dispatch_gate_chain_direct(
+			                  std::integral_constant<int, HALFTHREAD>{},
+			                  std::integral_constant<int, 0>{});
 			          }
 			          profile_detail_end(detail_t0, prof_chain_direct);
 			        }
@@ -3441,21 +3665,29 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	        int team_size = alpha_basic_team_size;
 	        int vector_length = alpha_basic_vector_length;
 	        int team_count = chunk_size;
-	        check_team_size_for<TagPairSUS2MTPComputeAlphaBasic>(team_count, team_size, vector_length);
+	        auto launch_alpha_basic = [&](auto grouped_constant) {
+	          constexpr bool grouped = decltype(grouped_constant)::value;
+	          using tag_type = TagPairSUS2MTPComputeAlphaBasic<grouped>;
+	          check_team_size_for<tag_type>(team_count, team_size, vector_length);
 
-	        int radial_scratch_count = basic_mu_group_count;
-	        int dist_scratch_count = max_alpha_index_basic;           // s_dist_powers
-	        int coord_scratch_count = 3 * max_alpha_index_basic;      // s_coord_powers (3 dimensions)
-	        int scratch_size = scratch_size_helper<F_FLOAT>(
-	            team_size * (radial_scratch_count + dist_scratch_count + coord_scratch_count));
-		        Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic> policy_basic_alpha(team_count,
-		                                                                                       team_size,
-		                                                                                       vector_length);
-		        policy_basic_alpha = policy_basic_alpha.set_scratch_size(0, Kokkos::PerTeam(scratch_size));
+	          int radial_scratch_count = basic_mu_group_count;
+	          int dist_scratch_count = max_alpha_index_basic;           // s_dist_powers
+	          int coord_scratch_count = 3 * max_alpha_index_basic;      // s_coord_powers (3 dimensions)
+	          int scratch_size = scratch_size_helper<F_FLOAT>(
+	              team_size * (radial_scratch_count + dist_scratch_count + coord_scratch_count));
+	          Kokkos::TeamPolicy<DeviceType, tag_type> policy_basic_alpha(
+	              team_count, team_size, vector_length);
+	          policy_basic_alpha = policy_basic_alpha.set_scratch_size(
+	              0, Kokkos::PerTeam(scratch_size));
+	          Kokkos::parallel_for("ComputeAlphaBasic", policy_basic_alpha, *this);
+	        };
 		        profile_begin();
-		        Kokkos::parallel_for("ComputeAlphaBasic", policy_basic_alpha, *this);
+	        if (grouped_k_direct)
+	          launch_alpha_basic(std::true_type{});
+	        else
+	          launch_alpha_basic(std::false_type{});
 		        profile_end(prof_main_basic);
-		      }
+	      }
 		      trace_kokkos_moments("after_basic");
 
 	      // ========== Calculate the non-elementary alphas  ==========
@@ -3497,23 +3729,30 @@ template <class DeviceType> void PairSUS2MTPKokkos<DeviceType>::compute(int efla
 	          }
 	          ev += ev_tmp;
 		        } else {
-		          if (neighflag == HALF) {
-		            int force_team_size = team_size_default;
-		            const int force_vector_length = 1;
-		            check_team_size_for<TagPairSUS2MTPComputeForceTeam<HALF>>(
-		                chunk_size, force_team_size, force_vector_length);
-		            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<HALF>>
-		                policy_force(chunk_size, force_team_size, force_vector_length);
-		            Kokkos::parallel_for("ComputeForceTeam", policy_force, *this);
-		          } else if (neighflag == HALFTHREAD) {
-		            int force_team_size = team_size_default;
-		            const int force_vector_length = 1;
-		            check_team_size_for<TagPairSUS2MTPComputeForceTeam<HALFTHREAD>>(
-		                chunk_size, force_team_size, force_vector_length);
-		            Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<HALFTHREAD>>
-		                policy_force(chunk_size, force_team_size, force_vector_length);
-		            Kokkos::parallel_for("ComputeForceTeam", policy_force, *this);
-		          }
+	          auto launch_force_team = [&](auto neigh_constant,
+	                                       auto grouped_constant) {
+	            constexpr int neigh = decltype(neigh_constant)::value;
+	            constexpr bool grouped = decltype(grouped_constant)::value;
+	            using tag_type = TagPairSUS2MTPComputeForceTeam<neigh, grouped>;
+	            int force_team_size = team_size_default;
+	            const int force_vector_length = 1;
+	            check_team_size_for<tag_type>(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::TeamPolicy<DeviceType, tag_type> policy_force(
+	                chunk_size, force_team_size, force_vector_length);
+	            Kokkos::parallel_for("ComputeForceTeam", policy_force, *this);
+	          };
+	          auto dispatch_force_team = [&](auto neigh_constant) {
+	            if (grouped_k_direct)
+	              launch_force_team(neigh_constant, std::true_type{});
+	            else
+	              launch_force_team(neigh_constant, std::false_type{});
+	          };
+		          if (neighflag == HALF)
+	            dispatch_force_team(std::integral_constant<int, HALF>{});
+		          else if (neighflag == HALFTHREAD)
+	            dispatch_force_team(
+	                std::integral_constant<int, HALFTHREAD>{});
 		        }
 		      }
 		      profile_end(prof_main_force);
@@ -4018,9 +4257,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	}
 
 	template <class DeviceType>
+	template <bool GROUPED_K>
 	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
-	    TagPairSUS2MTPComputeGateFirstLayer,
-	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer>::member_type &team)
+	    TagPairSUS2MTPComputeGateFirstLayer<GROUPED_K>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateFirstLayer<GROUPED_K>>::member_type &team)
 	    const
 	{
 	  shared_double_2d s_radial_vals(team.team_scratch(0), team.team_size(), basic_mu_group_count);
@@ -4060,19 +4300,38 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 			      }
 			    }
 
-				    for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
-				      if (table_index >= 0) {
-				        const F_FLOAT v1 =
-				            d_two_layer_gate_radial_list(table_index, r_list, mu_group);
-				        const F_FLOAT v2 =
-				            d_two_layer_gate_radial_list(table_index, r_next, mu_group);
-				        s_radial_vals(thread, mu_group) = v1 + ddr * (v2 - v1);
-				      } else {
-				        eval_gate_radial_value_basic_mu_group(
-				            itype, jtype, dist, mu_group,
-				            s_radial_vals(thread, mu_group));
-				      }
-				    }
+					    if constexpr (GROUPED_K) {
+					      for (int scaling_group = 0; scaling_group < K_scaling;
+					           ++scaling_group) {
+					        RadialScalingGroupValues grouped;
+					        const int group_count = eval_radial_scaling_group(
+					            itype, jtype, dist, scaling_group, true, false, grouped);
+					        const int group_begin = d_k_to_mu_offsets(scaling_group);
+					        for (int local = 0; local < group_count; ++local) {
+					          const int mu = d_grouped_mu(group_begin + local);
+					          const int mu_group = d_mu_to_basic_group(mu);
+					          if (mu_group >= 0)
+					            s_radial_vals(thread, mu_group) = grouped.value(local);
+					        }
+					      }
+					    } else {
+					      for (int mu_group = 0; mu_group < basic_mu_group_count;
+					           mu_group++) {
+					        if (table_index >= 0) {
+					          const F_FLOAT v1 =
+					              d_two_layer_gate_radial_list(
+					                  table_index, r_list, mu_group);
+					          const F_FLOAT v2 =
+					              d_two_layer_gate_radial_list(
+					                  table_index, r_next, mu_group);
+					          s_radial_vals(thread, mu_group) = v1 + ddr * (v2 - v1);
+					        } else {
+					          eval_gate_radial_value_basic_mu_group(
+					              itype, jtype, dist, mu_group,
+					              s_radial_vals(thread, mu_group));
+					        }
+					      }
+					    }
 	    F_FLOAT sh_values[kMaxSHComponentsKK];
 	    eval_real_sh_values_kk(r, static_cast<F_FLOAT>(1.0) / dist,
 	                           sh_l_max, sh_values);
@@ -4701,9 +4960,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	}
 
 	template <class DeviceType>
+	template <bool GROUPED_K>
 	KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
-	    TagPairSUS2MTPComputeGateMainAlphaBasic,
-	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainAlphaBasic>::member_type &team)
+	    TagPairSUS2MTPComputeGateMainAlphaBasic<GROUPED_K>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainAlphaBasic<GROUPED_K>>::member_type &team)
 	    const
 	{
 	  shared_double_2d s_radial_vals(team.team_scratch(0), team.team_size(), basic_mu_group_count);
@@ -4744,25 +5004,48 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	    F_FLOAT sh_values[kMaxSHComponentsKK];
 	    eval_real_sh_values_kk(r, static_cast<F_FLOAT>(1.0) / dist,
 	                           sh_l_max, sh_values);
-			    for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
-			      F_FLOAT base_val = static_cast<F_FLOAT>(0.0);
-			      if (table_index >= 0) {
-			        const F_FLOAT v1 = d_radial_list(table_index, r_list, mu_group);
-			        const F_FLOAT v2 = d_radial_list(table_index, r_next, mu_group);
-			        base_val = v1 + ddr * (v2 - v1);
-			      } else {
-			        eval_radial_value_basic_mu_group(itype, jtype, dist, mu_group, base_val);
+			    if constexpr (GROUPED_K) {
+			      for (int scaling_group = 0; scaling_group < K_scaling; ++scaling_group) {
+			        RadialScalingGroupValues grouped;
+			        const int group_count = eval_radial_scaling_group(
+			            itype, jtype, dist, scaling_group, false, false, grouped);
+			        const int group_begin = d_k_to_mu_offsets(scaling_group);
+			        for (int local = 0; local < group_count; ++local) {
+			          const int mu = d_grouped_mu(group_begin + local);
+			          const int mu_group = d_mu_to_basic_group(mu);
+			          if (mu_group < 0) continue;
+			          F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
+			          if (two_layer_gate_kk_edge_l1_active) {
+			            const F_FLOAT edge_projection =
+			                two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
+			            gate_multiplier +=
+			                two_layer_gate_mu_deriv_kk(jtype, mu) * edge_projection;
+			          }
+			          s_radial_vals(thread, mu_group) =
+			              grouped.value(local) * gate_multiplier;
+			        }
 			      }
-			      const int mu = d_basic_mu_values(mu_group);
-			      F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
-			      if (two_layer_gate_kk_edge_l1_active) {
-			        const F_FLOAT edge_projection =
-			            two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
-		        gate_multiplier +=
-		            two_layer_gate_mu_deriv_kk(jtype, mu) * edge_projection;
+			    } else {
+			      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+			        F_FLOAT base_val = static_cast<F_FLOAT>(0.0);
+			        if (table_index >= 0) {
+			          const F_FLOAT v1 = d_radial_list(table_index, r_list, mu_group);
+			          const F_FLOAT v2 = d_radial_list(table_index, r_next, mu_group);
+			          base_val = v1 + ddr * (v2 - v1);
+			        } else {
+			          eval_radial_value_basic_mu_group(
+			              itype, jtype, dist, mu_group, base_val);
+			        }
+			        const int mu = d_basic_mu_values(mu_group);
+			        F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
+			        if (two_layer_gate_kk_edge_l1_active) {
+			          const F_FLOAT edge_projection =
+			              two_layer_gate_edge_l1_projection_kk(j, mu, sh_values);
+			          gate_multiplier +=
+			              two_layer_gate_mu_deriv_kk(jtype, mu) * edge_projection;
+			        }
+			        s_radial_vals(thread, mu_group) = base_val * gate_multiplier;
 			      }
-			      s_radial_vals(thread, mu_group) =
-			          base_val * gate_multiplier;
 			    }
 
 	    Kokkos::parallel_for(Kokkos::ThreadVectorRange(team, alpha_index_basic_count),
@@ -4777,9 +5060,10 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 
 	// Calculates the basic alphas using fused operations where possible
 template <class DeviceType>
+template <bool GROUPED_K>
 KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
-    TagPairSUS2MTPComputeAlphaBasic,
-    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic>::member_type &team)
+    TagPairSUS2MTPComputeAlphaBasic<GROUPED_K>,
+    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeAlphaBasic<GROUPED_K>>::member_type &team)
     const
 {
   shared_double_2d s_radial_vals(team.team_scratch(0), team.team_size(), basic_mu_group_count);
@@ -4828,10 +5112,26 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
       }
     }
     if (!used_precomputed_table) {
-      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
-        F_FLOAT der_unused = 0.0;
-        eval_radial_basic_mu_group(itype, jtype, dist, mu_group, s_radial_vals(thread, mu_group),
-                                   der_unused);
+	      if constexpr (GROUPED_K) {
+        for (int scaling_group = 0; scaling_group < K_scaling; ++scaling_group) {
+          RadialScalingGroupValues grouped;
+          const int group_count = eval_radial_scaling_group(
+              itype, jtype, dist, scaling_group, false, false, grouped);
+          const int group_begin = d_k_to_mu_offsets(scaling_group);
+          for (int local = 0; local < group_count; ++local) {
+            const int mu = d_grouped_mu(group_begin + local);
+            const int mu_group = d_mu_to_basic_group(mu);
+            if (mu_group >= 0)
+              s_radial_vals(thread, mu_group) = grouped.value(local);
+          }
+        }
+      } else {
+        for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+          F_FLOAT der_unused = 0.0;
+          eval_radial_basic_mu_group(
+              itype, jtype, dist, mu_group,
+              s_radial_vals(thread, mu_group), der_unused);
+        }
       }
     }
 
@@ -5209,11 +5509,11 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::operator()(
 	}
 
 template <class DeviceType>
-template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS>
+template <int NEIGHFLAG, int LOCAL_GATE_ADJOINTS, bool GROUPED_K>
 KOKKOS_INLINE_FUNCTION void
 PairSUS2MTPKokkos<DeviceType>::operator()(
-    TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>,
-    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS>>::member_type
+    TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS, GROUPED_K>,
+    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateMainForceTeam<NEIGHFLAG, LOCAL_GATE_ADJOINTS, GROUPED_K>>::member_type
         &team) const
 {
   auto v_f =
@@ -5226,7 +5526,6 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
   const int jnum = d_numneigh(i);
   const int itype = type[i] - 1;
   const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
-
   shared_double_1d s_basic_coeffs(team.team_scratch(0), alpha_index_basic_count);
   if (is_sh_model) {
     Kokkos::parallel_for(Kokkos::TeamThreadRange(team, alpha_index_basic_count),
@@ -5279,22 +5578,36 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 
     const int gate_stride = two_layer_gate_kk_signal_stride;
     F_FLOAT gate_signal_adjoints[LOCAL_GATE_ADJOINTS ? kMaxGateSignalStrideKK : 1];
-    if constexpr (LOCAL_GATE_ADJOINTS) {
+	    if constexpr (LOCAL_GATE_ADJOINTS) {
       for (int s = 0; s < kMaxGateSignalStrideKK; s++)
         gate_signal_adjoints[s] = static_cast<F_FLOAT>(0.0);
-    }
+	    }
+
+	    RadialScalingGroupValues grouped;
+	    int cached_scaling_group = -1;
 
 	    for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+	      const int mu = d_basic_mu_values(mu_group);
 	      F_FLOAT base_val = static_cast<F_FLOAT>(0.0);
 	      F_FLOAT base_der = static_cast<F_FLOAT>(0.0);
 	      if (table_index >= 0) {
 	        eval_radial_packed_basic_mu_group(table_index, r_list, r_next, ddr, mu_group,
 	                                          base_val, base_der);
+	      } else if constexpr (GROUPED_K) {
+	        const int scaling_group = d_mu_to_K(mu);
+	        if (scaling_group != cached_scaling_group) {
+	          eval_radial_scaling_group(
+	              itype, jtype, dist, scaling_group, false, true, grouped);
+	          cached_scaling_group = scaling_group;
+	        }
+	        const int group_begin = d_k_to_mu_offsets(scaling_group);
+	        const int local = mu - d_grouped_mu(group_begin);
+	        base_val = grouped.value(local);
+	        base_der = grouped.derivative(local);
 	      } else {
 	        eval_radial_basic_mu_group(itype, jtype, dist, mu_group,
 	                                   base_val, base_der);
 	      }
-	      const int mu = d_basic_mu_values(mu_group);
 	      F_FLOAT gate_multiplier = d_two_layer_gate_mu_multipliers(j, mu);
 	      F_FLOAT gate_deriv = two_layer_gate_mu_deriv_kk(jtype, mu);
 	      if (edge_l1_active_local) {
@@ -5456,11 +5769,11 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 }
 
 template <class DeviceType>
-template <int NEIGHFLAG>
+template <int NEIGHFLAG, bool GROUPED_K>
 KOKKOS_INLINE_FUNCTION void
 PairSUS2MTPKokkos<DeviceType>::operator()(
-    TagPairSUS2MTPComputeForceTeam<NEIGHFLAG>,
-    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<NEIGHFLAG>>::member_type
+    TagPairSUS2MTPComputeForceTeam<NEIGHFLAG, GROUPED_K>,
+    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeForceTeam<NEIGHFLAG, GROUPED_K>>::member_type
         &team) const
 {
   auto v_f =
@@ -5479,7 +5792,6 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
   const F_FLOAT env_rho_chain_prefactor =
       use_env_gate ? d_env_gate_rho_chain_values(ii) : static_cast<F_FLOAT>(0.0);
   const F_FLOAT r_env = env_gate_cutoff_ratio * max_cutoff;
-
   F_FLOAT center_fx = static_cast<F_FLOAT>(0.0);
   F_FLOAT center_fy = static_cast<F_FLOAT>(0.0);
   F_FLOAT center_fz = static_cast<F_FLOAT>(0.0);
@@ -5531,13 +5843,28 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
       eval_real_sh_kk(r, static_cast<F_FLOAT>(1.0) / dist, sh_l_max,
                       sh_values, sh_ders);
 
+	    RadialScalingGroupValues grouped;
+	    int cached_scaling_group = -1;
+
 	    if (is_sh_model) {
 	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+	        const int mu = d_basic_mu_values(mu_group);
 	        F_FLOAT val = 0.0;
 	        F_FLOAT der = 0.0;
 	        if (table_index >= 0) {
 	          eval_radial_packed_basic_mu_group(table_index, r_list, r_next, ddr, mu_group,
 	                                            val, der);
+	        } else if constexpr (GROUPED_K) {
+	          const int scaling_group = d_mu_to_K(mu);
+	          if (scaling_group != cached_scaling_group) {
+	            eval_radial_scaling_group(
+	                itype, jtype, dist, scaling_group, false, true, grouped);
+	            cached_scaling_group = scaling_group;
+	          }
+	          const int group_begin = d_k_to_mu_offsets(scaling_group);
+	          const int local = mu - d_grouped_mu(group_begin);
+	          val = grouped.value(local);
+	          der = grouped.derivative(local);
 	        } else {
 	          eval_radial_basic_mu_group(itype, jtype, dist, mu_group, val, der);
 	        }
@@ -5575,11 +5902,23 @@ PairSUS2MTPKokkos<DeviceType>::operator()(
 	      }
 	    } else {
 	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+	        const int mu = d_basic_mu_values(mu_group);
 	        F_FLOAT val = 0.0;
 	        F_FLOAT der = 0.0;
 	        if (table_index >= 0) {
 	          eval_radial_packed_basic_mu_group(table_index, r_list, r_next, ddr, mu_group,
 	                                            val, der);
+	        } else if constexpr (GROUPED_K) {
+	          const int scaling_group = d_mu_to_K(mu);
+	          if (scaling_group != cached_scaling_group) {
+	            eval_radial_scaling_group(
+	                itype, jtype, dist, scaling_group, false, true, grouped);
+	            cached_scaling_group = scaling_group;
+	          }
+	          const int group_begin = d_k_to_mu_offsets(scaling_group);
+	          const int local = mu - d_grouped_mu(group_begin);
+	          val = grouped.value(local);
+	          der = grouped.derivative(local);
 	        } else {
 	          eval_radial_basic_mu_group(itype, jtype, dist, mu_group, val, der);
 	        }
@@ -5783,11 +6122,11 @@ KOKKOS_INLINE_FUNCTION void
 	}
 
 template <class DeviceType>
-template <int NEIGHFLAG, int EVFLAG>
+template <int NEIGHFLAG, int EVFLAG, bool GROUPED_K>
 KOKKOS_INLINE_FUNCTION void
 	PairSUS2MTPKokkos<DeviceType>::operator()(
-	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
-	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
+	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>>::member_type
 	        &team,
 	    EV_FLOAT &ev) const
 	{
@@ -5802,7 +6141,6 @@ KOKKOS_INLINE_FUNCTION void
 	  const F_FLOAT xi[3] = {x(i, 0), x(i, 1), x(i, 2)};
 	  const int itype = type[i] - 1;
 	  const int jnum = d_numneigh(i);
-
 	  shared_double_1d s_basic_coeffs(team.team_scratch(0), alpha_index_basic_count);
 	  if (is_sh_model) {
 	    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, alpha_index_basic_count),
@@ -5862,13 +6200,28 @@ KOKKOS_INLINE_FUNCTION void
 	      eval_real_sh_kk(r, static_cast<F_FLOAT>(1.0) / dist, sh_l_max,
 	                      sh_values, sh_ders);
 
+	    RadialScalingGroupValues grouped;
+	    int cached_scaling_group = -1;
+
 	    if (is_sh_model) {
 	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+		        const int mu = d_basic_mu_values(mu_group);
 		        F_FLOAT val = static_cast<F_FLOAT>(0.0);
 		        F_FLOAT der = static_cast<F_FLOAT>(0.0);
 		        if (table_index >= 0) {
 		          eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                  ddr, mu_group, val, der);
+		        } else if constexpr (GROUPED_K) {
+		          const int scaling_group = d_mu_to_K(mu);
+		          if (scaling_group != cached_scaling_group) {
+		            eval_radial_scaling_group(
+		                itype, jtype, dist, scaling_group, true, true, grouped);
+		            cached_scaling_group = scaling_group;
+		          }
+		          const int group_begin = d_k_to_mu_offsets(scaling_group);
+		          const int local = mu - d_grouped_mu(group_begin);
+		          val = grouped.value(local);
+		          der = grouped.derivative(local);
 		        } else {
 		          eval_gate_radial_basic_mu_group(
 		              itype, jtype, dist, mu_group, val, der);
@@ -5895,11 +6248,23 @@ KOKKOS_INLINE_FUNCTION void
 	      }
 	    } else {
 	      for (int mu_group = 0; mu_group < basic_mu_group_count; mu_group++) {
+		      const int mu = d_basic_mu_values(mu_group);
 		      F_FLOAT val = static_cast<F_FLOAT>(0.0);
 		      F_FLOAT der = static_cast<F_FLOAT>(0.0);
 		      if (table_index >= 0) {
 		        eval_gate_radial_packed_basic_mu_group(table_index, r_list, r_next,
 		                                                ddr, mu_group, val, der);
+		      } else if constexpr (GROUPED_K) {
+		      const int scaling_group = d_mu_to_K(mu);
+		      if (scaling_group != cached_scaling_group) {
+		        eval_radial_scaling_group(
+		            itype, jtype, dist, scaling_group, true, true, grouped);
+		        cached_scaling_group = scaling_group;
+		      }
+		      const int group_begin = d_k_to_mu_offsets(scaling_group);
+		      const int local = mu - d_grouped_mu(group_begin);
+		      val = grouped.value(local);
+		      der = grouped.derivative(local);
 		      } else {
 		        eval_gate_radial_basic_mu_group(
 		            itype, jtype, dist, mu_group, val, der);
@@ -6021,16 +6386,16 @@ KOKKOS_INLINE_FUNCTION void
 	}
 
 template <class DeviceType>
-template <int NEIGHFLAG, int EVFLAG>
+template <int NEIGHFLAG, int EVFLAG, bool GROUPED_K>
 KOKKOS_INLINE_FUNCTION void
 	PairSUS2MTPKokkos<DeviceType>::operator()(
-	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>,
-	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>>::member_type
+	    TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>,
+	    const typename Kokkos::TeamPolicy<DeviceType, TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>>::member_type
 	        &team) const
 	{
 	  EV_FLOAT ev;
-	  this->template operator()<NEIGHFLAG, EVFLAG>(
-	      TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG>(),
+	  this->template operator()<NEIGHFLAG, EVFLAG, GROUPED_K>(
+	      TagPairSUS2MTPComputeGateChainForceDirectTeam<NEIGHFLAG, EVFLAG, GROUPED_K>(),
 	      team, ev);
 	}
 
