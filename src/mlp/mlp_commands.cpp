@@ -50,6 +50,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 		"min-dist",
 			"radial-basis-size",
 			"radial-basis-type",
+			"scaling-map",
 			"zbl-elements",
 			"zbl-inner",
 			"zbl-outer",
@@ -660,6 +661,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --inline-sh-model=<string>: inline SUS2-SH model path. If the file exists,\n"
 			"                                continue training from it; otherwise create it\n"
 			"                                from the init-sh options.\n"
+					"    --scaling-map=K|LK: share scal/s by radial k only, or keep one scal/s block per (k,l). Default=LK\n"
 					"    --sh-factor-pruning=same-k|legacy|q-total: outer scalar graph. Default=q-total\n"
 					"    --two-layer-gate: initialize the first SUS2-SH mu gate.\n"
 					"    --two-layer-gate-body-order=<int>: gate1 scalar body-order cutoff. Default=--body-order\n"

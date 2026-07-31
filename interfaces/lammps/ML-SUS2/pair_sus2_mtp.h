@@ -99,6 +99,7 @@ class PairSUS2MTP : public Pair {
   std::string scaling_map = "LK";  // Scaling mode: "L", "K", or "LK"
   int *mu_to_K;          // Mapping from radial function to scaling dimension (fixed: int*)
   int *mu_to_sigma;      // Mapping from radial function to sigma index (fixed: int*)
+  std::vector<int> scaling_block_to_sigma;  // Radial-basis k for each scal/s block
   
   // SUS2-MLIP regression coefficients (managed by PairSUS2MTP, not by radial basis)
   // Unified array: [shift_coeffs][scal_coeffs][radial_basis_coeffs][optional env-gate coeffs]

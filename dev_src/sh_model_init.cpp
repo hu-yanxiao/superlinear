@@ -930,6 +930,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double min_dist = DoubleOpt(opts, "min-dist", 1.5);
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
+	const std::string scaling_map = StringOpt(opts, "scaling-map", "LK");
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
 	const SHFactorPruning factor_pruning =
 		ParseFactorPruning(opts, "sh-factor-pruning", SHFactorPruning::QTotal);
@@ -994,6 +995,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh requires --k-max > 0.");
 	if (body_order < 2 || body_order > 6)
 		ERROR("init-sh supports --body-order from 2 to 6.");
+	if (scaling_map != "K" && scaling_map != "LK")
+		ERROR("init-sh --scaling-map should be K or LK.");
 	if (outer_k_rank < 0 || outer_k_rank > kmax)
 		ERROR("--outer-k-rank must be in [1, --k-max] when enabled.");
 	if (two_layer_gate_k_rank < 0 || two_layer_gate_k_rank > kmax)
@@ -1135,7 +1138,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
-	ofs << "scaling_map = LK\n";
+	ofs << "scaling_map = " << scaling_map << "\n";
 	ofs << "species_count = " << species_count << "\n";
 	WriteZBLSection(ofs, zbl_options);
 	ofs << "potential_tag = SUS2-SH\n";
@@ -1153,6 +1156,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "\tmax_dist = " << max_dist << "\n";
 	ofs << "\tradial_basis_size = " << rb_size << "\n";
 	const int radial_func_count = kmax * (lmax + 1);
+	const int scaling_block_count =
+		(scaling_map == "K") ? kmax : radial_func_count;
 	ofs << "\tradial_funcs_count = " << radial_func_count << "\n";
 
 	const SHGraphBuilder& energy_graph =
@@ -1341,13 +1346,13 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			}
 			if (two_layer_gate_decoupled_scaling) {
 				const int gate_scaling_count =
-					2 * species_count * species_count * radial_func_count;
+					2 * species_count * species_count * scaling_block_count;
 				ofs << "two_layer_gate_scaling_mode = decoupled\n";
 				ofs << "two_layer_gate_scaling_coeff_count = "
 				    << gate_scaling_count << "\n";
 				ofs << "two_layer_gate_scaling_coeffs = {";
 				WriteDefaultScalingCoeffList(
-					ofs, species_count, radial_func_count, rbasis);
+					ofs, species_count, scaling_block_count, rbasis);
 				ofs << "}\n";
 			}
 			const int gate_additive_count = species_count * radial_func_count;

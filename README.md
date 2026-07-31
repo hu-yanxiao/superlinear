@@ -97,6 +97,7 @@ Main SH topology options:
 | `--species-count=<int>` | Number of atomic species in CFG type order. |
 | `--l-max=<int>` | Maximum SH angular index `l`; generator supports `0..6`, optimized runtimes are mainly validated for `l <= 4`. |
 | `--k-max=<int>` | Number of radial channels per `l`; `k` is indexed from `0` to `k_max-1`. |
+| `--scaling-map=K\|LK` | Select the `scal/s` map. `K` shares one pairwise block across all `l` at fixed `k`; `LK` keeps one block per `(k,l)`. Default=`LK`. |
 | `--body-order=<int>` | Maximum scalar body order, supported range `2..6`. |
 | `--body-l-max=<list>` | Body-specific angular cutoffs. Use four values for body orders `2..5`, or five values for `2..6`; example `3,3,2,2`. |
 | `--cutoff=<double>` / `--max-dist=<double>` | Main SH radial cutoff. `--cutoff` is the preferred spelling. |
@@ -107,6 +108,19 @@ Main SH topology options:
 | `--write-sh-scalar-info` | Explicitly save scalar metadata; this is written automatically for gate models. |
 | `--potential-name=<string>` | Name written into the `.mtp` file. |
 | `--scaling=<double>` | Initial global scaling written to the model, default `0.01`. |
+
+`scaling_map=K` changes only the pair-dependent radial-coordinate parameters:
+
+\[
+\mu=k(l_{\max}+1)+l,\qquad
+b_K(\mu)=k,\qquad b_{LK}(\mu)=\mu.
+\]
+
+Thus `scal[pair,b(mu)]` and `s[pair,b(mu)]` are shared across `l` only in
+`K` mode. The radial contraction coefficients \(c_{\mu,\xi}\), SH moments,
+product graph, gate channels, and optional outer/gate K-rank contractions all
+retain the complete \(\mu=(k,l)\) layout. Omitting `--scaling-map` preserves
+the release3 `LK` model and runtime path.
 
 Common training options:
 

@@ -3848,7 +3848,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
     }
   } else {
     for (int k_ = 0; k_ < K_scaling; k_++) {
-      const int sigma = mu_to_sigma[k_];
+      const int sigma = scaling_block_to_sigma[k_];
       const double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
       const double shift = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
       radial_basis->calc_radial_basis_ders(dist, scal, shift, sigma);
@@ -7218,7 +7218,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         }
       } else {
         for (int k_ = 0; k_ < K_; k_++) {
-          int sigma = mu_to_sigma[k_];
+          const int sigma = scaling_block_to_sigma[k_];
 
           // Read s1 and s2 from unified regression_coeffs array
           // SUS2-MLIP formula: regression_coeffs[C + 2*k_*C*C + C*type_central + type_outer]
@@ -7973,8 +7973,8 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "Invalid SUS2-SH sh_k_max: {}.", sh_k_max);
       if (L_max != sh_l_max + 1)
         error->one(FLERR, "SUS2-SH L header is inconsistent with sh_l_max.");
-      if (scaling_map != "LK")
-        error->one(FLERR, "SUS2-SH requires scaling_map = LK.");
+      if (scaling_map != "K" && scaling_map != "LK")
+        error->one(FLERR, "SUS2-SH scaling_map should be K or LK.");
 
       do {
         line_tokens = ValueTokenizer(tfr.next_line(), separators);
@@ -8055,6 +8055,10 @@ access to the buffer size that is not provided in PFR.
     if (keyword != "radial_funcs_count")
       lmp->error->one(FLERR, "Error in reading MTP file. Cannot read radial function count.");
     radial_func_count = line_tokens.next_int();    // Assuming count is an int
+    if (scaling_map == "K" &&
+        (L_max <= 0 || radial_func_count % L_max != 0))
+      error->one(FLERR,
+                 "scaling_map requires radial_funcs_count to be divisible by the number of L channels.");
     if (is_sh_model) {
       const int expected_radial_count = sh_k_max * (sh_l_max + 1);
       if (radial_func_count != expected_radial_count)
@@ -9923,6 +9927,10 @@ access to the buffer size that is not provided in PFR.
   // SUS2-MLIP mapping arrays
   MPI_Bcast(mu_to_K, radial_func_count, MPI_INT, 0, world);
   MPI_Bcast(mu_to_sigma, radial_func_count, MPI_INT, 0, world);
+  scaling_block_to_sigma.resize(K_scaling);
+  for (int block = 0; block < K_scaling; ++block)
+    scaling_block_to_sigma[block] =
+        (scaling_map == "K") ? block : mu_to_sigma[block];
 
   prepare_two_layer_gate_additive_ratios();
 

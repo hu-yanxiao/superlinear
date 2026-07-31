@@ -697,6 +697,15 @@ Model initialization:
   --radial-basis-type=RBChebyshev_sss
 ```
 
+Release3 accepts `--scaling-map=K|LK` in both `init-sh` and inline
+`train ... --init-sh` construction. The default remains `LK`. With internal
+\(\mu=k(l_{\max}+1)+l\), `K` maps only the pairwise `scal` and `s` parameters
+to \(k\); it does not merge the full-\(\mu\) radial coefficient rows,
+spherical-harmonic channels, product graph, gate features, or K-rank graph.
+Consequently an already trained `LK` model cannot be silently converted to
+`K`: such a conversion is exact only when all `l` blocks at each fixed `k`
+already have identical `scal/s` values.
+
 As of the inline-init update, `init-sh` writes only the SH topology and radial
 metadata. It intentionally omits `species_coeffs` and `moment_coeffs`, so
 `MLMTPR::Load()` treats the model as uninitialized and the ordinary training

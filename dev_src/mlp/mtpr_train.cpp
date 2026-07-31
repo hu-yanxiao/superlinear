@@ -488,6 +488,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"min-dist",
 		"radial-basis-size",
 		"radial-basis-type",
+		"scaling-map",
 			"zbl-elements",
 			"zbl-inner",
 			"zbl-outer",
@@ -2093,6 +2094,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	const auto requested_scaling_map_it = opts.find("scaling-map");
+	if (requested_scaling_map_it != opts.end()
+	    && !requested_scaling_map_it->second.empty()) {
+		if (!mtpr.IsSHPotential())
+			ERROR("--scaling-map is only supported for SUS2-SH models");
+		if (requested_scaling_map_it->second != mtpr.ScalingMap())
+			ERROR("--scaling-map must match the loaded model; changing K/LK topology requires a new init-sh model");
+	}
 	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
 	const bool requested_two_layer_gate_readout =
 		opts["two-layer-gate-readout"] != "";

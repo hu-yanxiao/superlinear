@@ -3808,6 +3808,8 @@ void MLMTPR::Load(const string& filename)
 	}
 	if (scaling_map=="K")
 	{
+		if (L <= 0 || radial_func_count % L != 0)
+			ERROR("scaling_map = K requires radial_funcs_count to be divisible by the number of L channels");
 		K_ = radial_func_count / L;
 	
 	for (int n = 0; n < radial_func_count;n++)
@@ -3840,8 +3842,8 @@ void MLMTPR::Load(const string& filename)
 
 	if (is_sh_potential_)
 	{
-		if (scaling_map != "LK")
-			ERROR("SUS2-SH requires scaling_map = LK");
+		if (scaling_map != "K" && scaling_map != "LK")
+			ERROR("SUS2-SH scaling_map should be K or LK");
 		if (sh_l_max_ < 0 || sh_l_max_ > 4)
 			ERROR("SUS2-SH runtime currently supports sh_l_max in [0,4]");
 		if (sh_k_max_ <= 0)
@@ -4938,9 +4940,7 @@ void MLMTPR::Load(const string& filename)
 						for (int mu = 0; mu < radial_func_count; mu++)
 						{
 							k_ = mu_to_K[mu];
-							const int basis_k = UsesJacobiIndexedBasis()
-								? JacobiIndexedBlockForMu(mu)
-								: mu_to_sigma[k_];
+							const int basis_k = RadialBasisKForMu(mu);
 
 								p_RadialBasis->RB_Calc(dr * n,
 									regression_coeffs[C + 2 * k_ * C * C + C * i + j],
@@ -9654,6 +9654,19 @@ int MLMTPR::JacobiIndexedBlockForMu(int mu) const
 	return jacobi_block;
 }
 
+int MLMTPR::RadialBasisKForMu(int mu) const
+{
+	if (mu < 0 || mu >= radial_func_count)
+		ERROR("Radial-basis mu index is out of range");
+	if (UsesJacobiIndexedBasis())
+		return JacobiIndexedBlockForMu(mu);
+	if (mu >= static_cast<int>(mu_to_sigma.size()))
+		ERROR("Radial-basis mu-to-k mapping is incomplete");
+	// scaling_map selects the shared scal/s parameter block only.  The radial
+	// basis channel still belongs to the full mu=(k,l) channel.
+	return mu_to_sigma[mu];
+}
+
 void MLMTPR::MemAlloc()
 {
 	ResizeLinearComponentStorage();
@@ -9698,9 +9711,7 @@ void MLMTPR::MemAlloc()
 	std::map<std::pair<int, int>, int> radial_eval_lookup;
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const int scaling_block = mu_to_K[mu];
-		const int basis_k = UsesJacobiIndexedBasis()
-			? JacobiIndexedBlockForMu(mu)
-			: mu_to_sigma[scaling_block];
+		const int basis_k = RadialBasisKForMu(mu);
 		const std::pair<int, int> eval_key(scaling_block, basis_k);
 		auto insert_result = radial_eval_lookup.emplace(eval_key, static_cast<int>(radial_eval_lookup.size()));
 		const int eval_block = insert_result.first->second;
@@ -11299,9 +11310,7 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 				               / static_cast<double>(grid_size);
 				for (int mu = 0; mu < radial_func_count; ++mu) {
 					const int scaling_block = mu_to_K[mu];
-					const int basis_k = UsesJacobiIndexedBasis()
-						? JacobiIndexedBlockForMu(mu)
-						: mu_to_sigma[scaling_block];
+					const int basis_k = RadialBasisKForMu(mu);
 					const int slope_offset = ScalingSlopeOffset(scaling_block, type_central, type_outer);
 					const int shift_offset = ScalingShiftOffset(scaling_block, type_central, type_outer);
 					const int radial_offset = radial_begin + mu * block_size;

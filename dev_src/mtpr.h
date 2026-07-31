@@ -457,6 +457,7 @@ protected:
 	void PrepareEvalCaches() override;
 	bool UsesJacobiIndexedBasis() const;
 	int JacobiIndexedBlockForMu(int mu) const;
+	int RadialBasisKForMu(int mu) const;
 	void CalcEnergyAndSiteEnergiesImpl(
 		Configuration& cfg,
 		const Neighborhoods& neighborhoods,
@@ -832,6 +833,7 @@ public:
 						void SetTwoLayerGateTanhAmplitude(double amplitude);
 						void SetTwoLayerGateSiteMode(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
+					const std::string& ScalingMap() const { return scaling_map; }
 						bool OuterKRank1Enabled() const { return outer_k_rank1_enabled_; }
 						bool OuterKRankEnabled() const { return outer_k_rank_ > 0; }
 						int OuterKRank() const { return outer_k_rank_; }
