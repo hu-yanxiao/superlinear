@@ -3,6 +3,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
 tmp_dir=".codex_tmp/sh_release3_radial_weight_norm"
 mkdir -p "$tmp_dir"
 
@@ -147,7 +155,7 @@ PY
 # A complete checkpoint must never be silently rewritten merely because the
 # caller selected physical optimizer coordinates.  The old conversion remains
 # available only through an explicit compatibility opt-in.
-signed_resume_sha_before="$(shasum -a 256 "$signed_resume_model" | awk '{print $1}')"
+signed_resume_sha_before="$(sha256_file "$signed_resume_model")"
 if ./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
   --radial-parameterization=physical \
   --trained-pot-name="$signed_resume_refusal_model" \
@@ -160,7 +168,7 @@ if ./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
   echo "physical resume unexpectedly modified a complete checkpoint without opt-in" >&2
   exit 1
 fi
-signed_resume_sha_after="$(shasum -a 256 "$signed_resume_model" | awk '{print $1}')"
+signed_resume_sha_after="$(sha256_file "$signed_resume_model")"
 if [[ "$signed_resume_sha_before" != "$signed_resume_sha_after" ]]; then
   echo "failed physical resume modified its input checkpoint" >&2
   exit 1
