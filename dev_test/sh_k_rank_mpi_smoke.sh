@@ -166,4 +166,53 @@ print(f"k_rank_mpi_training_parity mode={mode} " + " ".join(parts))
 PY
 done
 
-echo "K-rank MPI training parity passed for rank0, direct rank1, rank2, equal rank, both mixed-rank orders, and default body gate"
+# The production failure that motivated this regression occurred only after a
+# weight-normalized optimizer step, when the periodic linear refresh compared
+# root's canonical physical model with independently unpacked non-root values.
+# Exercise that exact topology boundary: scaling_map=K, outer rank 2, gate rank
+# 4, and at least one non-initial TrainLinear refresh.
+periodic_init="$tmp_dir/scalingK-outer2-gate4-init.mtp"
+periodic_model="$tmp_dir/scalingK-outer2-gate4-materialized.mtp"
+periodic_trained="$tmp_dir/scalingK-outer2-gate4-trained.mtp"
+periodic_trace="$tmp_dir/scalingK-outer2-gate4.csv"
+periodic_log="$tmp_dir/scalingK-outer2-gate4.log"
+periodic_common=()
+for option in "${common[@]}"; do
+  if [[ $option != --k-max=* ]]; then
+    periodic_common+=("$option")
+  fi
+done
+"$bin" init-sh "$periodic_init" "${periodic_common[@]}" --k-max=4 \
+  --scaling-map=K --outer-k-rank=2 --two-layer-gate-k-rank=4 >/dev/null
+"$bin" roundtrip-model-dev "$periodic_init" "$periodic_model" >/dev/null
+env SUS2_SH_TEST_NONROOT_RADIAL_ULP_BEFORE_TRAINLINEAR=1 \
+  timeout 300 mpirun -n 2 "$bin" train "$periodic_model" "$cfg" \
+  --max-iter=2 \
+  --skip-preinit \
+  --do-samp \
+  --init-params=same \
+  --energy-weight=1 \
+  --force-weight=0.01 \
+  --stress-weight=0.001 \
+  --radial-smooth=0 \
+  --scalar-weight-l2-preset=recommended \
+  --radial-parameterization=weight-norm \
+  --do-lin \
+  --do-lin-steps=2 \
+  --do-lin-freq=1 \
+  --optimizer-trace-file="$periodic_trace" \
+  --trained-pot-name="$periodic_trained" >"$periodic_log" 2>&1
+test -s "$periodic_trained"
+test -s "$periodic_trace"
+[[ $(grep -c "TrainLinear solve done" "$periodic_log") -ge 2 ]]
+grep -Fq "TrainLinear[bfgs refresh step 1]" "$periodic_log"
+grep -Fq "[test] injected non-root radial one-ULP drift ranks=1" "$periodic_log"
+grep -Fq "optimizer execution mode=distributed-dense-bfgs optimizer_collective=true" \
+  "$periodic_log"
+if grep -Eq "changed a weight-normalized physical radial coefficient|non-finite|ERROR" \
+  "$periodic_log"; then
+  echo "periodic MPI weight-normalized TrainLinear refresh failed" >&2
+  exit 1
+fi
+
+echo "K-rank MPI training parity and periodic scaling-K outer2/gate4 weight-norm linear refresh passed"

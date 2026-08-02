@@ -1176,6 +1176,49 @@ void MTPR_trainer::TrainLinear(int prank,
 		return;
 	const int mpi_rank = train_rank_;
 	const MPI_Comm train_comm = train_comm_;
+#ifdef MLIP_DEV
+	int inject_nonroot_radial_ulp = 0;
+	if (mpi_rank == 0)
+		inject_nonroot_radial_ulp =
+			EnvFlagEnabled(
+				"SUS2_SH_TEST_NONROOT_RADIAL_ULP_BEFORE_TRAINLINEAR")
+			? 1 : 0;
+	MPI_Bcast(&inject_nonroot_radial_ulp, 1, MPI_INT, 0, train_comm);
+	if (inject_nonroot_radial_ulp != 0
+	    && radial_parameterization == "weight-norm"
+	    && context == "bfgs refresh step 1") {
+		int injected = 0;
+		if (mpi_rank != 0) {
+			const int coeff_index = p_mlmtpr->RadialCoeffOffset();
+			p_mlmtpr->Coeff()[coeff_index] = std::nextafter(
+				p_mlmtpr->Coeff()[coeff_index],
+				std::numeric_limits<double>::infinity());
+			injected = 1;
+		}
+		int injected_total = 0;
+		MPI_Allreduce(
+			&injected, &injected_total, 1, MPI_INT, MPI_SUM, train_comm);
+		if (mpi_rank == 0)
+			std::cout << "[test] injected non-root radial one-ULP drift"
+			          << " ranks=" << injected_total << std::endl;
+	}
+#endif
+	// TrainLinear is a fixed-feature solve.  All ranks must therefore build
+	// their local normal equations from one bitwise-identical physical model.
+	// This matters for weight-normalized radial rows: independently unpacking
+	// the same optimizer coordinates can differ in the last bit on heterogeneous
+	// CPUs because the chart uses transcendental functions.
+	MPI_Bcast(
+		&p_mlmtpr->Coeff()[0],
+		p_mlmtpr->CoeffCount(),
+		MPI_DOUBLE,
+		0,
+		train_comm);
+	RequireFiniteArray(
+		p_mlmtpr->Coeff(),
+		p_mlmtpr->CoeffCount(),
+		(context.empty() ? "TrainLinear" : "TrainLinear[" + context + "]")
+			+ " canonical coefficients");
 #else
 	const int mpi_rank = prank;
 #endif
@@ -1212,8 +1255,20 @@ void MTPR_trainer::TrainLinear(int prank,
 			preserved_radial_values.push_back(p_mlmtpr->Coeff()[coeff_index]);
 	}
 
-	if (!readout_residual_only && radial_parameterization != "weight-norm")
+	if (!readout_residual_only && radial_parameterization != "weight-norm") {
+#ifdef MLIP_MPI
+		if (mpi_rank == 0)
+			p_mlmtpr->Orthogonalize();
+		MPI_Bcast(
+			&p_mlmtpr->Coeff()[0],
+			p_mlmtpr->CoeffCount(),
+			MPI_DOUBLE,
+			0,
+			train_comm);
+#else
 		p_mlmtpr->Orthogonalize();
+#endif
+	}
 
 	ClearSLAE(readout_residual_only);
 	int n = LinearSolveColumnCount();		// Active matrix size
@@ -1420,6 +1475,26 @@ void MTPR_trainer::TrainLinear(int prank,
 			          p_mlmtpr->regression_coeffs.begin());
 			p_mlmtpr->LinCoeff();
 		}
+		if (linear_status == 0) {
+			for (std::size_t i = 0; i < preserved_radial_indices.size(); ++i) {
+				const int coeff_index = preserved_radial_indices[i];
+				if (std::memcmp(
+				        &p_mlmtpr->Coeff()[coeff_index],
+				        &preserved_radial_values[i],
+				        sizeof(double)) == 0)
+					continue;
+				std::ostringstream message;
+				message << prefix
+				        << " changed a weight-normalized physical radial coefficient"
+				        << " index=" << coeff_index
+				        << " before=" << std::setprecision(17)
+				        << preserved_radial_values[i]
+				        << " after=" << p_mlmtpr->Coeff()[coeff_index];
+				linear_status = 1;
+				linear_error = message.str();
+				break;
+			}
+		}
 		const double solve_seconds = MPI_Wtime() - solve_start;
 		if (linear_status == 0) {
 			std::cout << "[" << CurrentTimestamp() << "] TrainLinear solve done"
@@ -1473,11 +1548,19 @@ void MTPR_trainer::TrainLinear(int prank,
 		          << std::endl;
 	}
 #endif
+
+#ifndef MLIP_MPI
 	for (std::size_t i = 0; i < preserved_radial_indices.size(); ++i) {
-		if (p_mlmtpr->Coeff()[preserved_radial_indices[i]]
-		    != preserved_radial_values[i])
-			ERROR(prefix + " changed a weight-normalized physical radial coefficient.");
+		const int coeff_index = preserved_radial_indices[i];
+		if (std::memcmp(
+		        &p_mlmtpr->Coeff()[coeff_index],
+		        &preserved_radial_values[i],
+		        sizeof(double)) != 0)
+			ERROR(prefix
+			      + " changed a weight-normalized physical radial coefficient at index "
+			      + std::to_string(coeff_index));
 	}
+#endif
 	if (readout_residual_only) {
 		const int readout_begin = p_mlmtpr->TwoLayerGateReadoutCoeffOffset();
 		const int readout_end =
@@ -2164,7 +2247,42 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		pack_active_coeffs();
 		optimizer_set_x(active_coeffs.data(), opt_n);
 	};
-	auto copy_optimizer_x_to_full_coeffs = [&]() {
+	auto set_optimizer_x_from_full_coeffs_collective = [&]() {
+#ifdef MLIP_MPI
+		if (optimizer_replicated) {
+			int pack_status = 0;
+			if (prank == 0) {
+				try {
+					pack_active_coeffs();
+				}
+				catch (const MlipException& exc) {
+					pack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root optimizer-coordinate pack failed: "
+					          << exc.What() << std::endl;
+				}
+				catch (const std::exception& exc) {
+					pack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root optimizer-coordinate pack failed: "
+					          << exc.what() << std::endl;
+				}
+				catch (...) {
+					pack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root optimizer-coordinate pack failed"
+					          << std::endl;
+				}
+			}
+			MPI_Bcast(&pack_status, 1, MPI_INT, 0, train_comm);
+			if (pack_status != 0)
+				ERROR("MTPR_trainer::Train(): canonical optimizer-coordinate pack failed on root.");
+			MPI_Bcast(
+				active_coeffs.data(), opt_n, MPI_DOUBLE, 0, train_comm);
+			optimizer_set_x(active_coeffs.data(), opt_n);
+			return;
+		}
+#endif
+		set_optimizer_x_from_full_coeffs();
+	};
+	auto copy_optimizer_x_to_full_coeffs_local = [&]() {
 		const double* opt_x = optimizer_data();
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
 			const int full_idx = active_coeff_indices[active_idx];
@@ -2181,9 +2299,44 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				ERROR("MTPR_trainer::Train(): invalid radial weight-normalization trial coordinates.");
 		}
 	};
+	auto copy_optimizer_x_to_full_coeffs = [&]() {
+#ifdef MLIP_MPI
+		if (optimizer_replicated) {
+			int unpack_status = 0;
+			if (prank == 0) {
+				try {
+					copy_optimizer_x_to_full_coeffs_local();
+				}
+				catch (const MlipException& exc) {
+					unpack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root physical-model unpack failed: "
+					          << exc.What() << std::endl;
+				}
+				catch (const std::exception& exc) {
+					unpack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root physical-model unpack failed: "
+					          << exc.what() << std::endl;
+				}
+				catch (...) {
+					unpack_status = 1;
+					std::cerr << "MTPR_trainer::Train(): root physical-model unpack failed"
+					          << std::endl;
+				}
+			}
+			MPI_Bcast(&unpack_status, 1, MPI_INT, 0, train_comm);
+			if (unpack_status != 0)
+				ERROR("MTPR_trainer::Train(): canonical physical-model unpack failed on root.");
+			// Every local objective and gradient pullback must use root's exact
+			// physical image of the shared optimizer coordinates.
+			MPI_Bcast(x, n, MPI_DOUBLE, 0, train_comm);
+			return;
+		}
+#endif
+		copy_optimizer_x_to_full_coeffs_local();
+	};
 	auto verify_optimizer_coordinate_roundtrip = [&]() {
 		const std::vector<double> physical_reference(x, x + n);
-		set_optimizer_x_from_full_coeffs();
+		set_optimizer_x_from_full_coeffs_collective();
 		copy_optimizer_x_to_full_coeffs();
 		double max_abs_error = 0.0;
 		for (int full_idx = 0; full_idx < n; ++full_idx) {
@@ -2198,7 +2351,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				      + std::to_string(full_idx));
 		}
 		std::copy(physical_reference.begin(), physical_reference.end(), x);
-		set_optimizer_x_from_full_coeffs();
+		set_optimizer_x_from_full_coeffs_collective();
 		if (prank == 0) {
 			std::cout << "[" << CurrentTimestamp() << "] "
 			          << "optimizer coordinate physical roundtrip verified"
@@ -2672,7 +2825,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		initialize_bfgs_coordinate_normalization();
 		verify_optimizer_coordinate_roundtrip();
 	} else {
-		set_optimizer_x_from_full_coeffs();
+		set_optimizer_x_from_full_coeffs_collective();
 	}
 	Array1D inv_hess_diag(opt_n, 1.0);
 	auto refresh_inv_hess_diag = [&]() {
@@ -2700,6 +2853,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			optimizer_restart();
 			optimizer_iter_step() = 0;
 			set_optimizer_x_from_full_coeffs();
+			optimizer_set_inv_hess_diag(inv_hess_diag);
+		};
+		auto reset_optimizer_state_collective = [&]() {
+			optimizer_restart();
+			optimizer_iter_step() = 0;
+			set_optimizer_x_from_full_coeffs_collective();
 			optimizer_set_inv_hess_diag(inv_hess_diag);
 		};
 	bool freeze_species_coeffs = do_lin && do_lin_step_limit > 0;
@@ -2745,10 +2904,6 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	auto restore_last_accepted_coeffs = [&]() {
 		accepted_state.Restore(x);
-		if (optimizer_replicated || prank == 0) {
-			set_optimizer_x_from_full_coeffs();
-			mask_frozen_coordinates(freeze_species_coeffs);
-		}
 	};
 	auto rechart_accepted_radial_rows = [&](int step) {
 		if (radial_weight_norm_rows.empty())
@@ -2857,7 +3012,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			radial_weight_norm_rows[row_idx].pivot_sign =
 				next_pivot_signs[row_idx];
 		}
-		reset_optimizer_state();
+		reset_optimizer_state_collective();
 		mask_frozen_coordinates(freeze_species_coeffs);
 
 		if (prank == 0) {
@@ -2909,10 +3064,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	auto is_linesearch_stagnation_failure = [](const std::string& reason) {
 		return reason.find("Linesearch stagnated") != std::string::npos;
 	};
-		auto recover_optimizer_state_from_current_coeffs = [&](const std::string& reason, int step) {
+	auto recover_optimizer_state_from_current_coeffs = [&](const std::string& reason, int step) {
 			reset_optimizer_state();
-		mask_frozen_coordinates(freeze_species_coeffs);
-		if (prank == 0) {
+			mask_frozen_coordinates(freeze_species_coeffs);
+			if (prank == 0) {
 			std::cerr << "[" << CurrentTimestamp() << "] "
 			          << optimizer_log_name << " state reset"
 			          << " step=" << step
@@ -3130,6 +3285,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 			bool external_x_modified = false;
 			bool external_x_needs_broadcast = false;
+			bool linear_refresh_applied = false;
 			const bool random_perturb_applied = (max_shift != 0.0);
 			if (prank == 0) {
 				for (int i = 0; i < n - nlin; i++) {
@@ -3168,6 +3324,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				&& !(initial_train_linear_completed && num_step == 0);
 			if (run_train_linear) {
 				run_linear_refresh(num_step);
+				linear_refresh_applied = true;
 				external_x_modified = true;
 				external_x_needs_broadcast = false; // TrainLinear already broadcasts coeffs.
 			}
@@ -3192,26 +3349,31 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					          << " convergence window reset after radial rechart"
 					          << " step=" << num_step << std::endl;
 			} else if (freeze_species_state_changed) {
-				reset_optimizer_state();
+				reset_optimizer_state_collective();
+			} else if (linear_refresh_applied) {
+				// An exact linear refresh changes the optimizer base point without
+				// supplying a secant pair. Curvature accumulated at the old base is
+				// no longer valid.
+				reset_optimizer_state_collective();
 			} else if (external_x_modified) {
-				set_optimizer_x_from_full_coeffs();
+				// Preserve the historical random-perturbation policy: rebase the
+				// transient line-search state but retain the inverse-Hessian estimate.
+				set_optimizer_x_from_full_coeffs_collective();
 			}
 			const bool boundary_rebased_optimizer =
 				radial_recharted || freeze_species_state_changed
 				|| external_x_modified;
 			if (external_x_modified)
 				accepted_loss_reference_valid = false;
-			if (boundary_had_pending_trial && !boundary_rebased_optimizer) {
-				// No accepted-point operation changed the optimizer state.  Put the
-				// already generated next trial back into the live physical model for
-				// the objective evaluation below.
-				copy_optimizer_x_to_full_coeffs();
-			} else {
+			if (!(boundary_had_pending_trial && !boundary_rebased_optimizer)) {
 				// Initial state, or an intentional boundary reset/refresh.  This is
 				// now the base to which a rejected line search must return.
 				save_last_accepted_coeffs();
 				evaluated_boundary_base_this_iteration = true;
 			}
+			// Otherwise no accepted-point operation changed the optimizer state.
+			// The common objective-materialization path immediately below restores
+			// the pending trial, avoiding a duplicate physical-model MPI broadcast.
 			mask_frozen_coordinates(freeze_species_coeffs);
 		}
 
@@ -3475,7 +3637,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 						MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
 					}
 	#endif
-						reset_optimizer_state();
+						reset_optimizer_state_collective();
 					accepted_state.DiscardPendingTrial();
 					mask_frozen_coordinates(freeze_species_coeffs);
 					if (total_linesearch_restarts
@@ -3621,7 +3783,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					}
 						RequireFiniteArray(optimizer_data(), opt_n, "optimizer proposed coefficients");
 					};
-					auto try_recover_optimizer_from_ascent_direction = [&](const std::string& first_reason) {
+				auto try_recover_optimizer_from_ascent_direction_local =
+					[&](const std::string& first_reason) {
 					if (!is_ascent_direction_failure(first_reason) || !optimizer_state_is_finite())
 						return false;
 					try {
@@ -3669,48 +3832,172 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 						          << " reason=unknown exception" << std::endl;
 					return false;
 					}
+					};
+#ifdef MLIP_MPI
+				int ascent_recovery_requested = 0;
+#endif
+				auto handle_optimizer_failure = [&](const std::string& reason) {
+					if (is_linesearch_stagnation_failure(reason)
+					    && optimizer_state_is_finite()) {
+						rejected_linesearch_from_exception = 1;
+						rejected_linesearch_exception_message =
+							optimizer_log_name
+							+ " converged due to linesearch stagnation";
+						rejected_linesearch_exception_detail = "reason=" + reason;
+						return;
+					}
+					if (is_ascent_direction_failure(reason)
+					    && optimizer_state_is_finite()) {
+#ifdef MLIP_MPI
+						if (optimizer_replicated) {
+							ascent_recovery_requested = 1;
+							return;
+						}
+#endif
+						if (try_recover_optimizer_from_ascent_direction_local(reason))
+							return;
+					}
+					bfgs_status = 1;
 				};
 					try {
 						run_optimizer_iterate();
-				}
+					}
 				catch (const MlipException& exc) {
 					const std::string reason = exc.What();
-				if (prank == 0)
+					if (prank == 0)
 						std::cerr << "[" << CurrentTimestamp() << "] " << optimizer_log_name << " failed"
 					          << " step=" << num_step
 					          << " reason=" << reason << std::endl;
-						if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
-							rejected_linesearch_from_exception = 1;
-							rejected_linesearch_exception_message =
-									optimizer_log_name + " converged due to linesearch stagnation";
-							rejected_linesearch_exception_detail = "reason=" + reason;
-							} else if (!try_recover_optimizer_from_ascent_direction(reason)) {
-						bfgs_status = 1;
-					}
-			}
-			catch (const std::exception& exc) {
-				const std::string reason = exc.what();
-				if (prank == 0)
+					handle_optimizer_failure(reason);
+				}
+				catch (const std::exception& exc) {
+					const std::string reason = exc.what();
+					if (prank == 0)
 						std::cerr << "[" << CurrentTimestamp() << "] " << optimizer_log_name << " failed"
 					          << " step=" << num_step
 					          << " reason=" << reason << std::endl;
-						if (is_linesearch_stagnation_failure(reason) && optimizer_state_is_finite()) {
-							rejected_linesearch_from_exception = 1;
-							rejected_linesearch_exception_message =
-									optimizer_log_name + " converged due to linesearch stagnation";
-							rejected_linesearch_exception_detail = "reason=" + reason;
-						} else if (!try_recover_optimizer_from_ascent_direction(reason)) {
-						bfgs_status = 1;
-					}
-			}
-			catch (...) {
-				if (prank == 0)
+					handle_optimizer_failure(reason);
+				}
+				catch (...) {
+					if (prank == 0)
 						std::cerr << "[" << CurrentTimestamp() << "] " << optimizer_log_name << " failed"
 					          << " step=" << num_step
 					          << " reason=unknown exception" << std::endl;
-					if (!try_recover_optimizer_from_ascent_direction("unknown exception"))
+					handle_optimizer_failure("unknown exception");
+				}
+	#ifdef MLIP_MPI
+			if (optimizer_replicated) {
+				int local_outcomes[3] = {
+					bfgs_status != 0 ? 1 : 0,
+					rejected_linesearch_from_exception != 0 ? 1 : 0,
+					ascent_recovery_requested != 0 ? 1 : 0
+				};
+				int global_outcomes[3] = {0, 0, 0};
+				MPI_Allreduce(
+					local_outcomes,
+					global_outcomes,
+					3,
+					MPI_INT,
+					MPI_MAX,
+					train_comm);
+				const int outcome_kinds = global_outcomes[0]
+					+ global_outcomes[1] + global_outcomes[2];
+				if (outcome_kinds > 1) {
 					bfgs_status = 1;
+					rejected_linesearch_from_exception = 0;
+					ascent_recovery_requested = 0;
+					if (prank == 0)
+						std::cerr << "[" << CurrentTimestamp() << "] "
+						          << optimizer_log_name
+						          << " inconsistent replicated optimizer outcomes"
+						          << " step=" << num_step
+						          << " fatal=" << global_outcomes[0]
+						          << " stagnation=" << global_outcomes[1]
+						          << " ascent=" << global_outcomes[2]
+						          << std::endl;
+				} else if (global_outcomes[0] != 0) {
+					bfgs_status = 1;
+				} else if (global_outcomes[1] != 0) {
+					rejected_linesearch_from_exception = 1;
+					if (prank == 0
+					    && rejected_linesearch_exception_message.empty()) {
+						rejected_linesearch_exception_message =
+							optimizer_log_name
+							+ " converged due to linesearch stagnation";
+						rejected_linesearch_exception_detail =
+							"reason=reported by a non-root replicated optimizer";
+					}
+				} else if (global_outcomes[2] != 0) {
+					// Do not retry inside a rank-local catch: distributed dense BFGS
+					// uses MPI collectives.  First agree on recovery, then reset and
+					// retry exactly once on every active rank from root's canonical
+					// physical model and optimizer coordinates.
+					reset_optimizer_state_collective();
+					mask_frozen_coordinates(freeze_species_coeffs);
+					int retry_status = 0;
+					std::string retry_reason;
+					try {
+						run_optimizer_iterate();
+					}
+					catch (const MlipException& retry_exc) {
+						retry_status = 1;
+						retry_reason = retry_exc.What();
+					}
+					catch (const std::exception& retry_exc) {
+						retry_status = 1;
+						retry_reason = retry_exc.what();
+					}
+					catch (...) {
+						retry_status = 1;
+						retry_reason = "unknown exception";
+					}
+					int retry_status_global = 0;
+					MPI_Allreduce(
+						&retry_status,
+						&retry_status_global,
+						1,
+						MPI_INT,
+						MPI_MAX,
+						train_comm);
+					if (retry_status_global != 0) {
+						bfgs_status = 1;
+						if (prank == 0)
+							std::cerr << "[" << CurrentTimestamp() << "] "
+							          << optimizer_log_name
+							          << " collective recovery failed"
+							          << " step=" << num_step
+							          << " reason="
+							          << (retry_reason.empty()
+							                  ? "reported by a non-root optimizer"
+							                  : retry_reason)
+							          << std::endl;
+					} else {
+						int recovered_accepted = 0;
+						if (prank == 0) {
+							recovered_accepted =
+								sus2::AscentRecoveryPointWasAccepted(
+									optimizer_had_active_trial_before_iterate,
+									use_armijo_value_line_search,
+									armijo_value_trial_accepted)
+									? 1 : 0;
+							std::cerr << "[" << CurrentTimestamp() << "] "
+							          << optimizer_log_name
+							          << " recovered after collective state reset"
+							          << " step=" << num_step
+							          << std::endl;
+						}
+						MPI_Bcast(
+							&recovered_accepted,
+							1,
+							MPI_INT,
+							0,
+							train_comm);
+						recovered_accepted_point_from_ascent =
+							recovered_accepted;
+					}
+				}
 			}
+	#endif
 		}
 	#ifdef MLIP_MPI
 			{
@@ -4053,34 +4340,26 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		}
 
 	#ifdef MLIP_MPI
-				int iteration_state[4] = {
+				int iteration_state[5] = {
 					converge ? 1 : 0,
 					linesearch ? 1 : 0,
 					num_step,
-					restored_rejected_linesearch ? 1 : 0
+					restored_rejected_linesearch ? 1 : 0,
+					accepted_evaluated_point_this_iteration ? 1 : 0
 				};
-				MPI_Bcast(iteration_state, 4, MPI_INT, 0, train_comm);
+				MPI_Bcast(iteration_state, 5, MPI_INT, 0, train_comm);
 				converge = (iteration_state[0] != 0);
 				linesearch = (iteration_state[1] != 0);
 				num_step = iteration_state[2];
 				restored_rejected_linesearch = (iteration_state[3] != 0);
+				accepted_evaluated_point_this_iteration =
+					(iteration_state[4] != 0);
 		#endif
-			if (accepted_evaluated_point_this_iteration) {
-				if (!converge) {
-					// Continue with the next trial already generated by BFGS.  The
-					// accepted snapshot remains separate for boundary rechart and
-					// rejected-line-search recovery.
-					if (optimizer_replicated || prank == 0)
-						copy_optimizer_x_to_full_coeffs();
-		#ifdef MLIP_MPI
-					if (!optimizer_replicated)
-						MPI_Bcast(&x[0], n, MPI_DOUBLE, 0, train_comm);
-		#endif
-				} else {
-					// The final live/saved model must remain at the last evaluated
-					// accepted point, not at BFGS's unused next proposal.
-					accepted_state.DiscardPendingTrial();
-				}
+			if (accepted_evaluated_point_this_iteration && converge) {
+				// The final live/saved model must remain at the last evaluated
+				// accepted point, not at BFGS's unused next proposal.  Otherwise the
+				// next loop's common materialization restores the pending trial once.
+				accepted_state.DiscardPendingTrial();
 			}
 		}
 
