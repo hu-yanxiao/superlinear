@@ -323,24 +323,26 @@ else
   grep -q "TrainLinear solve done" "$tmp_dir/do_lin.log"
 fi
 
-python3 - "$physical_trace" "$weight_norm_trace" <<'PY'
-import csv
+python3 - "$tmp_dir/physical.log" "$tmp_dir/weight_norm.log" <<'PY'
 import pathlib
+import re
 import sys
 
-physical_trace, weight_norm_trace = map(pathlib.Path, sys.argv[1:])
+physical_log, weight_norm_log = map(pathlib.Path, sys.argv[1:])
+pattern = re.compile(
+    r"optimizer physical startup objective total_loss=([0-9eE+.-]+)"
+)
 
 
-def first_loss(path):
-    with path.open(newline="") as stream:
-        rows = list(csv.DictReader(stream))
-    if not rows:
-        raise SystemExit(f"missing optimizer trace row in {path}")
-    return float(rows[0]["total_loss"])
+def startup_loss(path):
+    match = pattern.search(path.read_text())
+    if match is None:
+        raise SystemExit(f"missing optimizer startup objective in {path}")
+    return float(match.group(1))
 
 
-physical_loss = first_loss(physical_trace)
-weight_norm_loss = first_loss(weight_norm_trace)
+physical_loss = startup_loss(physical_log)
+weight_norm_loss = startup_loss(weight_norm_log)
 loss_scale = max(1.0, abs(physical_loss), abs(weight_norm_loss))
 if abs(physical_loss - weight_norm_loss) > 1.0e-10 * loss_scale:
     raise SystemExit(
