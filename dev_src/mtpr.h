@@ -1010,6 +1010,8 @@ public:
 			void InitializeSecondLayerGateRadialCoeffsFromFirstGate();
 			void InitializeSecondLayerGateAdditiveCoeffs(double value = 1.0 / 12.0);
 			void InitializeSecondLayerGateTypeCoeffsFromFirstGate();
+			int CountRadialFirstCoeffsNeedingPositiveRepair(
+				double min_value = 1.0e-12) const;
 			int EnforcePositiveRadialFirstCoeffs(double min_value = 1.0e-12);
 	bool IsRadialFirstCoeff(int coeff_index) const;
 	double RadialFirstCoeffRawToValue(double raw_value) const;

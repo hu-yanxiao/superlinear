@@ -582,6 +582,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"        L-BFGS supports armijo-value only.\n"
 			"    --radial-parameterization=<physical|weight-norm>: optimizer coordinates for\n"
 			"        outer radial rows. weight-norm keeps the model file unchanged. Default=physical\n"
+			"    --allow-physical-radial-sign-repair: explicitly allow physical mode to modify\n"
+			"        a complete checkpoint and linearly refit it after radial sign repair.\n"
 			"    --bfgs-coordinate-normalization=<none|efs-gn>: fixed diagonal BFGS coordinates\n"
 			"        for species prefactors, scalar heads, and gate weights. Default=none\n"
 			"    --bfgs-coordinate-probes=<int>: deterministic Hutchinson probes for efs-gn. Default=4\n"

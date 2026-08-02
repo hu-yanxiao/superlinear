@@ -11,6 +11,8 @@ seed_model="$tmp_dir/seed.mtp"
 signed_resume_model="$tmp_dir/signed_resume_seed.mtp"
 signed_resume_trace="$tmp_dir/signed_resume.csv"
 signed_resume_none_trace="$tmp_dir/signed_resume_none.csv"
+signed_resume_refusal_model="$tmp_dir/signed_resume_refusal.mtp"
+signed_resume_opt_in_model="$tmp_dir/signed_resume_opt_in.mtp"
 untrained_weight_norm_model="$tmp_dir/untrained_weight_norm.mtp"
 train_cfg="$tmp_dir/one.cfg"
 physical_model="$tmp_dir/physical_step0.mtp"
@@ -142,6 +144,51 @@ text = negate_first(
 target.write_text(text)
 PY
 
+# A complete checkpoint must never be silently rewritten merely because the
+# caller selected physical optimizer coordinates.  The old conversion remains
+# available only through an explicit compatibility opt-in.
+signed_resume_sha_before="$(shasum -a 256 "$signed_resume_model" | awk '{print $1}')"
+if ./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
+  --radial-parameterization=physical \
+  --trained-pot-name="$signed_resume_refusal_model" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0.1 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$tmp_dir/signed_resume_refusal.log" 2>&1; then
+  echo "physical resume unexpectedly modified a complete checkpoint without opt-in" >&2
+  exit 1
+fi
+signed_resume_sha_after="$(shasum -a 256 "$signed_resume_model" | awk '{print $1}')"
+if [[ "$signed_resume_sha_before" != "$signed_resume_sha_after" ]]; then
+  echo "failed physical resume modified its input checkpoint" >&2
+  exit 1
+fi
+test ! -e "$signed_resume_refusal_model"
+grep -q "Refusing to modify a complete trained checkpoint" \
+  "$tmp_dir/signed_resume_refusal.log"
+grep -q -- "--radial-parameterization=weight-norm" \
+  "$tmp_dir/signed_resume_refusal.log"
+grep -q -- "--allow-physical-radial-sign-repair" \
+  "$tmp_dir/signed_resume_refusal.log"
+
+./bin/mlp-sus2 train "$signed_resume_model" "$train_cfg" \
+  --radial-parameterization=physical \
+  --allow-physical-radial-sign-repair \
+  --trained-pot-name="$signed_resume_opt_in_model" \
+  --max-iter=1 \
+  --skip-preinit \
+  --energy-weight=1 \
+  --force-weight=0.1 \
+  --stress-weight=0 \
+  --radial-smooth=0 >"$tmp_dir/signed_resume_opt_in.log" 2>&1
+test -s "$signed_resume_opt_in_model"
+grep -q "Legacy physical radial sign repair explicitly enabled" \
+  "$tmp_dir/signed_resume_opt_in.log"
+grep -Eq "Repaired .*radial first coefficients; running one linear solve" \
+  "$tmp_dir/signed_resume_opt_in.log"
+
 ./bin/mlp-sus2 check-radial-weight-norm-roundtrip-dev \
   "$signed_resume_model" \
   --abs-tolerance=2e-12 \
@@ -258,7 +305,15 @@ fi
   --force-weight=0.1 \
   --stress-weight=0 \
   --radial-smooth=0 >"$tmp_dir/do_lin.log" 2>&1
-grep -q "TrainLinear solve done" "$tmp_dir/do_lin.log"
+# MPI builds report the completed solve explicitly.  The serial implementation
+# executes the same initial refresh but historically has no per-solve log line,
+# so retain a portable assertion for both build modes.
+if grep -q "Mode: Serial" "$tmp_dir/do_lin.log"; then
+  grep -q "do-lin enabled for first 1 optimizer steps, frequency 1" \
+    "$tmp_dir/do_lin.log"
+else
+  grep -q "TrainLinear solve done" "$tmp_dir/do_lin.log"
+fi
 
 python3 - "$physical_trace" "$weight_norm_trace" <<'PY'
 import csv

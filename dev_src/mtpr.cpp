@@ -35,6 +35,15 @@ constexpr double kRandomShiftMin = 1.5;
 constexpr double kRandomShiftMax = 2.5;
 constexpr double kRadialFirstCoeffPositiveFloor = 1.0e-12;
 
+double PositiveRadialFirstCoeff(double value, double positive_floor)
+{
+	if (value < 0.0)
+		value = -value;
+	if (value <= positive_floor)
+		value = positive_floor;
+	return value;
+}
+
 double Clamp01(double value)
 {
 	return std::max(0.0, std::min(1.0, value));
@@ -2953,7 +2962,7 @@ void MLMTPR::InitializeSecondLayerGateTypeCoeffsFromFirstGate()
 	}
 }
 
-int MLMTPR::EnforcePositiveRadialFirstCoeffs(double min_value)
+int MLMTPR::CountRadialFirstCoeffsNeedingPositiveRepair(double min_value) const
 {
 	// In the direct rank-1 K contraction, a legacy W(l,k) is absorbed into the
 	// corresponding radial row.  Its sign is physical: forcing the first
@@ -2975,14 +2984,28 @@ int MLMTPR::EnforcePositiveRadialFirstCoeffs(double min_value)
 
 	int changed_count = 0;
 	for (int mu = 0; mu < radial_func_count; ++mu) {
-		double& first_coeff = regression_coeffs[radial_begin + mu * block_size];
-		const double old_value = first_coeff;
-		if (first_coeff < 0.0)
-			first_coeff = -first_coeff;
-		if (first_coeff <= positive_floor)
-			first_coeff = positive_floor;
-		if (first_coeff != old_value)
+		const double first_coeff = regression_coeffs[radial_begin + mu * block_size];
+		if (PositiveRadialFirstCoeff(first_coeff, positive_floor) != first_coeff)
 			++changed_count;
+	}
+	return changed_count;
+}
+
+int MLMTPR::EnforcePositiveRadialFirstCoeffs(double min_value)
+{
+	const double positive_floor = min_value > 0.0
+		? min_value
+		: kRadialFirstCoeffPositiveFloor;
+	const int changed_count =
+		CountRadialFirstCoeffsNeedingPositiveRepair(positive_floor);
+	if (changed_count == 0)
+		return 0;
+
+	const int radial_begin = RadialCoeffOffset();
+	const int block_size = RadialCoeffBlockSize();
+	for (int mu = 0; mu < radial_func_count; ++mu) {
+		double& first_coeff = regression_coeffs[radial_begin + mu * block_size];
+		first_coeff = PositiveRadialFirstCoeff(first_coeff, positive_floor);
 	}
 	return changed_count;
 }

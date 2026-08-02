@@ -1812,6 +1812,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_parameterization != "physical"
 	    && radial_parameterization != "weight-norm")
 		ERROR("--radial-parameterization should be 'physical' or 'weight-norm'");
+	const bool allow_physical_radial_sign_repair =
+		opts["allow-physical-radial-sign-repair"] != "";
 	string bfgs_coordinate_normalization = "none";
 	if (opts["bfgs-coordinate-normalization"] != "")
 		bfgs_coordinate_normalization =
@@ -2345,6 +2347,23 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (guard_compression_options.enabled)
 			ERROR("--two-layer-gate-readout-linear-init is not compatible with guard-compression terms");
 	}
+	const int required_radial_first_coeff_repairs =
+		mtpr.CountRadialFirstCoeffsNeedingPositiveRepair();
+	if (loaded_complete_parameters
+	    && !two_layer_gate_readout_linear_init
+	    && maxits > 0
+	    && mtpr.has_radial_coeffs
+	    && radial_parameterization == "physical"
+	    && required_radial_first_coeff_repairs > 0
+	    && !allow_physical_radial_sign_repair) {
+		ERROR("Refusing to modify a complete trained checkpoint: "
+		      "--radial-parameterization=physical would repair "
+		      + std::to_string(required_radial_first_coeff_repairs)
+		      + " radial first coefficients and then refit the linear coefficients. "
+		        "Use --radial-parameterization=weight-norm to preserve the checkpoint, "
+		        "or pass --allow-physical-radial-sign-repair to explicitly opt in "
+		        "to the legacy conversion behavior.");
+	}
 #ifdef MLIP_MPI
 	MPI_Comm_rank(MPI_COMM_WORLD, &prank);
 	MPI_Comm_size(MPI_COMM_WORLD, &psize);
@@ -2739,6 +2758,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (!two_layer_gate_readout_linear_init
 	    && maxits > 0 && mtpr.has_radial_coeffs
 	    && radial_parameterization == "physical") {
+		if (loaded_complete_parameters
+		    && allow_physical_radial_sign_repair
+		    && required_radial_first_coeff_repairs > 0
+		    && prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Legacy physical radial sign repair explicitly enabled for complete checkpoint"
+			          << std::endl;
 		if (prank == 0)
 			radial_first_coeff_repairs = mtpr.EnforcePositiveRadialFirstCoeffs();
 #ifdef MLIP_MPI
