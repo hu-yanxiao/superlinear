@@ -3851,9 +3851,14 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
   const int C = species_count;
   const int R = radial_basis_size;
   const int pairs_count = C * C;
-  const bool per_mu_sigma = basis_requires_per_mu_sigma(radial_basis_type_index);
+  // scaling_map=L shares scal/shift by angular l, while the radial basis
+  // channel still depends on k.  Its exact cache key is therefore (l,k),
+  // which is one entry per full mu=(k,l) channel.
+  const bool per_mu_sigma =
+      basis_requires_per_mu_sigma(radial_basis_type_index) ||
+      (is_sh_model && scaling_map == "L");
   const bool compact_k_scaling =
-      is_sh_model && K_scaling < radial_func_count;
+      is_sh_model && scaling_map == "K" && K_scaling < radial_func_count;
   const int radial_cache_count = per_mu_sigma ? radial_func_count : K_scaling;
   const int temp_size = radial_cache_count * R;
   if (two_layer_radial_cache_size < temp_size) {
@@ -7228,9 +7233,13 @@ void PairSUS2MTP::compute(int eflag, int vflag)
       }
 
       if (!used_precomputed_table) {
-      const bool per_mu_sigma = basis_requires_per_mu_sigma(radial_basis_type_index);
+      // scaling_map=L shares the coordinate transform across k at fixed l,
+      // but it must still evaluate every distinct radial-k basis channel.
+      const bool per_mu_sigma =
+          basis_requires_per_mu_sigma(radial_basis_type_index) ||
+          (is_sh_model && scaling_map == "L");
       const bool compact_k_scaling =
-          is_sh_model && K_ < radial_func_count;
+          is_sh_model && scaling_map == "K" && K_ < radial_func_count;
       const int radial_cache_count = per_mu_sigma ? radial_func_count : K_;
       int temp_size = radial_cache_count * R;
       std::vector<double> val_temp(temp_size, 0.0);
@@ -7257,7 +7266,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
         for (int k_ = 0; k_ < K_; k_++) {
           const int sigma = mu_to_sigma[k_];
 
-          // Preserve the historical LK hot loop byte-for-byte: the K/LK
+          // Preserve the historical LK hot loop byte-for-byte: the scaling
           // topology decision is made once outside this loop.
           double scal = regression_coeffs[C + 2 * k_ * pairs_count + C * itype + jtype];
           double s = regression_coeffs[C + 2 * k_ * pairs_count + pairs_count + C * itype + jtype];
@@ -8008,8 +8017,8 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "Invalid SUS2-SH sh_k_max: {}.", sh_k_max);
       if (L_max != sh_l_max + 1)
         error->one(FLERR, "SUS2-SH L header is inconsistent with sh_l_max.");
-      if (scaling_map != "K" && scaling_map != "LK")
-        error->one(FLERR, "SUS2-SH scaling_map should be K or LK.");
+      if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
+        error->one(FLERR, "SUS2-SH scaling_map should be K, L, or LK.");
 
       do {
         line_tokens = ValueTokenizer(tfr.next_line(), separators);

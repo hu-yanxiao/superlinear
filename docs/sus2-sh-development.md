@@ -697,7 +697,7 @@ Model initialization:
   --radial-basis-type=RBChebyshev_sss
 ```
 
-Release3 accepts `--scaling-map=K|LK` in both `init-sh` and inline
+Release3 accepts `--scaling-map=K|L|LK` in both `init-sh` and inline
 `train ... --init-sh` construction. The default remains `LK`. With internal
 \(\mu=k(l_{\max}+1)+l\), `K` maps only the pairwise `scal` and `s` parameters
 to \(k\); it does not merge the full-\(\mu\) radial coefficient rows,

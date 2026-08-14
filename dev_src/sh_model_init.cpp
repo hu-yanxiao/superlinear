@@ -995,8 +995,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh requires --k-max > 0.");
 	if (body_order < 2 || body_order > 6)
 		ERROR("init-sh supports --body-order from 2 to 6.");
-	if (scaling_map != "K" && scaling_map != "LK")
-		ERROR("init-sh --scaling-map should be K or LK.");
+	if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
+		ERROR("init-sh --scaling-map should be K, L, or LK.");
 	if (outer_k_rank < 0 || outer_k_rank > kmax)
 		ERROR("--outer-k-rank must be in [1, --k-max] when enabled.");
 	if (two_layer_gate_k_rank < 0 || two_layer_gate_k_rank > kmax)
@@ -1157,7 +1157,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "\tradial_basis_size = " << rb_size << "\n";
 	const int radial_func_count = kmax * (lmax + 1);
 	const int scaling_block_count =
-		(scaling_map == "K") ? kmax : radial_func_count;
+		(scaling_map == "K") ? kmax
+		: (scaling_map == "L") ? (lmax + 1)
+		: radial_func_count;
 	ofs << "\tradial_funcs_count = " << radial_func_count << "\n";
 
 	const SHGraphBuilder& energy_graph =

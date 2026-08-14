@@ -199,6 +199,13 @@ Release3 model-topology support is:
 | compatible single-layer gate readout | yes | yes |
 | multi-layer gate | no | no |
 
+SUS2-SH models may use `scaling_map=K`, `L`, or `LK` in both CPU and
+Kokkos pair styles, for direct and table radial evaluation.  With the
+serialized `mu=k*(lmax+1)+l` layout, `K` selects block `k`, `L` selects block
+`l`, and `LK` selects the full `mu` block.  `L` therefore shares only the
+pairwise `scal/s` transform across radial `k` at fixed angular `l`; it does
+not collapse the distinct radial-basis channels.
+
 The supported readout form is the single-layer neighbor-site gate with the
 first-layer scalar energy head. Readout is incompatible with outer/gate rank,
 residual, edge-L1, and multi-layer-gate modes. Multi-layer gate models must use

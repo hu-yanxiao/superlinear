@@ -97,7 +97,7 @@ Main SH topology options:
 | `--species-count=<int>` | Number of atomic species in CFG type order. |
 | `--l-max=<int>` | Maximum SH angular index `l`; generator supports `0..6`, optimized runtimes are mainly validated for `l <= 4`. |
 | `--k-max=<int>` | Number of radial channels per `l`; `k` is indexed from `0` to `k_max-1`. |
-| `--scaling-map=K\|LK` | Select the `scal/s` map. `K` shares one pairwise block across all `l` at fixed `k`; `LK` keeps one block per `(k,l)`. Default=`LK`. |
+| `--scaling-map=K\|L\|LK` | Select the `scal/s` map. `K` shares one pairwise block across all `l` at fixed `k`; `L` shares one block across all `k` at fixed `l`; `LK` keeps one block per `(k,l)`. Default=`LK`. |
 | `--body-order=<int>` | Maximum scalar body order, supported range `2..6`. |
 | `--body-l-max=<list>` | Body-specific angular cutoffs. Use four values for body orders `2..5`, or five values for `2..6`; example `3,3,2,2`. |
 | `--cutoff=<double>` / `--max-dist=<double>` | Main SH radial cutoff. `--cutoff` is the preferred spelling. |
@@ -425,7 +425,7 @@ optional outer/gate `K`-rank models, and compatible single-layer gate-readout
 models documented in
 [`docs/release3-k-rank.md`](docs/release3-k-rank.md). Readout remains
 incompatible with rank, residual, edge-L1, and multi-layer-gate topologies.
-Both pair styles accept `scaling_map=K` as well as the default `LK` map.  The
+Both pair styles accept `scaling_map=K` and `scaling_map=L` as well as the default `LK` map.  The
 compact `K` map shares only `scal/s` across angular channels; it does not
 collapse the full `mu=(k,l)` radial, SH, gate, or rank channels.
 Multi-layer gate models are not supported by either LAMMPS pair style. The

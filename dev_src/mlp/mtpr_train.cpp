@@ -2102,7 +2102,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (!mtpr.IsSHPotential())
 			ERROR("--scaling-map is only supported for SUS2-SH models");
 		if (requested_scaling_map_it->second != mtpr.ScalingMap())
-			ERROR("--scaling-map must match the loaded model; changing K/LK topology requires a new init-sh model");
+			ERROR("--scaling-map must match the loaded model; changing K/L/LK topology requires a new init-sh model");
 	}
 	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
 	const bool requested_two_layer_gate_readout =

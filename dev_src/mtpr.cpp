@@ -3865,8 +3865,8 @@ void MLMTPR::Load(const string& filename)
 
 	if (is_sh_potential_)
 	{
-		if (scaling_map != "K" && scaling_map != "LK")
-			ERROR("SUS2-SH scaling_map should be K or LK");
+		if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
+			ERROR("SUS2-SH scaling_map should be K, L, or LK");
 		if (sh_l_max_ < 0 || sh_l_max_ > 4)
 			ERROR("SUS2-SH runtime currently supports sh_l_max in [0,4]");
 		if (sh_k_max_ <= 0)

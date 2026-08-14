@@ -606,12 +606,12 @@ if "$bin" train "$tmp_dir/RBChebyshev_sss-K.mtp" "$one_cfg" \
 fi
 grep -q "must match the loaded model" "$tmp_dir/map-mismatch.log"
 
-if "$bin" init-sh "$tmp_dir/invalid-L.mtp" "${common[@]}" \
-    --radial-basis-type=RBChebyshev_sss --scaling-map=L \
-    >"$tmp_dir/invalid-L.log" 2>&1; then
-  echo "init-sh unexpectedly accepted scaling_map=L for SUS2-SH" >&2
+if "$bin" init-sh "$tmp_dir/invalid-KL.mtp" "${common[@]}" \
+    --radial-basis-type=RBChebyshev_sss --scaling-map=KL \
+    >"$tmp_dir/invalid-KL.log" 2>&1; then
+  echo "init-sh unexpectedly accepted scaling_map=KL for SUS2-SH" >&2
   exit 1
 fi
-grep -q "K or LK" "$tmp_dir/invalid-L.log"
+grep -q "K, L, or LK" "$tmp_dir/invalid-KL.log"
 
 echo "SUS2-SH scaling_map=K checks passed"

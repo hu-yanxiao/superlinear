@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Verify that an SH scaling_map=K model is mathematically identical in LAMMPS
-# to the exact scaling_map=LK expansion that repeats every k block for all l.
+# Verify that an SH scaling_map=K or scaling_map=L model is mathematically
+# identical in LAMMPS to its exact scaling_map=LK expansion.
 # The test covers the CPU and/or Kokkos pair style, Chebyshev and Laguerre
 # radial bases, direct and _lmp table paths, and plain-full, gate-full, and
 # gate+rank model layouts.
 set -Eeuo pipefail
-trap 'echo "LAMMPS scaling_map=K parity failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
+SH_SCALING_MAP="${SH_SCALING_MAP:-K}"
+trap 'echo "LAMMPS scaling_map=${SH_SCALING_MAP} parity failed at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo_root"
@@ -32,12 +33,15 @@ Usage: dev_test/lammps_sh_scaling_map_k_parity.sh [options]
   --cpu PATH       CPU LAMMPS binary using pair_style sus2mtp
   --kokkos PATH    Kokkos LAMMPS binary using pair_style sus2mtp/kk
   --keep           retain temporary files
-  --prepare-only   generate exact K/LK fixtures, then exit before LAMMPS
+  --prepare-only   generate exact compact/LK fixtures, then exit before LAMMPS
 
 Unless --prepare-only is used, at least one of --cpu or --kokkos is required.  CPU_MPI_RANKS,
 KOKKOS_MPI_RANKS, MPI_RUN, KOKKOS_ARGS, and KOKKOS_CHUNKSIZE may be
 overridden for the local installation.  The script runs only tiny run-0
 calculations; it does not submit a scheduler job.
+
+SH_SCALING_MAP selects the compact map under test and must be K or L.  It
+defaults to K; dev_test/lammps_sh_scaling_map_l_parity.sh selects L.
 EOF
 }
 
@@ -80,8 +84,14 @@ if ! [[ "$SH_L_MAX" =~ ^[0-4]$ ]] || \
   echo "SH_L_MAX must be 0..4; SH_K_MAX and SH_RADIAL_BASIS_SIZE must be positive" >&2
   exit 2
 fi
+if [[ "$SH_SCALING_MAP" != "K" && "$SH_SCALING_MAP" != "L" ]]; then
+  echo "SH_SCALING_MAP must be K or L" >&2
+  exit 2
+fi
+map_slug=k
+[[ "$SH_SCALING_MAP" == "L" ]] && map_slug=l
 
-tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-lammps-scaling-map-k-XXXXXX")
+tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-lammps-scaling-map-${map_slug}-XXXXXX")
 if [[ "$KEEP" == 1 ]]; then
   echo "keeping parity artifacts: $tmp_dir"
 else
@@ -90,7 +100,7 @@ fi
 
 data_file="$tmp_dir/data.small"
 cat >"$data_file" <<'DATA'
-LAMMPS scaling_map=K parity
+LAMMPS compact scaling-map parity
 
 8 atoms
 2 atom types
@@ -126,7 +136,7 @@ common_init=(
   --radial-basis-type=RBChebyshev_sss
   --cutoff=5.0
   --sh-factor-pruning=q-total
-  --scaling-map=K
+  --scaling-map="$SH_SCALING_MAP"
   --init-params=same
 )
 
@@ -140,7 +150,7 @@ prepare_pair() {
   "$MLP_BIN" roundtrip-model-dev "$init_model" "$materialized" >/dev/null
 
   python3 - "$materialized" "$tmp_dir" "$case_name" \
-    "$SH_K_MAX" "$((SH_L_MAX + 1))" <<'PY'
+    "$SH_K_MAX" "$((SH_L_MAX + 1))" "$SH_SCALING_MAP" <<'PY'
 import pathlib
 import re
 import sys
@@ -150,6 +160,7 @@ root = pathlib.Path(sys.argv[2])
 case = sys.argv[3]
 kmax = int(sys.argv[4])
 lchannels = int(sys.argv[5])
+compact_map = sys.argv[6]
 text = source.read_text(encoding="utf-8")
 number = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
 
@@ -195,8 +206,12 @@ def radial_section(content):
         raise SystemExit(f"{case}: missing radial_coeffs section")
     return match.group(0)
 
-if not re.search(r"^scaling_map\s*=\s*K\s*$", text, re.M):
-    raise SystemExit(f"{case}: init-sh did not write scaling_map=K")
+if compact_map not in ("K", "L"):
+    raise SystemExit(f"{case}: unsupported compact map {compact_map}")
+if not re.search(
+        rf"^scaling_map\s*=\s*{re.escape(compact_map)}\s*$", text, re.M):
+    raise SystemExit(
+        f"{case}: init-sh did not write scaling_map={compact_map}")
 has_gate = re.search(
     r"^two_layer_gate_enabled\s*=\s*(?:1|true)\s*$", text, re.M
 )
@@ -212,14 +227,16 @@ if case == "rank":
         if not re.search(rf"^{rank_vector}\s*=", text, re.M):
             raise SystemExit(f"rank: missing {rank_vector}")
 
-# Deliberately distinct k blocks make a wrong l/k indexing immediately visible.
-k_blocks = []
-for k in range(kmax):
-    slopes = [2.71 + 0.31 * k + 0.041 * pair for pair in range(pairs)]
-    shifts = [1.23 + 0.19 * k + 0.029 * pair for pair in range(pairs)]
-    k_blocks.append(slopes + shifts)
+# Deliberately distinct compact blocks make a wrong l/k indexing immediately
+# visible.  K shares a block across l; L shares a block across k.
+compact_count = kmax if compact_map == "K" else lchannels
+compact_blocks = []
+for block in range(compact_count):
+    slopes = [2.71 + 0.31 * block + 0.041 * pair for pair in range(pairs)]
+    shifts = [1.23 + 0.19 * block + 0.029 * pair for pair in range(pairs)]
+    compact_blocks.append(slopes + shifts)
 text = replace_vector(text, "scal_coeffs", [
-    value for block in k_blocks for value in block
+    value for block in compact_blocks for value in block
 ])
 
 # Keep all physical paths nonzero.  The initialized radial coefficient matrix
@@ -271,7 +288,7 @@ for name, base, step, period in (
 
 k_text = text
 lk_text, replacements = re.subn(
-    r"^scaling_map\s*=\s*K\s*$",
+    rf"^scaling_map\s*=\s*{re.escape(compact_map)}\s*$",
     "scaling_map = LK",
     k_text,
     count=1,
@@ -280,14 +297,15 @@ lk_text, replacements = re.subn(
 if replacements != 1:
     raise SystemExit(f"{case}: could not create LK expansion")
 
-# Exact expansion: mu=k*(lmax+1)+l receives the original k block.
+# Exact expansion for mu=k*(lmax+1)+l.  K selects k, while L selects l.
 expanded = []
 for mu in range(kmax * lchannels):
-    expanded.extend(k_blocks[mu // lchannels])
+    compact_index = mu // lchannels if compact_map == "K" else mu % lchannels
+    expanded.extend(compact_blocks[compact_index])
 lk_text = replace_vector(lk_text, "scal_coeffs", expanded)
 
-if len(vector("scal_coeffs", k_text)) != kmax * block_width:
-    raise SystemExit(f"{case}: wrong K scal_coeffs count")
+if len(vector("scal_coeffs", k_text)) != compact_count * block_width:
+    raise SystemExit(f"{case}: wrong {compact_map} scal_coeffs count")
 if len(vector("scal_coeffs", lk_text)) != kmax * lchannels * block_width:
     raise SystemExit(f"{case}: wrong expanded LK scal_coeffs count")
 if radial_section(k_text) != radial_section(lk_text):
@@ -298,7 +316,7 @@ for basis_label, basis_type in (
     ("laguerre", "RBLaguerre_log1p"),
 ):
     for mode, basis_suffix in (("direct", ""), ("table", "_lmp")):
-        for mapping, content in (("K", k_text), ("LK", lk_text)):
+        for mapping, content in ((compact_map, k_text), ("LK", lk_text)):
             content, count = re.subn(
                 r"^radial_basis_type\s*=\s*RBChebyshev_sss\s*$",
                 f"radial_basis_type = {basis_type}{basis_suffix}",
@@ -327,7 +345,7 @@ prepare_pair gate "${gate_args[@]}"
 prepare_pair rank "${gate_args[@]}" --outer-k-rank="$outer_rank" --two-layer-gate-k-rank=1
 
 if ((PREPARE_ONLY)); then
-  echo "LAMMPS_SH_SCALING_MAP_K_FIXTURES: $tmp_dir"
+  echo "LAMMPS_SH_SCALING_MAP_${SH_SCALING_MAP}_FIXTURES: $tmp_dir"
   exit 0
 fi
 
@@ -382,7 +400,7 @@ run_lammps() {
 for case_name in full gate rank; do
   for basis_name in chebyshev laguerre; do
     for radial_mode in direct table; do
-      for mapping in K LK; do
+      for mapping in "$SH_SCALING_MAP" LK; do
         model="$tmp_dir/$case_name.$basis_name.$radial_mode.$mapping.mtp"
         if [[ -n "$CPU_LAMMPS_BIN" ]]; then
           run_lammps "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
@@ -397,12 +415,13 @@ for case_name in full gate rank; do
   done
 done
 
-python3 - "$tmp_dir" <<'PY'
+python3 - "$tmp_dir" "$SH_SCALING_MAP" <<'PY'
 import math
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+compact_map = sys.argv[2]
 pressure_to_ev_a3 = 1602176.6208
 
 def parse(label):
@@ -470,7 +489,7 @@ for engine in ("cpu", "kk"):
     for case in ("full", "gate", "rank"):
         for basis in ("chebyshev", "laguerre"):
             for mode in ("direct", "table"):
-                k_label = f"{engine}.{case}.{basis}.{mode}.K"
+                k_label = f"{engine}.{case}.{basis}.{mode}.{compact_map}"
                 lk_label = f"{engine}.{case}.{basis}.{mode}.LK"
                 if not (root / f"log.{k_label}").exists():
                     continue
@@ -491,7 +510,8 @@ for engine in ("cpu", "kk"):
                 if max(errors) > tolerance * scale:
                     raise SystemExit(
                         f"{engine}/{case}/{basis}/{mode}: "
-                        f"K vs expanded-LK mismatch dE={errors[0]:.3e} "
+                        f"{compact_map} vs expanded-LK mismatch "
+                        f"dE={errors[0]:.3e} "
                         f"dF={errors[1]:.3e} dV={errors[2]:.3e}, "
                         f"limit={tolerance * scale:.3e}"
                     )
@@ -512,5 +532,8 @@ for engine in ("cpu", "kk"):
 
 if seen == 0:
     raise SystemExit("no LAMMPS result pair was checked")
-print(f"LAMMPS_SH_SCALING_MAP_K_PARITY: ok ({seen} result pairs)")
+print(
+    f"LAMMPS_SH_SCALING_MAP_{compact_map}_PARITY: "
+    f"ok ({seen} result pairs)"
+)
 PY
