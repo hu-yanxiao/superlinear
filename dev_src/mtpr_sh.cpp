@@ -8374,7 +8374,11 @@ void MLMTPR::CalcSHBasisGateDers(const Neighborhood& nbh,
 
 void MLMTPR::AccumulateSHBasisGateDers(
 	const Neighborhood& nbh,
-	std::vector<double>& gate_linear_adjoints)
+	int center_atom_index,
+	bool need_forces,
+	bool need_stress,
+	std::vector<double>& gate_linear_adjoints,
+	std::vector<double>& edge_l1_projection_linear_adjoints)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
@@ -8401,9 +8405,28 @@ void MLMTPR::AccumulateSHBasisGateDers(
 		&& static_cast<int>(basic_indices_by_mu_.size()) == alpha_index_basic_count;
 
 	double sh_values[kMaxSHComponents];
+	double sh_ders[3 * kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	const bool use_edge_cache = HasTwoLayerEdgePrimitiveCache(-1, false);
+	const bool has_edge_l1 = HasNonzeroTwoLayerGateEdgeL1Weights();
+	const bool use_edge_der_cache =
+		has_edge_l1 && HasTwoLayerEdgePrimitiveCache(-1, true, false);
+	const int edge_l1_source_count =
+		has_edge_l1 ? TwoLayerGateEdgeL1SourceCount() : 0;
+	if (has_edge_l1) {
+		const size_t atom_count = gate_linear_adjoints.size() / atom_stride;
+		const size_t expected_projection_adjoint_count =
+			atom_count * 3 * alpha_scalar_moments * radial_func_count;
+		if (edge_l1_source_count <= 0
+		    || edge_l1_projection_linear_adjoints.size()
+		        != expected_projection_adjoint_count)
+			ERROR("SUS2-SH edge L1 linear projection adjoint buffer has an incompatible size");
+		sh_gate_edge_linear_adjoints_.resize(
+			static_cast<size_t>(alpha_scalar_moments) * radial_func_count);
+		sh_gate_edge_l1_y_linear_adjoints_.resize(
+			static_cast<size_t>(alpha_scalar_moments) * 3);
+	}
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int mu_stride = radial_func_count;
 	const int radial_coeff_base = C + 2 * C * C * K_;
@@ -8421,15 +8444,27 @@ void MLMTPR::AccumulateSHBasisGateDers(
 		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
 		const double* sh_values_use = sh_values;
+		const double* sh_ders_use = sh_ders;
 		const double* radial_values_use = radial_values.data();
 		if (use_edge_cache) {
 			const size_t edge = TwoLayerEdgePrimitiveOffset(-1, j);
 			sh_values_use =
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
+			if (use_edge_der_cache)
+				sh_ders_use =
+					two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
+			else if (has_edge_l1) {
+				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				sh_values_use = sh_values;
+				sh_ders_use = sh_ders;
+			}
 			radial_values_use =
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+			if (has_edge_l1)
+				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			else
+				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -8471,18 +8506,30 @@ void MLMTPR::AccumulateSHBasisGateDers(
 			}
 		}
 
+		int neighbor_atom_index_for_tanh = atom_index;
 		const double* gate_signal_by_mu =
-			TwoLayerGateNeighborSignals(nbh, j);
+			has_edge_l1
+				? PrepareTwoLayerGateEdgeL1NeighborSignals(
+					nbh,
+					j,
+					TwoLayerGateNeighborSignals(nbh, j),
+					sh_values_use,
+					neighbor_atom_index_for_tanh)
+				: TwoLayerGateNeighborSignals(nbh, j);
 		PrepareTwoLayerGatePairMuBuffers(
 			type_central,
 			type_outer,
 			nullptr,
 			-1,
 			gate_signal_by_mu,
-			atom_index,
+			neighbor_atom_index_for_tanh,
 			kGateMuBufferAdditive);
 		double* gate_adjoints = gate_linear_adjoints.data()
 			+ static_cast<size_t>(atom_index) * atom_stride;
+		if (has_edge_l1)
+			std::fill(sh_gate_edge_linear_adjoints_.begin(),
+			          sh_gate_edge_linear_adjoints_.end(),
+			          0.0);
 		for (int mu = 0; mu < radial_func_count; ++mu) {
 			std::fill(sh_gate_moment_ders_.begin(),
 			          sh_gate_moment_ders_.end(),
@@ -8537,9 +8584,115 @@ void MLMTPR::AccumulateSHBasisGateDers(
 				}
 			}
 
-			for (int i = 0; i < alpha_scalar_moments; ++i)
-				gate_adjoints[static_cast<size_t>(i) * radial_func_count + mu] +=
+			for (int i = 0; i < alpha_scalar_moments; ++i) {
+				const double gate_adjoint =
 					sh_gate_moment_ders_[alpha_moment_mapping[i]];
+				gate_adjoints[static_cast<size_t>(i) * radial_func_count + mu] +=
+					gate_adjoint;
+				if (has_edge_l1)
+					sh_gate_edge_linear_adjoints_[
+						static_cast<size_t>(i) * radial_func_count + mu] =
+						gate_adjoint;
+			}
+		}
+
+		if (!has_edge_l1)
+			continue;
+
+		const int y1_indices[3] = {
+			SHFlatIndex(1, -1),
+			SHFlatIndex(1, 0),
+			SHFlatIndex(1, 1)
+		};
+		const double y1[3] = {
+			sh_values_use[y1_indices[0]],
+			sh_values_use[y1_indices[1]],
+			sh_values_use[y1_indices[2]]
+		};
+		const size_t projection_stride =
+			static_cast<size_t>(alpha_scalar_moments) * radial_func_count;
+		double* projection_adjoints = edge_l1_projection_linear_adjoints.data()
+			+ static_cast<size_t>(atom_index) * 3 * projection_stride;
+		for (int m = 0; m < 3; ++m)
+			cblas_daxpy(static_cast<int>(projection_stride),
+			            y1[m],
+			            sh_gate_edge_linear_adjoints_.data(),
+			            1,
+			            projection_adjoints + static_cast<size_t>(m) * projection_stride,
+			            1);
+
+		const size_t atom_count = gate_linear_adjoints.size() / atom_stride;
+		const size_t expected_weighted_size =
+			atom_count * static_cast<size_t>(radial_func_count) * 3;
+		const double* weighted_values = nullptr;
+		if (two_layer_gate_edge_l1_weighted_values_.size()
+		    == expected_weighted_size) {
+			weighted_values =
+				two_layer_gate_edge_l1_weighted_values_.data()
+				+ static_cast<size_t>(atom_index) * radial_func_count * 3;
+		} else {
+			const size_t expected_value_size =
+				atom_count * static_cast<size_t>(edge_l1_source_count) * 3;
+			if (two_layer_gate_edge_l1_values_.size() != expected_value_size)
+				ERROR("SUS2-SH edge L1 value cache has an incompatible size");
+			const double* edge_l1_values =
+				two_layer_gate_edge_l1_values_.data()
+				+ static_cast<size_t>(atom_index) * edge_l1_source_count * 3;
+			two_layer_gate_edge_l1_value_buffer_.resize(
+				static_cast<size_t>(radial_func_count) * 3);
+			const double* edge_l1_weights = TwoLayerGateEdgeL1WeightData();
+			cblas_dgemm(CblasRowMajor,
+			            CblasNoTrans,
+			            CblasNoTrans,
+			            radial_func_count,
+			            3,
+			            edge_l1_source_count,
+			            1.0,
+			            edge_l1_weights,
+			            edge_l1_source_count,
+			            edge_l1_values,
+			            3,
+			            0.0,
+			            two_layer_gate_edge_l1_value_buffer_.data(),
+			            3);
+			weighted_values = two_layer_gate_edge_l1_value_buffer_.data();
+		}
+		cblas_dgemm(CblasRowMajor,
+		            CblasNoTrans,
+		            CblasNoTrans,
+		            alpha_scalar_moments,
+		            3,
+		            radial_func_count,
+		            1.0,
+		            sh_gate_edge_linear_adjoints_.data(),
+		            radial_func_count,
+		            weighted_values,
+		            3,
+		            0.0,
+		            sh_gate_edge_l1_y_linear_adjoints_.data(),
+		            3);
+
+		for (int i = 0; i < alpha_scalar_moments; ++i) {
+			const int column = species_count + i;
+			const double* y_adjoints =
+				sh_gate_edge_l1_y_linear_adjoints_.data()
+				+ static_cast<size_t>(i) * 3;
+			for (int a = 0; a < 3; ++a) {
+				double component_der = 0.0;
+				for (int m = 0; m < 3; ++m)
+					component_der +=
+						y_adjoints[m] * sh_ders_use[3 * y1_indices[m] + a];
+				if (component_der == 0.0)
+					continue;
+				if (need_forces) {
+					forces_cmpnts(center_atom_index, column, a) += component_der;
+					forces_cmpnts(atom_index, column, a) -= component_der;
+				}
+				if (need_stress)
+					for (int b = 0; b < 3; ++b)
+						stress_cmpnts[column][a][b] -=
+							component_der * rvec[b];
+			}
 		}
 	}
 }

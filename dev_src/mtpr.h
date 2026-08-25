@@ -206,6 +206,12 @@ protected:
 		std::vector<double> sh_gate_linear_weight_matrix_;
 		std::vector<double> sh_gate_linear_mu_coord_ders_;
 		std::vector<double> sh_gate_linear_component_ders_;
+		std::vector<double> sh_gate_edge_linear_adjoints_;
+		std::vector<double> sh_gate_edge_l1_y_linear_adjoints_;
+		std::vector<double> sh_gate_edge_l1_projection_linear_adjoints_;
+		std::vector<double> sh_gate_edge_l1_source_coord_ders_;
+		std::vector<double> sh_gate_edge_l1_weighted_source_coord_ders_;
+		std::vector<double> sh_gate_edge_l1_source_component_ders_;
 		std::vector<double> sh_gate_energy_ders_wrt_moments_;
 		std::vector<Vector3> sh_gate_component_ders_;
 		std::vector<Vector3> two_layer_gate_readout_direction_scratch_;
@@ -336,7 +342,11 @@ protected:
 		std::vector<double>* gate_moment_tangents = nullptr);
 	void AccumulateSHBasisGateDers(
 		const Neighborhood& nbh,
-		std::vector<double>& gate_linear_adjoints);
+		int center_atom_index,
+		bool need_forces,
+		bool need_stress,
+		std::vector<double>& gate_linear_adjoints,
+		std::vector<double>& edge_l1_projection_linear_adjoints);
 	void ApplySHGateLinearComponentChain(
 		Configuration& cfg,
 		const Neighborhoods& neighborhoods,

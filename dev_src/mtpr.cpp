@@ -8818,7 +8818,20 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 		ERROR("SUS2-SH gate linear component adjoint buffer has inconsistent size");
 
 	const int gate_scalar_count = TwoLayerGateScalarCount();
-	if (gate_scalar_count == 0)
+	const bool has_edge_l1 = HasNonzeroTwoLayerGateEdgeL1Weights();
+	const int edge_l1_source_count =
+		has_edge_l1 ? TwoLayerGateEdgeL1SourceCount() : 0;
+	const size_t edge_l1_projection_stride =
+		static_cast<size_t>(alpha_scalar_moments) * radial_func_count;
+	if (has_edge_l1) {
+		const size_t expected_projection_adjoint_count =
+			static_cast<size_t>(cfg.size()) * 3 * edge_l1_projection_stride;
+		if (edge_l1_source_count <= 0
+		    || sh_gate_edge_l1_projection_linear_adjoints_.size()
+		        != expected_projection_adjoint_count)
+			ERROR("SUS2-SH edge L1 linear projection adjoint buffer has inconsistent size");
+	}
+	if (gate_scalar_count == 0 && !has_edge_l1)
 		return;
 	const std::vector<double>* saved_gate_values = active_two_layer_gate_values_;
 	const std::vector<double>* saved_second_gate_values =
@@ -8939,7 +8952,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 				static_cast<size_t>(mu) * gate_scalar_count + q] = weight;
 			has_gate_weight = has_gate_weight || weight != 0.0;
 		}
-	if (!has_gate_weight) {
+	if (!has_gate_weight && !has_edge_l1) {
 		active_two_layer_gate_values_ = saved_gate_values;
 		active_second_layer_gate_values_ = saved_second_gate_values;
 		active_second_layer_gate_adjoints_ = saved_second_gate_adjoints;
@@ -8955,7 +8968,20 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 				has_gate_adjoint = true;
 				break;
 			}
-		if (!has_gate_adjoint)
+		const double* edge_l1_projection_adjoints = nullptr;
+		bool has_edge_l1_projection_adjoint = false;
+		if (has_edge_l1) {
+			edge_l1_projection_adjoints =
+				sh_gate_edge_l1_projection_linear_adjoints_.data()
+				+ static_cast<size_t>(ind) * 3 * edge_l1_projection_stride;
+			for (size_t i = 0; i < 3 * edge_l1_projection_stride; ++i)
+				if (edge_l1_projection_adjoints[i] != 0.0) {
+					has_edge_l1_projection_adjoint = true;
+					break;
+				}
+		}
+		if ((!has_gate_adjoint || !has_gate_weight)
+		    && !has_edge_l1_projection_adjoint)
 			continue;
 
 		const Neighborhood& nbh = neighborhoods[ind];
@@ -8963,62 +8989,153 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 		if (coord_count == 0)
 			continue;
 		CalcTwoLayerGateScalarDers(nbh, sh_gate_scalar_ders_);
-		const size_t expected_der_count =
-			static_cast<size_t>(gate_scalar_count) * coord_count;
-		if (sh_gate_scalar_ders_.size() != expected_der_count)
-			ERROR("SUS2-SH gate scalar derivative buffer has inconsistent size");
+		if (has_gate_adjoint && has_gate_weight) {
+			const size_t expected_der_count =
+				static_cast<size_t>(gate_scalar_count) * coord_count;
+			if (sh_gate_scalar_ders_.size() != expected_der_count)
+				ERROR("SUS2-SH gate scalar derivative buffer has inconsistent size");
 
-		sh_gate_linear_mu_coord_ders_.resize(
-			static_cast<size_t>(radial_func_count) * coord_count);
-		cblas_dgemm(CblasRowMajor,
-		            CblasNoTrans,
-		            CblasNoTrans,
-		            radial_func_count,
-		            coord_count,
-		            gate_scalar_count,
-		            1.0,
-		            sh_gate_linear_weight_matrix_.data(),
-		            gate_scalar_count,
-		            sh_gate_scalar_ders_.data(),
-		            coord_count,
-		            0.0,
-		            sh_gate_linear_mu_coord_ders_.data(),
-		            coord_count);
+			sh_gate_linear_mu_coord_ders_.resize(
+				static_cast<size_t>(radial_func_count) * coord_count);
+			cblas_dgemm(CblasRowMajor,
+			            CblasNoTrans,
+			            CblasNoTrans,
+			            radial_func_count,
+			            coord_count,
+			            gate_scalar_count,
+			            1.0,
+			            sh_gate_linear_weight_matrix_.data(),
+			            gate_scalar_count,
+			            sh_gate_scalar_ders_.data(),
+			            coord_count,
+			            0.0,
+			            sh_gate_linear_mu_coord_ders_.data(),
+			            coord_count);
 
-		sh_gate_linear_component_ders_.resize(
-			static_cast<size_t>(alpha_scalar_moments) * coord_count);
-		cblas_dgemm(CblasRowMajor,
-		            CblasNoTrans,
-		            CblasNoTrans,
-		            alpha_scalar_moments,
-		            coord_count,
-		            radial_func_count,
-		            1.0,
-		            gate_adjoints,
-		            radial_func_count,
-		            sh_gate_linear_mu_coord_ders_.data(),
-		            coord_count,
-		            0.0,
-		            sh_gate_linear_component_ders_.data(),
-		            coord_count);
+			sh_gate_linear_component_ders_.resize(
+				static_cast<size_t>(alpha_scalar_moments) * coord_count);
+			cblas_dgemm(CblasRowMajor,
+			            CblasNoTrans,
+			            CblasNoTrans,
+			            alpha_scalar_moments,
+			            coord_count,
+			            radial_func_count,
+			            1.0,
+			            gate_adjoints,
+			            radial_func_count,
+			            sh_gate_linear_mu_coord_ders_.data(),
+			            coord_count,
+			            0.0,
+			            sh_gate_linear_component_ders_.data(),
+			            coord_count);
 
-		for (int i = 0; i < alpha_scalar_moments; ++i) {
-			const int column = species_count + i;
-			const double* component_ders = sh_gate_linear_component_ders_.data()
-				+ static_cast<size_t>(i) * coord_count;
-			for (int j = 0; j < nbh.count; ++j) {
-				for (int a = 0; a < 3; ++a) {
-					const double component_der = component_ders[3 * j + a];
-					if (component_der == 0.0)
-						continue;
-					if (need_forces) {
-						forces_cmpnts(ind, column, a) += component_der;
-						forces_cmpnts(nbh.inds[j], column, a) -= component_der;
+			for (int i = 0; i < alpha_scalar_moments; ++i) {
+				const int column = species_count + i;
+				const double* component_ders = sh_gate_linear_component_ders_.data()
+					+ static_cast<size_t>(i) * coord_count;
+				for (int j = 0; j < nbh.count; ++j) {
+					for (int a = 0; a < 3; ++a) {
+						const double component_der = component_ders[3 * j + a];
+						if (component_der == 0.0)
+							continue;
+						if (need_forces) {
+							forces_cmpnts(ind, column, a) += component_der;
+							forces_cmpnts(nbh.inds[j], column, a) -= component_der;
+						}
+						if (need_stress)
+							for (int b = 0; b < 3; ++b)
+								stress_cmpnts[column][a][b] -=
+									component_der * nbh.vecs[j][b];
 					}
-					if (need_stress)
-						for (int b = 0; b < 3; ++b)
-							stress_cmpnts[column][a][b] -=
-								component_der * nbh.vecs[j][b];
+				}
+			}
+		}
+
+		if (has_edge_l1_projection_adjoint) {
+			const int moment_stride = alpha_moments_count;
+			const int moment_coord_stride = 3 * moment_stride;
+			const size_t expected_moment_der_count =
+				static_cast<size_t>(nbh.count) * moment_coord_stride;
+			if (sh_gate_moment_ders_.size() != expected_moment_der_count)
+				ERROR("SUS2-SH edge L1 source moment derivative buffer has inconsistent size");
+
+			sh_gate_edge_l1_source_coord_ders_.resize(
+				static_cast<size_t>(edge_l1_source_count) * coord_count);
+			sh_gate_edge_l1_weighted_source_coord_ders_.resize(
+				static_cast<size_t>(radial_func_count) * coord_count);
+			sh_gate_edge_l1_source_component_ders_.resize(
+				static_cast<size_t>(alpha_scalar_moments) * coord_count);
+			const double* edge_l1_weights = TwoLayerGateEdgeL1WeightData();
+
+			for (int m = 0; m < 3; ++m) {
+				for (int source = 0; source < edge_l1_source_count; ++source) {
+					const int source_moment =
+						TwoLayerGateEdgeL1SourceMomentIndex(source) + m;
+					double* source_coord_ders =
+						sh_gate_edge_l1_source_coord_ders_.data()
+						+ static_cast<size_t>(source) * coord_count;
+					for (int j = 0; j < nbh.count; ++j) {
+						const double* moment_ders = sh_gate_moment_ders_.data()
+							+ static_cast<size_t>(j) * moment_coord_stride;
+						for (int a = 0; a < 3; ++a)
+							source_coord_ders[3 * j + a] =
+								moment_ders[a * moment_stride + source_moment];
+					}
+				}
+
+				cblas_dgemm(CblasRowMajor,
+				            CblasNoTrans,
+				            CblasNoTrans,
+				            radial_func_count,
+				            coord_count,
+				            edge_l1_source_count,
+				            1.0,
+				            edge_l1_weights,
+				            edge_l1_source_count,
+				            sh_gate_edge_l1_source_coord_ders_.data(),
+				            coord_count,
+				            0.0,
+				            sh_gate_edge_l1_weighted_source_coord_ders_.data(),
+				            coord_count);
+
+				const double* projection_adjoints =
+					edge_l1_projection_adjoints
+					+ static_cast<size_t>(m) * edge_l1_projection_stride;
+				cblas_dgemm(CblasRowMajor,
+				            CblasNoTrans,
+				            CblasNoTrans,
+				            alpha_scalar_moments,
+				            coord_count,
+				            radial_func_count,
+				            1.0,
+				            projection_adjoints,
+				            radial_func_count,
+				            sh_gate_edge_l1_weighted_source_coord_ders_.data(),
+				            coord_count,
+				            m == 0 ? 0.0 : 1.0,
+				            sh_gate_edge_l1_source_component_ders_.data(),
+				            coord_count);
+			}
+
+			for (int i = 0; i < alpha_scalar_moments; ++i) {
+				const int column = species_count + i;
+				const double* component_ders =
+					sh_gate_edge_l1_source_component_ders_.data()
+					+ static_cast<size_t>(i) * coord_count;
+				for (int j = 0; j < nbh.count; ++j) {
+					for (int a = 0; a < 3; ++a) {
+						const double component_der = component_ders[3 * j + a];
+						if (component_der == 0.0)
+							continue;
+						if (need_forces) {
+							forces_cmpnts(ind, column, a) += component_der;
+							forces_cmpnts(nbh.inds[j], column, a) -= component_der;
+						}
+						if (need_stress)
+							for (int b = 0; b < 3; ++b)
+								stress_cmpnts[column][a][b] -=
+									component_der * nbh.vecs[j][b];
+					}
 				}
 			}
 		}
@@ -9100,6 +9217,14 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 			static_cast<size_t>(cfg.size()) * alpha_scalar_moments
 				* radial_func_count,
 			0.0);
+		if (HasNonzeroTwoLayerGateEdgeL1Weights()) {
+			sh_gate_edge_l1_projection_linear_adjoints_.assign(
+				static_cast<size_t>(cfg.size()) * alpha_scalar_moments
+					* radial_func_count * 3,
+				0.0);
+		} else {
+			sh_gate_edge_l1_projection_linear_adjoints_.clear();
+		}
 	}
 
 		if (TwoLayerResidualEnabled()) {
@@ -9143,7 +9268,13 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 				if (need_gate_linear_chain) {
 					const double profile_gate_adjoints_start =
 						profile_two_layer ? TwoLayerProfileNow() : 0.0;
-					AccumulateSHBasisGateDers(nbh, sh_gate_linear_adjoints_);
+					AccumulateSHBasisGateDers(
+						nbh,
+						ind,
+						need_forces,
+						need_stress,
+						sh_gate_linear_adjoints_,
+						sh_gate_edge_l1_projection_linear_adjoints_);
 					if (profile_two_layer)
 						profile_gate_adjoints_s +=
 							TwoLayerProfileNow() - profile_gate_adjoints_start;
@@ -9224,7 +9355,13 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 			if (need_gate_linear_chain) {
 				const double profile_gate_adjoints_start =
 					profile_two_layer ? TwoLayerProfileNow() : 0.0;
-				AccumulateSHBasisGateDers(nbh, sh_gate_linear_adjoints_);
+				AccumulateSHBasisGateDers(
+					nbh,
+					ind,
+					need_forces,
+					need_stress,
+					sh_gate_linear_adjoints_,
+					sh_gate_edge_l1_projection_linear_adjoints_);
 				if (profile_two_layer)
 					profile_gate_adjoints_s +=
 						TwoLayerProfileNow() - profile_gate_adjoints_start;
