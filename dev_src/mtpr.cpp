@@ -6503,6 +6503,128 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1WeightGradForPair(
 		}
 	}
 
+void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceAdjointsForPair(
+	const Neighborhood& nbh,
+	int neighbor_index,
+	const double* edge_sh_values,
+	const double* gate_adjoint_by_mu,
+	std::vector<double>& out_source_adjoints)
+{
+	if (!HasNonzeroTwoLayerGateEdgeL1Weights()
+	    || active_two_layer_gate_adjoints_ == nullptr
+	    || edge_sh_values == nullptr
+	    || gate_adjoint_by_mu == nullptr
+	    || out_source_adjoints.empty())
+		return;
+	if (neighbor_index < 0 || neighbor_index >= nbh.count)
+		return;
+	const int source_count = TwoLayerGateEdgeL1SourceCount();
+	const int atom_index = nbh.inds[neighbor_index];
+	if (source_count <= 0 || atom_index < 0)
+		return;
+	const size_t atom_stride = static_cast<size_t>(source_count) * 3;
+	if (out_source_adjoints.size() % atom_stride != 0)
+		ERROR("SUS2-SH edge L1 source adjoint cache has inconsistent size");
+	const int atom_count =
+		static_cast<int>(out_source_adjoints.size() / atom_stride);
+	if (atom_index >= atom_count)
+		ERROR("SUS2-SH edge L1 source adjoint atom index is out of range");
+	const size_t expected_transpose_size =
+		static_cast<size_t>(source_count) * radial_func_count;
+	const double* weights_by_source =
+		two_layer_gate_edge_l1_weights_by_source_.size()
+			== expected_transpose_size
+		? two_layer_gate_edge_l1_weights_by_source_.data()
+		: nullptr;
+	const double* weights = TwoLayerGateEdgeL1WeightData();
+	double* atom_adjoints = out_source_adjoints.data()
+		+ static_cast<size_t>(atom_index) * atom_stride;
+	const int y1_indices[3] = {1, 2, 3};
+	for (int source = 0; source < source_count; ++source) {
+		double source_adjoint = 0.0;
+		if (weights_by_source != nullptr) {
+			const double* weight_col = weights_by_source
+				+ static_cast<size_t>(source) * radial_func_count;
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				source_adjoint += gate_adjoint_by_mu[mu] * weight_col[mu];
+		} else {
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				source_adjoint += gate_adjoint_by_mu[mu]
+					* weights[static_cast<size_t>(mu) * source_count + source];
+		}
+		if (source_adjoint == 0.0)
+			continue;
+		double* h_adjoints = atom_adjoints + source * 3;
+		for (int m = 0; m < 3; ++m)
+			h_adjoints[m] += source_adjoint * edge_sh_values[y1_indices[m]];
+	}
+}
+
+void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceCoordAdjointsForPair(
+	const Neighborhood& nbh,
+	int neighbor_index,
+	const double* edge_sh_ders,
+	const double* energy_gate_adjoint_by_mu,
+	const Vector3* edge_der_weight,
+	std::vector<double>& out_source_adjoints)
+{
+	if (!HasNonzeroTwoLayerGateEdgeL1Weights()
+	    || active_two_layer_gate_adjoints_ == nullptr
+	    || edge_sh_ders == nullptr
+	    || energy_gate_adjoint_by_mu == nullptr
+	    || edge_der_weight == nullptr
+	    || out_source_adjoints.empty())
+		return;
+	if (neighbor_index < 0 || neighbor_index >= nbh.count)
+		return;
+	const int source_count = TwoLayerGateEdgeL1SourceCount();
+	const int atom_index = nbh.inds[neighbor_index];
+	if (source_count <= 0 || atom_index < 0)
+		return;
+	const size_t atom_stride = static_cast<size_t>(source_count) * 3;
+	if (out_source_adjoints.size() % atom_stride != 0)
+		ERROR("SUS2-SH edge L1 source coordinate adjoint cache has inconsistent size");
+	const int atom_count =
+		static_cast<int>(out_source_adjoints.size() / atom_stride);
+	if (atom_index >= atom_count)
+		ERROR("SUS2-SH edge L1 source coordinate adjoint atom index is out of range");
+	const size_t expected_transpose_size =
+		static_cast<size_t>(source_count) * radial_func_count;
+	const double* weights_by_source =
+		two_layer_gate_edge_l1_weights_by_source_.size()
+			== expected_transpose_size
+		? two_layer_gate_edge_l1_weights_by_source_.data()
+		: nullptr;
+	const double* weights = TwoLayerGateEdgeL1WeightData();
+	double* atom_adjoints = out_source_adjoints.data()
+		+ static_cast<size_t>(atom_index) * atom_stride;
+	const int y1_indices[3] = {1, 2, 3};
+	for (int source = 0; source < source_count; ++source) {
+		double source_adjoint = 0.0;
+		if (weights_by_source != nullptr) {
+			const double* weight_col = weights_by_source
+				+ static_cast<size_t>(source) * radial_func_count;
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				source_adjoint += energy_gate_adjoint_by_mu[mu] * weight_col[mu];
+		} else {
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				source_adjoint += energy_gate_adjoint_by_mu[mu]
+					* weights[static_cast<size_t>(mu) * source_count + source];
+		}
+		if (source_adjoint == 0.0)
+			continue;
+		double* h_adjoints = atom_adjoints + source * 3;
+		for (int m = 0; m < 3; ++m) {
+			const int dy_index = 3 * y1_indices[m];
+			const double directional_y =
+				(*edge_der_weight)[0] * edge_sh_ders[dy_index]
+				+ (*edge_der_weight)[1] * edge_sh_ders[dy_index + 1]
+				+ (*edge_der_weight)[2] * edge_sh_ders[dy_index + 2];
+			h_adjoints[m] += source_adjoint * directional_y;
+		}
+	}
+}
+
 void MLMTPR::AccumulateTwoLayerGateEdgeL1WeightCoordGradForPair(
 	const Neighborhood& nbh,
 	int neighbor_index,
@@ -7376,6 +7498,18 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 		&& neighborhoods.size() == two_layer_edge_cache_atom_count_
 		&& neighborhoods.size() > 0
 		&& HasTwoLayerEdgePrimitiveCache(0, true, true);
+	const bool track_edge_l1_source =
+		HasNonzeroTwoLayerGateEdgeL1Weights();
+	const int edge_l1_source_count =
+		track_edge_l1_source ? TwoLayerGateEdgeL1SourceCount() : 0;
+	const size_t edge_l1_source_adjoint_size =
+		static_cast<size_t>(cfg.size()) * edge_l1_source_count * 3;
+	std::vector<double> reused_energy_edge_l1_source_adjoints;
+	if (reuse_full_edge_cache && track_edge_l1_source
+	    && two_layer_gate_edge_l1_adjoints_.size()
+	        == edge_l1_source_adjoint_size)
+		reused_energy_edge_l1_source_adjoints =
+			two_layer_gate_edge_l1_adjoints_;
 	two_layer_reuse_full_edge_cache_once_ = false;
 	if (!reuse_full_edge_cache)
 		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true);
@@ -7384,6 +7518,11 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			profile_two_layer ? TwoLayerProfileNow() : 0.0;
 		two_layer_gate_adjoints_.assign(
 			static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
+		if (track_edge_l1_source)
+			two_layer_gate_edge_l1_adjoints_.assign(
+				edge_l1_source_adjoint_size, 0.0);
+		else
+			two_layer_gate_edge_l1_adjoints_.clear();
 		if (multi_layer_gate_enabled_) {
 			if (second_layer_gate_values_.size()
 			    != static_cast<size_t>(cfg.size()) * radial_func_count)
@@ -7484,7 +7623,13 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 		std::vector<double> energy_gate_adjoints;
 		std::vector<double> energy_second_gate_adjoints;
 		std::vector<double> energy_second_gate_param_scratch;
-			if (need_gate_chain_force_weight_grad && TwoLayerGateWeightCount() > 0) {
+		std::vector<double> energy_edge_l1_source_adjoints;
+		std::vector<double> total_edge_l1_source_adjoints;
+		if (need_gate_chain_force_weight_grad && track_edge_l1_source)
+			total_edge_l1_source_adjoints.swap(
+				two_layer_gate_edge_l1_adjoints_);
+			if (need_gate_chain_force_weight_grad
+			    && (TwoLayerGateWeightCount() > 0 || track_edge_l1_source)) {
 			const size_t final_moment_cache_size =
 				static_cast<size_t>(cfg.size()) * alpha_moments_count;
 			const bool reuse_forward_final_moment_cache =
@@ -7495,10 +7640,16 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				&& two_layer_final_moment_ders_cache_.size()
 					== final_moment_cache_size
 				&& two_layer_forward_energy_gate_adjoints_cache_.size()
-					== static_cast<size_t>(cfg.size()) * radial_func_count;
+					== static_cast<size_t>(cfg.size()) * radial_func_count
+				&& (!track_edge_l1_source
+				    || reused_energy_edge_l1_source_adjoints.size()
+				        == edge_l1_source_adjoint_size);
 			if (reuse_forward_final_moment_cache) {
 				energy_gate_adjoints =
 					two_layer_forward_energy_gate_adjoints_cache_;
+				if (track_edge_l1_source)
+					energy_edge_l1_source_adjoints =
+						reused_energy_edge_l1_source_adjoints;
 			} else {
 				energy_gate_adjoints.assign(
 					static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
@@ -7508,6 +7659,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					final_moment_cache_size, 0.0);
 				active_two_layer_gate_values_ = &two_layer_gate_values_;
 				active_two_layer_gate_adjoints_ = &energy_gate_adjoints;
+				if (track_edge_l1_source)
+					two_layer_gate_edge_l1_adjoints_.assign(
+						edge_l1_source_adjoint_size, 0.0);
 				for (int ind = 0; ind < cfg.size(); ++ind) {
 					active_two_layer_edge_cache_atom_index_ = ind;
 					CalcSHSiteEnergyDers(neighborhoods[ind]);
@@ -7523,11 +7677,17 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				active_two_layer_edge_cache_atom_index_ = -1;
 				active_two_layer_gate_values_ = nullptr;
 				active_two_layer_gate_adjoints_ = nullptr;
+				if (track_edge_l1_source)
+					energy_edge_l1_source_adjoints.swap(
+						two_layer_gate_edge_l1_adjoints_);
 			}
 		} else {
 			two_layer_final_moment_values_cache_.clear();
 			two_layer_final_moment_ders_cache_.clear();
 		}
+		if (need_gate_chain_force_weight_grad && track_edge_l1_source)
+			two_layer_gate_edge_l1_adjoints_.swap(
+				total_edge_l1_source_adjoints);
 		two_layer_forward_final_moment_cache_ready_ = false;
 		const double profile_after_energy_adjoint =
 			profile_two_layer ? TwoLayerProfileNow() : 0.0;
@@ -7659,6 +7819,19 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					continue;
 				has_energy_gate_adjoint = true;
 			}
+			bool has_energy_edge_l1_source_adjoint = false;
+			if (!energy_edge_l1_source_adjoints.empty()) {
+				const double* source_adjoints =
+					energy_edge_l1_source_adjoints.data()
+					+ static_cast<size_t>(ind) * edge_l1_source_count * 3;
+				for (int source_component = 0;
+				     source_component < edge_l1_source_count * 3;
+				     ++source_component)
+					if (source_adjoints[source_component] != 0.0) {
+						has_energy_edge_l1_source_adjoint = true;
+						break;
+					}
+			}
 			const Neighborhood& nbh = neighborhoods[ind];
 			gate_chain_weights.resize(nbh.count);
 			FillWithZero(gate_chain_weights);
@@ -7683,7 +7856,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				continue;
 
 			std::vector<double>* gate_moment_tangents_ptr =
-				((has_energy_gate_adjoint || TwoLayerGateReadoutEnabled())
+				((has_energy_gate_adjoint
+				  || has_energy_edge_l1_source_adjoint
+				  || TwoLayerGateReadoutEnabled())
 				 && !gate_directional_moment_tangent_cache.empty())
 					? &gate_moment_tangents
 					: nullptr;
@@ -8283,9 +8458,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 							saved_second_adjoint_for_energy;
 					}
 				}
-						AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
-							nbh,
-							out_grads_accumulator,
+					AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+						nbh,
+						out_grads_accumulator,
 						scalar_gate_seed_values,
 							gate_der_weights_ptr,
 							ind,
@@ -8296,6 +8471,88 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 							: &second_gate_chain_directional_values);
 					}
 				}
+			if (track_edge_l1_source)
+				AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
+					cfg, neighborhoods, out_grads_accumulator);
+			if (need_gate_chain_force_weight_grad
+			    && track_edge_l1_source
+			    && energy_edge_l1_source_adjoints.size()
+			        == edge_l1_source_adjoint_size) {
+				std::vector<Vector3> edge_l1_gate_der_weights;
+				std::vector<double> zero_scalar_seeds(
+					TwoLayerGateScalarCount(), 0.0);
+				std::vector<double> raw_energy_moment_seeds(
+					alpha_moments_count, 0.0);
+				for (int ind = 0; ind < cfg.size(); ++ind) {
+					const double* source_adjoints =
+						energy_edge_l1_source_adjoints.data()
+						+ static_cast<size_t>(ind) * edge_l1_source_count * 3;
+					bool has_source_adjoint = false;
+					for (int source_component = 0;
+					     source_component < edge_l1_source_count * 3;
+					     ++source_component)
+						if (source_adjoints[source_component] != 0.0) {
+							has_source_adjoint = true;
+							break;
+						}
+					if (!has_source_adjoint)
+						continue;
+
+					const Neighborhood& nbh = neighborhoods[ind];
+					edge_l1_gate_der_weights.resize(nbh.count);
+					FillWithZero(edge_l1_gate_der_weights);
+					bool has_der_weight = false;
+					for (int j = 0; j < nbh.count; ++j) {
+						edge_l1_gate_der_weights[j] += frc_weights[ind];
+						edge_l1_gate_der_weights[j] -=
+							frc_weights[nbh.inds[j]];
+					}
+					for (int j = 0; j < nbh.count; ++j)
+						for (int a = 0; a < 3; ++a)
+							for (int b = 0; b < 3; ++b)
+								edge_l1_gate_der_weights[j][a] +=
+									str_weights[a][b] * nbh.vecs[j][b];
+					for (int j = 0; j < nbh.count; ++j)
+						if (edge_l1_gate_der_weights[j].NormSq() != 0.0) {
+							has_der_weight = true;
+							break;
+						}
+					if (!has_der_weight)
+						continue;
+					if (ind >= static_cast<int>(
+					        gate_directional_moment_tangent_valid.size())
+					    || !gate_directional_moment_tangent_valid[ind])
+						ERROR("SUS2-SH edge L1 source directional moment cache is unavailable");
+
+					std::fill(raw_energy_moment_seeds.begin(),
+					          raw_energy_moment_seeds.end(),
+					          0.0);
+					for (int source = 0; source < edge_l1_source_count; ++source) {
+						const int base =
+							TwoLayerGateEdgeL1SourceMomentIndex(source);
+						if (base < 0 || base + 2 >= alpha_moments_count)
+							ERROR("SUS2-SH edge L1 source energy moment index is out of range");
+						for (int m = 0; m < 3; ++m)
+							raw_energy_moment_seeds[base + m] +=
+								source_adjoints[source * 3 + m];
+					}
+					const double* gate_moment_tangents =
+						gate_directional_moment_tangent_cache.data()
+						+ static_cast<size_t>(ind) * alpha_moments_count;
+					AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
+						nbh,
+						out_grads_accumulator,
+						zero_scalar_seeds.data(),
+						edge_l1_gate_der_weights.data(),
+						ind,
+						gate_moment_tangents,
+						nullptr,
+						second_gate_chain_directional_values.empty()
+							? nullptr
+							: &second_gate_chain_directional_values,
+						raw_energy_moment_seeds.data());
+				}
+			}
 				if (multi_layer_gate_enabled_)
 					AccumulateSecondLayerGateValueParamGradFromAdjoints(
 						cfg,
@@ -8359,6 +8616,15 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 		PrepareTwoLayerGateValues(cfg, neighborhoods);
 		two_layer_gate_adjoints_.assign(
 			static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
+		const bool track_energy_edge_l1_source =
+			HasNonzeroTwoLayerGateEdgeL1Weights();
+		if (track_energy_edge_l1_source)
+			two_layer_gate_edge_l1_adjoints_.assign(
+				static_cast<size_t>(cfg.size())
+					* TwoLayerGateEdgeL1SourceCount() * 3,
+				0.0);
+		else
+			two_layer_gate_edge_l1_adjoints_.clear();
 		if (multi_layer_gate_enabled_) {
 			if (second_layer_gate_values_.size()
 			    != static_cast<size_t>(cfg.size()) * radial_func_count)
@@ -8654,8 +8920,11 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 					nullptr,
 					nullptr);
 			}
-		}
-		if (multi_layer_gate_enabled_)
+			}
+			if (track_energy_edge_l1_source)
+				AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
+					cfg, neighborhoods, out_grads_accumulator);
+			if (multi_layer_gate_enabled_)
 			AccumulateSecondLayerGateValueParamGradFromAdjoints(
 				cfg, neighborhoods, out_grads_accumulator);
 

@@ -8,6 +8,7 @@ mkdir -p "$tmp_dir"
 model="$tmp_dir/edge_l1_grad.mtp"
 cfg="$tmp_dir/random_non_symmetric.cfg"
 range_file="$tmp_dir/edge_l1_range.txt"
+source_range_file="$tmp_dir/edge_l1_source_ranges.txt"
 
 ./bin/mlp-sus2 init-sh "$model" \
   --species-count=2 \
@@ -21,11 +22,11 @@ range_file="$tmp_dir/edge_l1_range.txt"
   --two-layer-gate \
   --two-layer-gate-edge-l1 >/dev/null
 
-python3 - "$model" "$range_file" "$cfg" <<'PY'
+python3 - "$model" "$range_file" "$source_range_file" "$cfg" <<'PY'
 import re
 import sys
 
-model_path, range_path, cfg_path = sys.argv[1:4]
+model_path, range_path, source_range_path, cfg_path = sys.argv[1:5]
 text = open(model_path).read()
 
 def scalar_int(name):
@@ -33,7 +34,10 @@ def scalar_int(name):
 
 def replace_block(name, values, body):
     line = f"{name} = " + "{" + ", ".join(f"{v:.15e}" for v in values) + "}"
-    return re.sub(rf"{name} = \{{[^}}]*\}}", line, body, flags=re.S)
+    pattern = rf"{name} = \{{[^}}]*\}}"
+    if re.search(pattern, body, flags=re.S):
+        return re.sub(pattern, line, body, flags=re.S)
+    return body.rstrip() + "\n" + line + "\n"
 
 species = scalar_int("species_count")
 radial_count = scalar_int("radial_funcs_count")
@@ -69,6 +73,16 @@ edge_begin = (
 )
 edge_end = edge_begin + edge_l1_count
 open(range_path, "w").write(f"{edge_begin} {edge_end}\n")
+shared_begin = species
+shared_end = species + 2 * species * species * radial_count
+gate_radial_begin = base_nonlinear
+gate_radial_end = gate_radial_begin + gate_radial_count
+gate_type_begin = gate_radial_end + gate_additive_count
+gate_type_end = gate_type_begin + gate_type_count
+with open(source_range_path, "w") as out:
+    out.write(f"shared_scaling {shared_begin} {shared_end}\n")
+    out.write(f"gate_radial {gate_radial_begin} {gate_radial_end}\n")
+    out.write(f"gate_type {gate_type_begin} {gate_type_end}\n")
 
 atoms = [
     (1, 0, 1.13, 1.72, 1.41, 0.03, -0.02, 0.01),
@@ -100,6 +114,44 @@ PY
 
 read -r edge_begin edge_end < "$range_file"
 
+run_direction_check() {
+  local block=$1
+  local weights=$2
+  local begin=$3
+  local end=$4
+  shift 4
+  local output
+  echo "edge-L1 gradient check block=$block weights=$weights range=[$begin,$end)"
+  output=$("$@")
+  printf '%s\n' "$output"
+  local summary
+  summary=$(printf '%s\n' "$output" | grep 'checked_coeffs=' | tail -n 1)
+  python3 - "$((end - begin))" "$summary" <<'PY'
+import math
+import re
+import sys
+
+expected = int(sys.argv[1])
+line = sys.argv[2]
+
+def field(name):
+    match = re.search(rf"(?:^| ){name}=([^ ]+)", line)
+    if match is None:
+        raise SystemExit(f"missing {name} in checker output: {line}")
+    return match.group(1)
+
+checked = int(field("checked_coeffs"))
+analytic = float(field("analytic_directional"))
+finite_difference = float(field("finite_difference"))
+if checked != expected:
+    raise SystemExit(f"expected {expected} checked coefficients, got {checked}")
+if not math.isfinite(analytic) or not math.isfinite(finite_difference):
+    raise SystemExit("directional derivative is not finite")
+if max(abs(analytic), abs(finite_difference)) <= 1.0e-14:
+    raise SystemExit("directional derivative is numerically zero; regression is vacuous")
+PY
+}
+
 for weights in E F S EFS; do
   case "$weights" in
     E) ew=1; fw=0; sw=0 ;;
@@ -107,7 +159,8 @@ for weights in E F S EFS; do
     S) ew=0; fw=0; sw=1 ;;
     EFS) ew=1; fw=1; sw=1 ;;
   esac
-  ./bin/mlp-sus2 check-loss-gradient-direction-dev "$model" "$cfg" \
+  run_direction_check edge_l1_W "$weights" "$edge_begin" "$edge_end" \
+    ./bin/mlp-sus2 check-loss-gradient-direction-dev "$model" "$cfg" \
     --max-configs=1 \
     --energy-weight="$ew" \
     --force-weight="$fw" \
@@ -124,3 +177,34 @@ for weights in E F S EFS; do
     --coeff-start="$edge_begin" \
     --coeff-end="$edge_end"
 done
+
+# The edge projection also depends on the source atom's first-gate moments.
+# Check those upstream parameters independently; the edge-W-only checks above
+# cannot detect a missing source-H chain rule.
+while read -r block begin end; do
+  for weights in E F S EFS; do
+    case "$weights" in
+      E) ew=1; fw=0; sw=0 ;;
+      F) ew=0; fw=1; sw=0 ;;
+      S) ew=0; fw=0; sw=1 ;;
+      EFS) ew=1; fw=1; sw=1 ;;
+    esac
+    run_direction_check "$block" "$weights" "$begin" "$end" \
+      ./bin/mlp-sus2 check-loss-gradient-direction-dev "$model" "$cfg" \
+      --max-configs=1 \
+      --energy-weight="$ew" \
+      --force-weight="$fw" \
+      --stress-weight="$sw" \
+      --radial-smooth=0 \
+      --scalar-head-l2=0 \
+      --gate-scalar-l2=0 \
+      --gate-mix-l2=0 \
+      --gate-full-l2=0 \
+      --gate-x-l2=0 \
+      --displacement=1e-4 \
+      --abs-tolerance=1e-10 \
+      --rel-tolerance=1e-4 \
+      --coeff-start="$begin" \
+      --coeff-end="$end"
+  done
+done < "$source_range_file"

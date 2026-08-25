@@ -313,11 +313,12 @@ protected:
 			const Neighborhood& nbh,
 			std::vector<double>& out_grad_accumulator,
 		const double* gate_scalar_seeds,
-		const Vector3* gate_der_weights,
-		int cache_atom_index,
-		const double* gate_moment_tangents,
-		const double* energy_scalar_seeds,
-		const std::vector<double>* second_gate_directional_values = nullptr);
+			const Vector3* gate_der_weights,
+			int cache_atom_index,
+			const double* gate_moment_tangents,
+			const double* energy_scalar_seeds,
+			const std::vector<double>* second_gate_directional_values = nullptr,
+			const double* raw_energy_moment_seeds = nullptr);
 		void AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
 			const Neighborhood& nbh,
 			std::vector<double>& out_grad_accumulator,
@@ -726,6 +727,19 @@ public:
 		const double* edge_sh_values,
 		const double* gate_adjoint_by_mu,
 		std::vector<double>& out_grad_accumulator);
+	void AccumulateTwoLayerGateEdgeL1SourceAdjointsForPair(
+		const Neighborhood& nbh,
+		int neighbor_index,
+		const double* edge_sh_values,
+		const double* gate_adjoint_by_mu,
+		std::vector<double>& out_source_adjoints);
+	void AccumulateTwoLayerGateEdgeL1SourceCoordAdjointsForPair(
+		const Neighborhood& nbh,
+		int neighbor_index,
+		const double* edge_sh_ders,
+		const double* energy_gate_adjoint_by_mu,
+		const Vector3* edge_der_weight,
+		std::vector<double>& out_source_adjoints);
 	void AccumulateTwoLayerGateEdgeL1WeightCoordGradForPair(
 		const Neighborhood& nbh,
 		int neighbor_index,

@@ -32,7 +32,10 @@ def scalar_int(name):
 
 def replace_block(name, values, body):
     line = f"{name} = " + "{" + ", ".join(f"{v:.15e}" for v in values) + "}"
-    return re.sub(rf"{name} = \{{[^}}]*\}}", line, body, flags=re.S)
+    pattern = rf"{name} = \{{[^}}]*\}}"
+    if re.search(pattern, body, flags=re.S):
+        return re.sub(pattern, line, body, flags=re.S)
+    return body.rstrip() + "\n" + line + "\n"
 
 species = scalar_int("species_count")
 alpha = scalar_int("alpha_scalar_moments")
@@ -74,9 +77,29 @@ with open(cfg_path, "w") as out:
     out.write("END_CFG\n")
 PY
 
-./bin/mlp-sus2 check-efs-fd-dev "$model" "$cfg" \
+output=$(./bin/mlp-sus2 check-efs-fd-dev "$model" "$cfg" \
   --max-configs=1 \
   --max-atoms=2 \
   --displacement=1e-4 \
   --abs-tolerance=1e-6 \
-  --rel-tolerance=1e-4
+  --rel-tolerance=1e-4)
+printf '%s\n' "$output"
+
+summary=$(printf '%s\n' "$output" | grep 'force_components=' | tail -n 1)
+python3 - "$summary" <<'PY'
+import re
+import sys
+
+line = sys.argv[1]
+
+def count(name):
+    match = re.search(rf"(?:^| ){name}=([0-9]+)", line)
+    if match is None:
+        raise SystemExit(f"missing {name} in checker output: {line}")
+    return int(match.group(1))
+
+if count("force_components") <= 0:
+    raise SystemExit("edge-L1 coordinate regression checked no force components")
+if count("stress_components") <= 0:
+    raise SystemExit("edge-L1 coordinate regression checked no stress components")
+PY

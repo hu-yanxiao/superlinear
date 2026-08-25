@@ -7230,7 +7230,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	int cache_atom_index,
 	const double* gate_moment_tangents,
 	const double* energy_scalar_seeds,
-	const std::vector<double>* second_gate_directional_values)
+	const std::vector<double>* second_gate_directional_values,
+	const double* raw_energy_moment_seeds)
 {
 	if (gate_scalar_seeds == nullptr)
 		ERROR("SUS2-SH two-layer gate scalar seeds are missing");
@@ -7254,6 +7255,12 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		if (energy_scalar_seeds != nullptr && energy_scalar_seeds[q] != 0.0)
 			has_energy_seed = true;
 	}
+	if (raw_energy_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			if (raw_energy_moment_seeds[moment] != 0.0) {
+				has_energy_seed = true;
+				break;
+			}
 
 	bool has_der_weights = false;
 	if (has_energy_seed && gate_der_weights != nullptr) {
@@ -7311,6 +7318,13 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		if (has_der_weights && energy_adjoint != 0.0)
 			sh_gate_energy_ders_wrt_moments_[moment] += energy_adjoint;
 	}
+	// This optional raw seed path is reserved for the edge-L1 source l=1
+	// moment triplets.  It reuses the same reverse-over-forward machinery as
+	// the scalar gate HVP without first projecting through a scalar readout.
+	if (has_der_weights && raw_energy_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			sh_gate_energy_ders_wrt_moments_[moment] +=
+				raw_energy_moment_seeds[moment];
 
 	for (int p = static_cast<int>(two_layer_gate_required_product_indices_.size()) - 1;
 	     p >= 0; --p) {
@@ -9471,7 +9485,8 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 					if (center_gate_adjoints != nullptr)
 						center_gate_adjoints[mu] += center_gate_adjoint_by_mu[mu];
 				}
-						if (has_nonzero_edge_l1_weights
+						if (active_gate_adjoints_data != nullptr
+						    && has_nonzero_edge_l1_weights
 						    && !two_layer_gate_edge_l1_adjoints_.empty()) {
 							const int source_count = edge_l1_source_count;
 					const size_t atom_count =
@@ -10438,6 +10453,9 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 			AccumulateTwoLayerGateEdgeL1WeightGradForPair(
 				nbh, j, cached_sh_values, gate_adjoint_by_mu.data(),
 				out_grad_accumulator);
+			AccumulateTwoLayerGateEdgeL1SourceAdjointsForPair(
+				nbh, j, cached_sh_values, gate_adjoint_by_mu.data(),
+				two_layer_gate_edge_l1_adjoints_);
 		}
 }
 
@@ -11161,6 +11179,9 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 						AccumulateTwoLayerGateEdgeL1WeightGradForPair(
 							nbh, j, sh_values_use, gate_adjoint_by_mu.data(),
 							out_grad_accumulator);
+						AccumulateTwoLayerGateEdgeL1SourceAdjointsForPair(
+							nbh, j, sh_values_use, gate_adjoint_by_mu.data(),
+							two_layer_gate_edge_l1_adjoints_);
 						if (need_edge_l1_coord_weight_grad)
 							AccumulateTwoLayerGateEdgeL1WeightCoordGradForPair(
 								nbh,
@@ -11170,6 +11191,14 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 								two_layer_gate_edge_l1_energy_adjoint_buffer_.data(),
 								&se_ders_weights[j],
 								out_grad_accumulator);
+						if (need_edge_l1_coord_weight_grad)
+							AccumulateTwoLayerGateEdgeL1SourceCoordAdjointsForPair(
+								nbh,
+								j,
+								sh_ders_use,
+								two_layer_gate_edge_l1_energy_adjoint_buffer_.data(),
+								&se_ders_weights[j],
+								two_layer_gate_edge_l1_adjoints_);
 						}
 		if (profile_accum) {
 			const double profile_end = SHAccumProfileNow();
