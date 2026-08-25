@@ -1038,6 +1038,8 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 		ERROR("--two-layer-gate can only upgrade a SUS2-SH model");
 	if (two_layer_gate_enabled_)
 		ERROR("SUS2-SH model is already initialized with two-layer gate metadata");
+	if (OuterKRankEnabled())
+		ERROR("Adding a gate to an existing outer-ranked model is not supported; initialize a new model with --two-layer-gate and --outer-k-rank together");
 	if (p_RadialBasis == nullptr)
 		ERROR("SUS2-SH gate upgrade requires an initialized radial basis");
 	int selected_gate_body_order = gate_body_order;
@@ -1121,14 +1123,14 @@ void MLMTPR::UpgradeTwoLayerGateToEdgeL1()
 {
 	if (!is_sh_potential_)
 		ERROR("--two-layer-gate-edge-l1 can only upgrade a SUS2-SH model");
-	if (outer_k_rank1_enabled_)
-		ERROR("--two-layer-gate-edge-l1 is not compatible with --outer-k-rank1");
 	if (!two_layer_gate_enabled_)
 		ERROR("--two-layer-gate-edge-l1 requires a two-layer gate model or --two-layer-gate");
 	if (two_layer_gate_readout_enabled_)
 		ERROR("--two-layer-gate-edge-l1 is not compatible with --two-layer-gate-readout");
 	if (two_layer_gate_edge_l1_enabled_)
 		return;
+	if (OuterKRankEnabled() || TwoLayerGateKRankEnabled())
+		ERROR("Adding edge-L1 to an existing ranked model is not supported; initialize a new model with --two-layer-gate-edge-l1 and the requested rank options");
 	if (sh_l_max_ < 1)
 		ERROR("--two-layer-gate-edge-l1 requires --l-max >= 1");
 	if (two_layer_gate_site_mode_ != "neighbor")
@@ -2216,6 +2218,8 @@ void MLMTPR::BuildTwoLayerGateEdgeL1Sources()
 		ERROR("SUS2-SH edge L1 gate first version supports neighbor site mode only");
 	if (sh_k_max_ <= 0)
 		ERROR("SUS2-SH edge L1 gate requires positive sh_k_max");
+	if (TwoLayerGateKRankEnabled())
+		ERROR("SUS2-SH gate-ranked edge L1 sources require explicit source-moment metadata");
 	for (int k = 0; k < sh_k_max_; ++k) {
 		const int mu = k * (sh_l_max_ + 1) + 1;
 		if (mu < 0 || mu >= radial_func_count)
@@ -4612,6 +4616,8 @@ void MLMTPR::Load(const string& filename)
 						tmpstr == "two_layer_gate_edge_l1_source_mu_count";
 					if (!has_full_l1_sources && !has_legacy_raw_sources)
 						ERROR("SUS2-SH edge L1 gate is missing source count metadata");
+					if (has_legacy_raw_sources && TwoLayerGateKRankEnabled())
+						ERROR("SUS2-SH gate-ranked edge L1 models require full source-moment metadata");
 					ifs.ignore(2);
 					int edge_l1_source_count = 0;
 					ifs >> edge_l1_source_count;
@@ -4650,6 +4656,13 @@ void MLMTPR::Load(const string& filename)
 						for (int base : loaded_source_indices) {
 							if (base < 0 || base + 2 >= alpha_moments_count)
 								ERROR("SUS2-SH edge L1 gate source moment index is out of range");
+							if (TwoLayerGateKRankEnabled()
+							    && (base < two_layer_gate_k_rank_basic_begin_
+							        || base + 2 >= outer_k_rank1_basic_begin_))
+								ERROR("SUS2-SH ranked edge L1 source moment must belong to the gate K-rank graph");
+							if (!TwoLayerGateKRankEnabled() && OuterKRankEnabled()
+							    && base + 2 >= outer_k_rank1_basic_begin_)
+								ERROR("SUS2-SH outer-ranked edge L1 source moment must belong to the preserved raw gate graph");
 							two_layer_gate_edge_l1_source_moment_indices_.push_back(base);
 						}
 					} else {
@@ -4684,8 +4697,8 @@ void MLMTPR::Load(const string& filename)
 					ERROR("SUS2-SH mu-body-order gate body order is out of range");
 				BuildTwoLayerGateBodyOrderBuckets();
 			if (outer_k_rank1_enabled_) {
-				if (two_layer_gate_readout_enabled_ || two_layer_gate_edge_l1_enabled_)
-					ERROR("SUS2-SH outer K-rank1 first version does not support gate readout or edge-L1");
+				if (two_layer_gate_readout_enabled_)
+					ERROR("SUS2-SH outer K-rank1 does not support gate readout");
 				if (tmpstr == "multi_layer_gate_enabled")
 					ERROR("SUS2-SH outer K-rank1 first version supports one gate only");
 			}
@@ -4881,8 +4894,6 @@ void MLMTPR::Load(const string& filename)
 		}
 		}
 
-		if (outer_k_rank1_enabled_ && !two_layer_gate_enabled_)
-			ERROR("SUS2-SH outer K-rank1 requires a two-layer gate");
 		if (OuterKRankEnabled() && outer_k_rank_ == 1) {
 			// A rank-1 K contraction has no independent matrix degree of
 			// freedom: W(l,k) multiplies exactly one freely trainable radial
@@ -4891,7 +4902,7 @@ void MLMTPR::Load(const string& filename)
 			// A gate that reuses the base radial rows would otherwise change
 			// under this transformation; current K-rank models carry their own
 			// gate radial block, so reject unsupported legacy layouts explicitly.
-			if (!TwoLayerGateUsesSharedRadial())
+			if (two_layer_gate_enabled_ && !TwoLayerGateUsesSharedRadial())
 				ERROR("SUS2-SH rank-1 outer K direct-radial migration requires an independent gate radial block");
 			AbsorbOuterKRank1WeightsIntoRadialCoeffs();
 		}

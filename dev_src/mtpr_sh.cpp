@@ -4563,6 +4563,10 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 			site_energy_ders_wrt_moments_[product.right] +=
 				product.coeff * moment_vals[product.left] * adj_target;
 		}
+		// Edge-L1 sources live in the contracted gate graph when gate K-rank is
+		// enabled.  Product reverse reaches its contracted primitives; apply the
+		// transpose contraction before consuming raw radial/SH basic adjoints.
+		BackpropTwoLayerGateKRankAdjoints(site_energy_ders_wrt_moments_);
 
 		active_basic_adjoints.clear();
 		active_basic_mu_indices.clear();
@@ -5660,6 +5664,15 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				product.coeff * moment_vals[product.right] * adj_target;
 			grad_dloss_dmom_[product.right] +=
 				product.coeff * moment_vals[product.left] * adj_target;
+		}
+		if (TwoLayerGateKRankEnabled()) {
+			// This path carries direct loss adjoints of the edge-L1 source tensors.
+			// Accumulate dL/dW_g while raw moment values are still available, then
+			// map the source adjoints back to the raw K channels for radial/type/scaling
+			// parameter gradients below.
+			AccumulateTwoLayerGateKRankWeightGrad(
+				out_grad_accumulator, grad_dloss_dmom_, nullptr, nullptr);
+			BackpropTwoLayerGateKRankAdjoints(grad_dloss_dmom_);
 		}
 
 		for (int j = 0; j < nbh.count; ++j) {

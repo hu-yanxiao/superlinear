@@ -2152,16 +2152,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--two-layer-gate-k-rank must match the loaded model; changing rank requires init-sh/inline initialization");
 	if (mtpr.OuterKRankEnabled()
 	    && (requested_two_layer_gate_readout
-	        || requested_two_layer_gate_edge_l1
 	        || requested_multi_layer_gate
 	        || requested_two_layer_residual))
-		ERROR("--outer-k-rank is not compatible with readout, edge-L1, multi-layer gate, or residual options");
+		ERROR("--outer-k-rank is not compatible with readout, multi-layer gate, or residual options");
 	if (mtpr.TwoLayerGateKRankEnabled()
 	    && (requested_two_layer_gate_readout
-	        || requested_two_layer_gate_edge_l1
 	        || requested_multi_layer_gate
 	        || requested_two_layer_residual))
-		ERROR("--two-layer-gate-k-rank is not compatible with readout, edge-L1, multi-layer gate, or residual options");
+		ERROR("--two-layer-gate-k-rank is not compatible with readout, multi-layer gate, or residual options");
 	if ((custom_second_layer_gate_mode
 	     || custom_second_layer_gate_factor_pruning
 	     || requested_second_layer_gate_body_order > 0)

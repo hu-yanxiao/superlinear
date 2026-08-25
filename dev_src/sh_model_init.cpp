@@ -982,7 +982,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const std::string two_layer_gate_site_mode =
 		StringOpt(opts, "two-layer-gate-site-mode", "neighbor");
 	const bool write_scalar_info =
-		HasOpt(opts, "write-sh-scalar-info") || two_layer_gate || multi_layer_gate;
+		HasOpt(opts, "write-sh-scalar-info") || two_layer_gate
+		|| multi_layer_gate || outer_k_rank_enabled;
 	std::ostringstream default_name;
 	default_name << "sus2sh_l" << lmax << "k" << kmax << "_b" << body_order;
 	const std::string name = StringOpt(opts, "potential-name", default_name.str());
@@ -1001,8 +1002,6 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--outer-k-rank must be in [1, --k-max] when enabled.");
 	if (two_layer_gate_k_rank < 0 || two_layer_gate_k_rank > kmax)
 		ERROR("--two-layer-gate-k-rank must be in [1, --k-max] when enabled.");
-	if (outer_k_rank_enabled && !HasOpt(opts, "two-layer-gate"))
-		ERROR("--outer-k-rank requires an explicit one-layer --two-layer-gate model.");
 	if (two_layer_gate_k_rank_enabled && !HasOpt(opts, "two-layer-gate"))
 		ERROR("--two-layer-gate-k-rank requires an explicit --two-layer-gate model.");
 	if (two_layer_gate_k_rank_enabled && !outer_k_rank_enabled)
@@ -1079,12 +1078,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--outer-k-rank is not compatible with --two-layer-residual.");
 	if (outer_k_rank_enabled && multi_layer_gate)
 		ERROR("--outer-k-rank currently supports one gate only.");
-	if (outer_k_rank_enabled && two_layer_gate_edge_l1)
-		ERROR("--outer-k-rank currently does not include edge-L1.");
 	if (two_layer_gate_k_rank_enabled
 	    && (two_layer_gate_readout || two_layer_residual
-	        || multi_layer_gate || two_layer_gate_edge_l1))
-		ERROR("--two-layer-gate-k-rank is not compatible with readout, residual, multi-layer gate, or edge-L1.");
+	        || multi_layer_gate))
+		ERROR("--two-layer-gate-k-rank is not compatible with readout, residual, or multi-layer gate.");
 	if (!IsSupportedSHRadialBasis(rbasis))
 		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
@@ -1094,7 +1091,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	graph.Build();
 	if (outer_k_rank_enabled || two_layer_gate_k_rank_enabled)
 		graph.AddAllBasics();
-	if (!two_layer_gate_k_rank_enabled)
+	// A gate-free outer-rank model needs only the raw SH primitives before the
+	// K contraction.  Preserve the full raw product graph only when it is the
+	// energy graph, or when an unranked gate (including edge-L1 sources) uses it.
+	if (!outer_k_rank_enabled
+	    || (two_layer_gate && !two_layer_gate_k_rank_enabled))
 		graph.AddScalars(body_order, body_lmax);
 	SHGraphBuilder gate_rank_graph(
 		lmax, std::max(1, two_layer_gate_k_rank),
@@ -1102,7 +1103,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_k_rank_enabled) {
 		gate_rank_graph.Build();
 		gate_rank_graph.AddAllBasics();
-		gate_rank_graph.AddScalars(two_layer_gate_body_order, body_lmax);
+		gate_rank_graph.AddScalars(
+			two_layer_gate_edge_l1 ? body_order : two_layer_gate_body_order,
+			body_lmax);
 		if (gate_rank_graph.basic_.size()
 		    != static_cast<size_t>(
 			   two_layer_gate_k_rank * (lmax + 1) * (lmax + 1)))
@@ -1310,11 +1313,21 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		std::vector<int> gate_body_counts;
 		std::vector<int> gate_scalar_indices;
 		if (two_layer_gate_k_rank_enabled) {
-			gate_body_counts.assign(two_layer_gate_body_order + 1, 0);
-			gate_scalar_indices.resize(gate_rank_graph.scalars_.size());
-			for (int q = 0; q < static_cast<int>(gate_scalar_indices.size()); ++q) {
-				gate_scalar_indices[q] = q;
-				++gate_body_counts[gate_rank_graph.scalar_infos_[q].body_order];
+			if (two_layer_gate_edge_l1) {
+				gate_scalar_indices = gate_rank_graph.ScalarIndices(
+					two_layer_gate_body_order,
+					two_layer_gate_factor_pruning,
+					gate_body_counts);
+				for (int q = 0; q < static_cast<int>(gate_scalar_indices.size()); ++q)
+					if (gate_scalar_indices[q] != q)
+						ERROR("--two-layer-gate-k-rank edge-L1 requires canonical gate scalar ordinals.");
+			} else {
+				gate_body_counts.assign(two_layer_gate_body_order + 1, 0);
+				gate_scalar_indices.resize(gate_rank_graph.scalars_.size());
+				for (int q = 0; q < static_cast<int>(gate_scalar_indices.size()); ++q) {
+					gate_scalar_indices[q] = q;
+					++gate_body_counts[gate_rank_graph.scalar_infos_[q].body_order];
+				}
 			}
 		} else {
 			gate_scalar_indices = graph.ScalarIndices(
@@ -1542,8 +1555,13 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				}
 			}
 			if (two_layer_gate_edge_l1) {
-				const std::vector<int> edge_l1_source_moment_indices =
-					graph.L1SourceMomentBases();
+				std::vector<int> edge_l1_source_moment_indices =
+					two_layer_gate_k_rank_enabled
+						? gate_rank_graph.L1SourceMomentBases()
+						: graph.L1SourceMomentBases();
+				if (two_layer_gate_k_rank_enabled)
+					for (int& base : edge_l1_source_moment_indices)
+						base += gate_rank_node_offset;
 				const int edge_l1_source_count =
 					static_cast<int>(edge_l1_source_moment_indices.size());
 				if (edge_l1_source_count <= 0)

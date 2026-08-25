@@ -1,5 +1,11 @@
 # Release3 K-channel contraction
 
+> Experimental branch note: `codex/release3-rank-edge-l1-exp` extends the
+> standalone release3 executable with gate-free outer K-rank and ranked
+> edge-L1. These two combinations are opt-in model topologies. They have not
+> been ported to or validated in the LAMMPS and GPUMD interfaces, so models
+> using them must currently be evaluated with the standalone executable.
+
 ## Mathematical definition
 
 For every angular shell `(l,m)`, the ordinary SUS2-SH edge accumulation first
@@ -220,19 +226,57 @@ LAMMPS/Kokkos atom, ghost, neighbor, and pair workspace of the actual system.
 
 ## CLI
 
+Gate-free outer rank needs only the outer contraction option:
+
 ```bash
-bin/mlp-sus2 init-sh rank2.mtp \
+bin/mlp-sus2 init-sh outer_rank4.mtp \
   --species-count=2 \
   --l-max=4 \
-  --k-max=4 \
+  --k-max=8 \
+  --body-order=6 \
+  --body-l-max=4,4,4,2,1 \
+  --radial-basis-size=5 \
+  --sh-factor-pruning=q-total \
+  --outer-k-rank=4
+```
+
+There is deliberately no `--two-layer-gate` in this form. To combine edge-L1
+with an outer contraction while leaving the gate graph at full K, initialize
+all three topology features together:
+
+```bash
+bin/mlp-sus2 init-sh edge_outer_rank4.mtp \
+  --species-count=2 \
+  --l-max=4 \
+  --k-max=8 \
   --body-order=6 \
   --body-l-max=4,4,4,2,1 \
   --radial-basis-size=5 \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
+  --two-layer-gate-edge-l1 \
+  --two-layer-gate-factor-pruning=q-total \
+  --outer-k-rank=4
+```
+
+To contract both the gate and outer channel spaces, add the independent gate
+rank:
+
+```bash
+bin/mlp-sus2 init-sh edge_gate4_outer4.mtp \
+  --species-count=2 \
+  --l-max=4 \
+  --k-max=8 \
+  --body-order=6 \
+  --body-l-max=4,4,4,2,1 \
+  --radial-basis-size=5 \
+  --sh-factor-pruning=q-total \
+  --two-layer-gate \
+  --two-layer-gate-edge-l1 \
   --two-layer-gate-mode=mu-scalar-full \
   --two-layer-gate-factor-pruning=q-total \
-  --outer-k-rank=2
+  --two-layer-gate-k-rank=4 \
+  --outer-k-rank=4
 ```
 
 - `--outer-k-rank=0` or omission keeps the historical full-`K` path.
@@ -240,12 +284,18 @@ bin/mlp-sus2 init-sh rank2.mtp \
 - `--two-layer-gate-k-rank=<R_g>` contracts the first-layer gate graph too.
 - Both ranks must be in `[1,K]` when enabled.
 - Gate rank currently requires outer rank.
-- Rank models require an explicit one-layer `--two-layer-gate` and
-  `q-total` pruning for each contracted graph.
+- Outer rank does not require a gate. Each contracted graph requires
+  `q-total` pruning.
+- Edge-L1 may use either the preserved full-K gate graph or the independently
+  contracted gate graph. In the latter case its L=1 sources are the contracted
+  gate primitives, and the reverse chain applies both the gate product
+  transpose and `W_g^T` before accumulating raw radial/SH derivatives.
 - Rank is a model topology. A loaded model cannot change rank during `train`;
   generate a new model instead.
-- Rank is currently incompatible with readout, residual, edge-L1, and
-  multi-layer-gate modes.
+- A gate or edge-L1 cannot be added later to an already ranked checkpoint;
+  initialize the requested gate, edge-L1, and rank topology together. The
+  resulting model can then be saved, reloaded, and continued normally.
+- Rank remains incompatible with readout, residual, and multi-layer-gate.
 
 ## Model format and runtime compatibility
 
@@ -254,12 +304,12 @@ serialization. Models containing outer/gate rank or gate readout use
 `version = 1.2.0`. The release3 standalone reader accepts both versions and
 canonicalizes the version from the actual feature set when saving.
 
-| Runtime | full `K` | outer rank | gate + outer rank | single-layer gate readout | multi-layer gate |
-| --- | --- | --- | --- | --- | --- |
-| release3 standalone | yes | yes | yes | yes | yes |
-| release3 CPU LAMMPS `sus2mtp` | yes | yes | yes | yes | no |
-| release3 Kokkos LAMMPS `sus2mtp/kk` | yes | yes | yes | yes | no |
-| older LAMMPS/other backends | 1.1 models only unless separately updated | not declared compatible | not declared compatible | not declared compatible | not declared compatible |
+| Runtime | full `K` | gate-free outer rank | gate + outer rank | ranked edge-L1 | single-layer gate readout | multi-layer gate |
+| --- | --- | --- | --- | --- | --- | --- |
+| experimental release3 standalone | yes | yes | yes | yes | yes | yes |
+| release3 CPU LAMMPS `sus2mtp` | yes | not validated in this branch | existing rank path only | no | yes | no |
+| release3 Kokkos LAMMPS `sus2mtp/kk` | yes | not validated in this branch | existing rank path only | no | yes | no |
+| GPUMD and other backends | backend-specific | not declared compatible | not declared compatible | no | not declared compatible | not declared compatible |
 
 The CPU and Kokkos interfaces share the same host-side model reader, including
 the `1.2.0`, rank, and readout metadata. Their rank and readout forward paths
@@ -287,6 +337,8 @@ dev_test/sh_release3_version_banner_check.sh
 dev_test/sh_k_rank_cli_smoke.sh ./bin/mlp-sus2
 dev_test/sh_k_rank_active_math_check.sh ./bin/mlp-sus2
 dev_test/sh_k_rank_mpi_smoke.sh ./bin/mlp-sus2
+dev_test/sh_outer_k_rank_no_gate_check.sh ./bin/mlp-sus2
+dev_test/sh_rank_edge_l1_check.sh ./bin/mlp-sus2
 dev_test/sh_release3_model_format_check.sh ./bin/mlp-sus2
 dev_test/lammps_kk_rank_clear_overflow_check.sh
 dev_test/lammps_kk_gate_signal_overlay_check.sh
