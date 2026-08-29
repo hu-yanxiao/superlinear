@@ -1,10 +1,9 @@
 # Release3 K-channel contraction
 
-> Experimental branch note: `codex/release3-rank-edge-l1-exp` extends the
-> standalone release3 executable with gate-free outer K-rank and ranked
-> edge-L1. These two combinations are opt-in model topologies. They have not
-> been ported to or validated in the LAMMPS and GPUMD interfaces, so models
-> using them must currently be evaluated with the standalone executable.
+Release3 supports opt-in gate-free outer K-rank and ranked edge-L1 in the
+standalone executable. These combinations have not been ported to or validated
+in the LAMMPS and GPUMD interfaces, so models using them must currently be
+evaluated with the standalone executable.
 
 ## Mathematical definition
 
@@ -306,7 +305,7 @@ canonicalizes the version from the actual feature set when saving.
 
 | Runtime | full `K` | gate-free outer rank | gate + outer rank | ranked edge-L1 | single-layer gate readout | multi-layer gate |
 | --- | --- | --- | --- | --- | --- | --- |
-| experimental release3 standalone | yes | yes | yes | yes | yes | yes |
+| release3 standalone | yes | yes | yes | yes | yes | yes |
 | release3 CPU LAMMPS `sus2mtp` | yes | not validated in this branch | existing rank path only | no | yes | no |
 | release3 Kokkos LAMMPS `sus2mtp/kk` | yes | not validated in this branch | existing rank path only | no | yes | no |
 | GPUMD and other backends | backend-specific | not declared compatible | not declared compatible | no | not declared compatible | not declared compatible |
