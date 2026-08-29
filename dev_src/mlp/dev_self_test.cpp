@@ -41,6 +41,7 @@
 #include "../diagonal_coordinate_scaling.h"
 #include "../optimizer_accepted_state.h"
 #include "../radial_weight_norm.h"
+#include "../rescale_search.h"
 //#include "../mtpr_trainer2.h"
 #include "../../src/mlip_wrapper.h"
 #include "../../src/mlp/self_test.h"
@@ -3027,6 +3028,28 @@ TEST("selectable polynomial radial cutoff and legacy model compatibility") {
 	}
 	std::remove(legacy_path.c_str());
 	std::remove(polynomial_path.c_str());
+} END_TEST;
+
+TEST("rescale bracket probes select the improving scaling direction") {
+	// Regression for the normalized-cutoff failure where the seed was
+	// center_log=-5.267, halving worsened it to -8.273, and doubling was the
+	// missing improving direction.
+	if (SelectRescaleExpansionDirection(
+		    -5.26730719706032,
+		    true,
+		    -8.27303159671854,
+		    true,
+		    -2.25) != 1)
+		FAIL("negative center_log did not select the improving upper probe");
+	if (SelectRescaleExpansionDirection(
+		    5.0, true, 2.0, true, 8.0) != -1)
+		FAIL("positive center_log did not select the improving lower probe");
+	if (SelectRescaleExpansionDirection(
+		    -1.0, true, -2.0, true, -3.0) != 0)
+		FAIL("rescale expansion should keep the seed when both probes worsen it");
+	if (SelectRescaleExpansionDirection(
+		    -4.0, false, 0.0, true, -1.0) != 1)
+		FAIL("rescale expansion did not accept the only valid improving probe");
 } END_TEST;
 
 TEST("MTPR radial smoothness penalty gradient finite difference") {

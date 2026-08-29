@@ -23,6 +23,7 @@
 #include "mtpr_train.h"
 #include "../sh_model_init.h"
 #include "../optimizer_checkpoint.h"
+#include "../rescale_search.h"
 #include "../../src/zbl.h"
 
 using namespace std;
@@ -1565,38 +1566,87 @@ void Rescale(MTPR_trainer& trainer, MLMTPR& mtpr, const std::vector<Neighborhood
 	RescaleEvalResult negative_eval;
 	bool have_positive = false;
 	bool have_negative = false;
-
-	if (center_eval.stats.center_log >= 0.0) {
-		positive_eval = center_eval;
-		have_positive = true;
-	} else {
-		negative_eval = center_eval;
-		have_negative = true;
-	}
+	auto consider_eval = [&](const RescaleEvalResult& eval) {
+		if (!eval.valid)
+			return;
+		if (std::abs(eval.stats.center_log)
+		    < std::abs(best_center_eval.stats.center_log))
+			best_center_eval = eval;
+		if (eval.stats.center_log >= 0.0) {
+			if (!have_positive
+			    || eval.stats.center_log < positive_eval.stats.center_log)
+				positive_eval = eval;
+			have_positive = true;
+		} else {
+			if (!have_negative
+			    || eval.stats.center_log > negative_eval.stats.center_log)
+				negative_eval = eval;
+			have_negative = true;
+		}
+	};
+	consider_eval(center_eval);
 
 	if (std::abs(center_eval.stats.center_log) >= kCenterTolLog) {
-		RescaleEvalResult bracket_eval = center_eval;
-		for (int iter = 0; iter < kBracketExpandMaxIters && !(have_positive && have_negative); ++iter) {
-			double trial_scaling = bracket_eval.scaling;
-			if (bracket_eval.stats.center_log > 0.0)
-				trial_scaling = std::max(kScalingFloor, bracket_eval.scaling * kBracketFactor);
-			else
-				trial_scaling = std::max(kScalingFloor, bracket_eval.scaling / kBracketFactor);
+		RescaleEvalResult lower_eval;
+		const double lower_scaling =
+			std::max(kScalingFloor, center_eval.scaling / kBracketFactor);
+		if (lower_scaling < center_eval.scaling) {
+			lower_eval = evaluate_scaling(
+				lower_scaling, "rescale bracket lower probe");
+			if (lower_eval.valid) {
+				log_eval("Rescale bracket lower probe", lower_eval);
+				consider_eval(lower_eval);
+			}
+		}
 
-			bracket_eval = evaluate_scaling(
-				trial_scaling,
-				"rescale bracket " + std::to_string(iter + 1) + "/" + std::to_string(kBracketExpandMaxIters));
-			if (!bracket_eval.valid)
-				break;
-			log_eval("Rescale bracket", bracket_eval);
-			if (std::abs(bracket_eval.stats.center_log) < std::abs(best_center_eval.stats.center_log))
-				best_center_eval = bracket_eval;
-			if (bracket_eval.stats.center_log >= 0.0) {
-				positive_eval = bracket_eval;
-				have_positive = true;
-			} else {
-				negative_eval = bracket_eval;
-				have_negative = true;
+		RescaleEvalResult upper_eval;
+		if (!(have_positive && have_negative)) {
+			const double upper_scaling = center_eval.scaling * kBracketFactor;
+			if (std::isfinite(upper_scaling)) {
+				upper_eval = evaluate_scaling(
+					upper_scaling, "rescale bracket upper probe");
+				if (upper_eval.valid) {
+					log_eval("Rescale bracket upper probe", upper_eval);
+					consider_eval(upper_eval);
+				}
+			}
+		}
+
+		if (!(have_positive && have_negative)) {
+			const int direction = SelectRescaleExpansionDirection(
+				center_eval.stats.center_log,
+				lower_eval.valid,
+				lower_eval.valid ? lower_eval.stats.center_log : 0.0,
+				upper_eval.valid,
+				upper_eval.valid ? upper_eval.stats.center_log : 0.0);
+			RescaleEvalResult bracket_eval =
+				direction < 0 ? lower_eval : upper_eval;
+			for (int iter = 0;
+			     direction != 0
+			     && iter < kBracketExpandMaxIters
+			     && !(have_positive && have_negative);
+			     ++iter) {
+				const double trial_scaling = direction < 0
+					? std::max(kScalingFloor, bracket_eval.scaling / kBracketFactor)
+					: bracket_eval.scaling * kBracketFactor;
+				if (!(trial_scaling > 0.0)
+				    || !std::isfinite(trial_scaling)
+				    || trial_scaling == bracket_eval.scaling)
+					break;
+				RescaleEvalResult trial_eval = evaluate_scaling(
+					trial_scaling,
+					"rescale bracket expand " + std::to_string(iter + 1)
+						+ "/" + std::to_string(kBracketExpandMaxIters));
+				if (!trial_eval.valid)
+					break;
+				log_eval("Rescale bracket expand", trial_eval);
+				const double previous_error =
+					std::abs(bracket_eval.stats.center_log);
+				consider_eval(trial_eval);
+				bracket_eval = trial_eval;
+				if (!(have_positive && have_negative)
+				    && std::abs(trial_eval.stats.center_log) >= previous_error)
+					break;
 			}
 		}
 	}
@@ -1622,16 +1672,11 @@ void Rescale(MTPR_trainer& trainer, MLMTPR& mtpr, const std::vector<Neighborhood
 			if (!trial_eval.valid)
 				break;
 			log_eval("Rescale center solve", trial_eval);
-			if (std::abs(trial_eval.stats.center_log) < std::abs(best_center_eval.stats.center_log))
-				best_center_eval = trial_eval;
+			consider_eval(trial_eval);
 			if (std::abs(trial_eval.stats.center_log) < kCenterTolLog) {
 				best_center_eval = trial_eval;
 				break;
 			}
-			if (trial_eval.stats.center_log >= 0.0)
-				positive_eval = trial_eval;
-			else
-				negative_eval = trial_eval;
 		}
 	}
 
