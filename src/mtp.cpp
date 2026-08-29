@@ -768,6 +768,10 @@ void MTP::Load(const std::string& filename)
 					else if (tmpstr == "RBTaylor")
 						p_RadialBasis = new RadialBasis_Taylor(ifs);
 
+		if (p_RadialBasis != nullptr
+		    && p_RadialBasis->radial_cutoff_type != "legacy")
+			ERROR("radial_cutoff_type is supported only by SUS2-SH release3 models");
+
 		// reading radial coeffs
 		ReadRadialCoeffs(ifs);
 

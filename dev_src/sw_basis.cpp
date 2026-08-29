@@ -676,6 +676,8 @@ void StillingerWeberRadialBasis::Load(const string& filename)
 		p_RadialBasis = new RadialBasis_Taylor(ifs);
 	else
 		ERROR("Wrong radial basis type");
+	if (p_RadialBasis->radial_cutoff_type != "legacy")
+		ERROR("radial_cutoff_type is not supported by the Stillinger-Weber basis");
 	//ifs >> foo_str >> foo_char >> min_dist;
 	//getline(ifs, line);
 	//ifs >> foo_str >> foo_char >> max_dist;
@@ -723,4 +725,3 @@ void StillingerWeberRadialBasis::Save(const string& filename)
 
 	ofs << regression_coeffs[CoeffCount()-1] << "}" << endl;
 }
-

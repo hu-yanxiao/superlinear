@@ -488,6 +488,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"min-dist",
 		"radial-basis-size",
 		"radial-basis-type",
+		"radial-cutoff-type",
+		"radial-cutoff-p",
 		"scaling-map",
 			"zbl-elements",
 			"zbl-inner",
@@ -1812,6 +1814,25 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (radial_parameterization != "physical"
 	    && radial_parameterization != "weight-norm")
 		ERROR("--radial-parameterization should be 'physical' or 'weight-norm'");
+	string requested_radial_cutoff_type = "";
+	if (opts["radial-cutoff-type"] != "") {
+		requested_radial_cutoff_type = opts["radial-cutoff-type"];
+		if (requested_radial_cutoff_type == "quadratic")
+			requested_radial_cutoff_type = "legacy";
+		if (requested_radial_cutoff_type != "legacy"
+		    && requested_radial_cutoff_type != "polynomial")
+			ERROR("--radial-cutoff-type should be 'legacy' or 'polynomial'");
+	}
+	int requested_radial_cutoff_p = -1;
+	if (opts["radial-cutoff-p"] != "") {
+		requested_radial_cutoff_p = stoi(opts["radial-cutoff-p"]);
+		if (requested_radial_cutoff_p < 1 || requested_radial_cutoff_p > 64)
+			ERROR("--radial-cutoff-p should be in [1, 64]");
+		if (requested_radial_cutoff_type.empty())
+			ERROR("--radial-cutoff-p requires --radial-cutoff-type=polynomial");
+		if (requested_radial_cutoff_type != "polynomial")
+			ERROR("--radial-cutoff-p only applies to --radial-cutoff-type=polynomial");
+	}
 	const bool allow_physical_radial_sign_repair =
 		opts["allow-physical-radial-sign-repair"] != "";
 	string bfgs_coordinate_normalization = "none";
@@ -2096,6 +2117,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	if (!requested_radial_cutoff_type.empty()
+	    && mtpr.p_RadialBasis->radial_cutoff_type != requested_radial_cutoff_type)
+		ERROR("--radial-cutoff-type must match the loaded model; changing cutoff function requires init-sh/inline initialization");
+	if (requested_radial_cutoff_p >= 1
+	    && mtpr.p_RadialBasis->radial_cutoff_p != requested_radial_cutoff_p)
+		ERROR("--radial-cutoff-p must match the loaded model; changing cutoff function requires init-sh/inline initialization");
 	const auto requested_scaling_map_it = opts.find("scaling-map");
 	if (requested_scaling_map_it != opts.end()
 	    && !requested_scaling_map_it->second.empty()) {

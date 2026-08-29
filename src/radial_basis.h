@@ -18,7 +18,9 @@ public:
 
 	double min_dist;
 	double max_dist;
-	double scaling = 1.0; // all functions are multiplied by scaling 
+	double scaling = 1.0; // all functions are multiplied by scaling
+	std::string radial_cutoff_type = "legacy";
+	int radial_cutoff_p = 5;
 
 	// values and derivatives, set by calc(r)
 	std::vector<double> rb_vals;
@@ -31,6 +33,8 @@ public:
 
 	void ReadRadialBasis(std::ifstream& ifs);
 	void WriteRadialBasis(std::ofstream& ofs);
+	void SetRadialCutoff(const std::string& cutoff_type, int cutoff_p);
+	void CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const;
 
 	AnyRadialBasis(double _min_dist, double _max_dist, int _size);;
 	AnyRadialBasis(std::ifstream& ifs);

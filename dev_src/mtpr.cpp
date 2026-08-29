@@ -815,9 +815,20 @@ bool IsJacobiIndexedBasisType(AnyRadialBasis* radial_basis)
 	return radial_basis != nullptr && IsJacobiIndexedBasisType(radial_basis->GetRBTypeString());
 }
 
+bool SupportsSelectableRadialCutoff(const std::string& basis_type)
+{
+	return basis_type == "RBChebyshev_sss"
+	    || basis_type == "RBChebyshev_sss_lmp"
+	    || basis_type == "RBChebyshev_sss_rational"
+	    || basis_type == "RBChebyshev_sss_rational_lmp"
+	    || IsLaguerreLog1pBasisType(basis_type)
+	    || IsJacobiIndexedBasisType(basis_type);
+}
+
 bool UsesPrecomputedLmpTable(const std::string& basis_type)
 {
 	return basis_type == "RBChebyshev_sss_lmp"
+	    || basis_type == "RBChebyshev_sss_rational_lmp"
 	    || basis_type == "RBLaguerre_log1p_lmp"
 	    || basis_type == "RBLaguerre_log1p_pos_lmp"
 	    || basis_type == "RBLaguerre_log1p_noenv_lmp"
@@ -3814,6 +3825,14 @@ void MLMTPR::Load(const string& filename)
 		p_RadialBasis = new RadialBasis_Taylor(ifs);
 		else
 			ERROR("Wrong radial basis type");
+
+	if (p_RadialBasis->radial_cutoff_type != "legacy") {
+		if (!is_sh_potential_)
+			ERROR("radial_cutoff_type is supported only by SUS2-SH models");
+		if (!SupportsSelectableRadialCutoff(rbasis_type))
+			ERROR("radial_cutoff_type=polynomial is not implemented for radial basis type "
+			      + rbasis_type);
+	}
 
 	// We do not need double scaling
 	if (p_RadialBasis->scaling != 1.0) {

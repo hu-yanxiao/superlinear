@@ -14,6 +14,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <ctime>
 #include <algorithm>
 #include <cmath>
@@ -2947,6 +2948,85 @@ TEST("check RBJacobi_sss_noweight_lmp matches full basis values and radial deriv
 			}
 		}
 	}
+} END_TEST;
+
+TEST("selectable polynomial radial cutoff and legacy model compatibility") {
+	const double r_min = 1.0;
+	const double r_max = 5.0;
+	const double r = 2.0;
+	const double scal = 0.7;
+	const double shift = 1.3;
+	RadialBasis_Chebyshev_sss legacy(r_min, r_max, 4);
+	legacy.RB_Calc(r, scal, shift, 0);
+	const double dr = r - r_max;
+	if (legacy.radial_cutoff_type != "legacy" || legacy.radial_cutoff_p != 5)
+		FAIL("unexpected default radial cutoff metadata");
+	if (legacy.rb_vals[0] != dr * dr || legacy.rb_ders[0] != 2.0 * dr)
+		FAIL("legacy radial cutoff no longer matches the historical quadratic");
+
+	RadialBasis_Chebyshev_sss polynomial(r_min, r_max, 4);
+	polynomial.SetRadialCutoff("polynomial", 5);
+	polynomial.RB_Calc(r, scal, shift, 0);
+	const double x = r / r_max;
+	const double expected = 1.0 - 21.0 * std::pow(x, 5)
+		+ 35.0 * std::pow(x, 6) - 15.0 * std::pow(x, 7);
+	const double expected_der =
+		-105.0 * std::pow(x, 4) * (1.0 - x) * (1.0 - x) / r_max;
+	if (std::abs(polynomial.rb_vals[0] - expected) > 2.0e-14
+	    || std::abs(polynomial.rb_ders[0] - expected_der) > 2.0e-14)
+		FAIL("p=5 cutoff value or derivative differs from the reference polynomial");
+
+	const double eps = 1.0e-6;
+	double plus = 0.0;
+	double plus_der = 0.0;
+	double minus = 0.0;
+	double minus_der = 0.0;
+	polynomial.CalcRadialCutoff(r + eps, plus, plus_der);
+	polynomial.CalcRadialCutoff(r - eps, minus, minus_der);
+	if (std::abs((plus - minus) / (2.0 * eps) - expected_der) > 2.0e-9)
+		FAIL("polynomial radial cutoff derivative failed finite differences");
+	double at_cutoff = -1.0;
+	double at_cutoff_der = -1.0;
+	polynomial.CalcRadialCutoff(r_max, at_cutoff, at_cutoff_der);
+	if (at_cutoff != 0.0 || at_cutoff_der != 0.0)
+		FAIL("polynomial radial cutoff is not exactly zero at r_max");
+
+	const std::string legacy_path = "/tmp/sus2sh_legacy_cutoff_self_test.mtp";
+	const std::string polynomial_path = "/tmp/sus2sh_polynomial_cutoff_self_test.mtp";
+	{
+		std::ofstream ofs(legacy_path.c_str());
+		legacy.WriteRadialBasis(ofs);
+	}
+	{
+		std::ifstream ifs(legacy_path.c_str());
+		std::string contents((std::istreambuf_iterator<char>(ifs)),
+		                     std::istreambuf_iterator<char>());
+		if (contents.find("radial_cutoff_") != std::string::npos)
+			FAIL("legacy model serialization should omit optional cutoff metadata");
+	}
+	{
+		std::ofstream ofs(polynomial_path.c_str());
+		polynomial.WriteRadialBasis(ofs);
+	}
+	{
+		std::ifstream ifs(polynomial_path.c_str());
+		std::string key;
+		std::string type;
+		ifs >> key;
+		ifs.ignore(2);
+		ifs >> type;
+		RadialBasis_Chebyshev_sss loaded(ifs);
+		if (type != "RBChebyshev_sss"
+		    || loaded.radial_cutoff_type != "polynomial"
+		    || loaded.radial_cutoff_p != 5)
+			FAIL("polynomial radial cutoff metadata did not survive model reload");
+		loaded.RB_Calc(r, scal, shift, 0);
+		if (std::abs(loaded.rb_vals[0] - polynomial.rb_vals[0]) > 1.0e-15
+		    || std::abs(loaded.rb_ders[0] - polynomial.rb_ders[0]) > 1.0e-15)
+			FAIL("polynomial radial cutoff changed after model reload");
+	}
+	std::remove(legacy_path.c_str());
+	std::remove(polynomial_path.c_str());
 } END_TEST;
 
 TEST("MTPR radial smoothness penalty gradient finite difference") {

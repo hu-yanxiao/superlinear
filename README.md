@@ -104,6 +104,8 @@ Main SH topology options:
 | `--min-dist=<double>` | Initial radial scaling reference. It does not define a hard lower interaction cutoff. |
 | `--radial-basis-size=<int>` | Number of primitive radial basis functions used to form each `R_mu`. |
 | `--radial-basis-type=<name>` | Supported model-generation types: `RBChebyshev_sss`, `RBChebyshev_sss_rational`, `RBLaguerre_log1p`, `RBJacobi_sss`; LAMMPS table variants use the same model fields with `_lmp` names. |
+| `--radial-cutoff-type=legacy\|polynomial` | Radial cutoff envelope for a new SH model. The default `legacy` keeps the historical `(r-r_cut)^2` envelope and omits new metadata from the model file. |
+| `--radial-cutoff-p=<int>` | Smooth-polynomial exponent in `[1,64]`; valid only with `--radial-cutoff-type=polynomial`, and defaults to `5`. |
 | `--sh-factor-pruning=same-k|legacy|q-total` | Outer scalar graph pruning rule, default `q-total`. `q-total` keeps the complete total-ordered `q=(l,k)` tuples; `legacy` additionally requires separate monotonic `l` and `k`; `same-k` keeps complete angular coupling but requires every factor in a scalar to use one common radial channel `k`. Thus `same-k` is a subgraph of `legacy`, which is a subgraph of `q-total`. |
 | `--write-sh-scalar-info` | Explicitly save scalar metadata; this is written automatically for gate models. |
 | `--potential-name=<string>` | Name written into the `.mtp` file. |
@@ -269,6 +271,18 @@ standalone executable. Initialize gate, edge-L1, and both requested ranks in
 one `init-sh` command; adding a gate or edge-L1 later to an existing ranked
 checkpoint is rejected. These combinations have not been ported to or
 validated in the LAMMPS or GPUMD interfaces.
+
+The standalone release3 executable also supports an optional smooth-polynomial
+radial cutoff. For `x=r/r_cut`, it is
+`1-((p+1)(p+2)/2)x^p+p(p+2)x^(p+1)-(p(p+1)/2)x^(p+2)` below the cutoff and
+zero at or above it. New polynomial-cutoff models store
+`radial_cutoff_type = polynomial`
+and `radial_cutoff_p = p`; if those fields are absent, the loader uses the
+historical quadratic exactly. Consequently existing `.mtp` files remain valid
+and are saved again without adding cutoff metadata. The current LAMMPS and
+GPUMD interfaces are not yet recorded as ported or validated for polynomial-cutoff
+models; use the standalone executable for these models until those interfaces
+are updated.
 
 Gate readout is defined only for the single-layer neighbor-site gate topology.
 It is mutually exclusive with outer/gate `K` rank, two-layer residual,

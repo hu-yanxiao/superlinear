@@ -137,6 +137,16 @@ bool HasOpt(const std::map<std::string, std::string>& opts, const std::string& n
 	return it != opts.end() && !it->second.empty();
 }
 
+std::string CanonicalRadialCutoffType(const std::string& value)
+{
+	if (value == "legacy" || value == "quadratic")
+		return "legacy";
+	if (value == "polynomial")
+		return "polynomial";
+	ERROR("--radial-cutoff-type should be legacy or polynomial.");
+	return "legacy";
+}
+
 double LerpLocal(double a, double b, double t)
 {
 	return a + (b - a) * t;
@@ -932,6 +942,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string scaling_map = StringOpt(opts, "scaling-map", "LK");
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
+	const std::string radial_cutoff_type =
+		CanonicalRadialCutoffType(StringOpt(opts, "radial-cutoff-type", "legacy"));
+	const bool explicit_radial_cutoff_p = HasOpt(opts, "radial-cutoff-p");
+	const int radial_cutoff_p = explicit_radial_cutoff_p
+		? IntOpt(opts, "radial-cutoff-p", 5)
+		: 5;
 	const SHFactorPruning factor_pruning =
 		ParseFactorPruning(opts, "sh-factor-pruning", SHFactorPruning::QTotal);
 	const auto outer_k_rank1_alias_it = opts.find("outer-k-rank1");
@@ -1084,6 +1100,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-k-rank is not compatible with readout, residual, or multi-layer gate.");
 	if (!IsSupportedSHRadialBasis(rbasis))
 		ERROR("init-sh currently writes RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, or RBJacobi_sss models.");
+	if (radial_cutoff_p < 1 || radial_cutoff_p > 64)
+		ERROR("--radial-cutoff-p should be in [1, 64].");
+	if (radial_cutoff_type == "legacy" && explicit_radial_cutoff_p)
+		ERROR("--radial-cutoff-p only applies to --radial-cutoff-type=polynomial.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
 		ERROR("init-sh with RBJacobi_sss supports --k-max up to 6 because Jacobi blocks are indexed as k=0..5.");
 
@@ -1158,6 +1178,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "\tmin_dist = " << min_dist << "\n";
 	ofs << "\tmax_dist = " << max_dist << "\n";
 	ofs << "\tradial_basis_size = " << rb_size << "\n";
+	if (radial_cutoff_type != "legacy") {
+		ofs << "\tradial_cutoff_type = " << radial_cutoff_type << "\n";
+		ofs << "\tradial_cutoff_p = " << radial_cutoff_p << "\n";
+	}
 	const int radial_func_count = kmax * (lmax + 1);
 	const int scaling_block_count =
 		(scaling_map == "K") ? kmax

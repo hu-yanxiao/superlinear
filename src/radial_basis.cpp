@@ -14,6 +14,52 @@
 
 using namespace std;
 
+void AnyRadialBasis::SetRadialCutoff(const std::string& cutoff_type, int cutoff_p)
+{
+	if (cutoff_type != "legacy" && cutoff_type != "polynomial")
+		ERROR("radial_cutoff_type should be 'legacy' or 'polynomial'");
+	if (cutoff_p < 1 || cutoff_p > 64)
+		ERROR("radial_cutoff_p should be in [1, 64]");
+	radial_cutoff_type = cutoff_type;
+	radial_cutoff_p = cutoff_p;
+}
+
+void AnyRadialBasis::CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const
+{
+	if (radial_cutoff_type == "legacy") {
+		const double Dr = r - max_dist;
+		cutoff_f = Dr * Dr;
+		cutoff_der = 2.0 * Dr;
+		return;
+	}
+	if (radial_cutoff_type != "polynomial")
+		ERROR("Unknown radial_cutoff_type: " + radial_cutoff_type);
+	if (!(max_dist > 0.0))
+		ERROR("Polynomial radial cutoff requires max_dist > 0");
+	if (r >= max_dist) {
+		cutoff_f = 0.0;
+		cutoff_der = 0.0;
+		return;
+	}
+	const double x = r / max_dist;
+	const double one_minus_x = 1.0 - x;
+	// This is algebraically identical to the normalized smooth polynomial
+	// 1-A*x^p+B*x^(p+1)-C*x^(p+2), but its factored form stays
+	// well-conditioned close to the cutoff where the value is O((1-x)^3).
+	double polynomial = 0.0;
+	for (int k = radial_cutoff_p - 1; k >= 0; --k) {
+		const double coefficient =
+			0.5 * static_cast<double>((k + 1) * (k + 2));
+		polynomial = polynomial * x + coefficient;
+	}
+	cutoff_f = one_minus_x * one_minus_x * one_minus_x * polynomial;
+	const double p = static_cast<double>(radial_cutoff_p);
+	const double x_p_minus_1 =
+		radial_cutoff_p == 1 ? 1.0 : std::pow(x, radial_cutoff_p - 1);
+	cutoff_der = -0.5 * p * (p + 1.0) * (p + 2.0)
+		* x_p_minus_1 * one_minus_x * one_minus_x / max_dist;
+}
+
 
 void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 {
@@ -57,6 +103,40 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 	if (ifs.fail())
 		ERROR("Error reading .mtp file");
 
+	radial_cutoff_type = "legacy";
+	radial_cutoff_p = 5;
+	const std::streampos optional_pos = ifs.tellg();
+	if (optional_pos != std::streampos(-1)) {
+		ifs >> tmpstr;
+		if (ifs.fail()) {
+			ifs.clear();
+			ifs.seekg(optional_pos);
+		} else if (tmpstr == "radial_cutoff_type") {
+			ifs.ignore(2);
+			ifs >> radial_cutoff_type;
+			if (ifs.fail())
+				ERROR("Error reading .mtp file");
+			const std::streampos cutoff_p_pos = ifs.tellg();
+			ifs >> tmpstr;
+			if (ifs.fail()) {
+				ifs.clear();
+				ifs.seekg(cutoff_p_pos);
+			} else if (tmpstr == "radial_cutoff_p") {
+				ifs.ignore(2);
+				ifs >> radial_cutoff_p;
+				if (ifs.fail())
+					ERROR("Error reading .mtp file");
+			} else {
+				ifs.seekg(cutoff_p_pos);
+			}
+			SetRadialCutoff(radial_cutoff_type, radial_cutoff_p);
+		} else if (tmpstr == "radial_cutoff_p") {
+			ERROR("radial_cutoff_p requires preceding radial_cutoff_type");
+		} else {
+			ifs.seekg(optional_pos);
+		}
+	}
+
 	rb_vals.resize(rb_size);
 	rb_ders.resize(rb_size*5);
         
@@ -73,6 +153,10 @@ void AnyRadialBasis::WriteRadialBasis(std::ofstream & ofs)
 	ofs << "\tmin_dist = " << min_dist << '\n'
 		<< "\tmax_dist = " << max_dist << '\n'
 		<< "\tradial_basis_size = " << rb_size << '\n';
+	if (radial_cutoff_type != "legacy") {
+		ofs << "\tradial_cutoff_type = " << radial_cutoff_type << '\n';
+		ofs << "\tradial_cutoff_p = " << radial_cutoff_p << '\n';
+	}
 }
 
 AnyRadialBasis::AnyRadialBasis(double _min_dist, double _max_dist, int _size)
@@ -283,9 +367,9 @@ void JacobiSSSCalc(AnyRadialBasis& basis,
 	double y_curr_x = sqrt_weight * log_weight_x;
 	double y_curr_xx = sqrt_weight * (log_weight_x * log_weight_x + log_weight_xx);
 
-	const double dr = r - basis.max_dist;
-	const double cutoff_f = dr * dr;
-	const double cutoff_der = 2.0 * dr;
+	double cutoff_f = 0.0;
+	double cutoff_der = 0.0;
+	basis.CalcRadialCutoff(r, cutoff_f, cutoff_der);
 	const double scaled_cutoff_f = basis.scaling * cutoff_f;
 	const double scaled_cutoff_der = basis.scaling * cutoff_der;
 
@@ -373,9 +457,9 @@ void LaguerreLog1pCalc(AnyRadialBasis& basis,
 	const double u_rho = rho_is_active ? (-scal * r / (rho * (rho + r))) : 0.0;
 	const double u_rho_r = rho_is_active ? (-scal / ((rho + r) * (rho + r))) : 0.0;
 
-	const double dr = r - basis.max_dist;
-	const double cutoff_f = dr * dr;
-	const double cutoff_der = 2.0 * dr;
+	double cutoff_f = 0.0;
+	double cutoff_der = 0.0;
+	basis.CalcRadialCutoff(r, cutoff_f, cutoff_der);
 	const double exp_factor = apply_exponential_envelope ? exp(-0.5 * u) : 1.0;
 
 	double phi_prev = 0.0;
@@ -1139,21 +1223,22 @@ double mult_s_r=-dder*scal*scal/4;
 double mult_scal_r = der/2+dder*(r-s)*scal/4;
 double mult_scal = der *(r-s)/2;
 double mult_s=-mult;
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 rb_vals[0] = scaling * cutoff_f;
-rb_ders[0] = 2*Dr*scaling;//scaling * (0 * (r - max_dist) * (r - max_dist) + 2 * (r - max_dist));
+rb_ders[0] = cutoff_der*scaling;//scaling * (0 * (r - max_dist) * (r - max_dist) + 2 * (r - max_dist));
 rb_ders[0 + rb_size * 1] = 0;//scaling * 0;
 rb_ders[0 + rb_size * 2] = 0;//scaling * 0;
 rb_ders[0 + rb_size * 3] = 0;//scaling * 0;
 rb_ders[0 + rb_size * 4] = 0;//scaling * 0;
 rb_vals[1] = scaling * (ksi * cutoff_f);
-rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
+rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 rb_ders[1 + rb_size * 1] = scaling * mult_scal * cutoff_f;
-rb_ders[1 + rb_size * 2] = scaling * (mult_scal_r * cutoff_f + 2 * mult_scal * Dr);
+rb_ders[1 + rb_size * 2] = scaling * (mult_scal_r * cutoff_f + mult_scal * cutoff_der);
 rb_ders[1 + rb_size * 3] = scaling * mult_s * cutoff_f;
-rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
+rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + mult_s * cutoff_der);
 
         
 
@@ -1183,8 +1268,9 @@ void RadialBasis_Chebyshev_sss::RB_CalcValsOnly(double r, double scal, double s,
 
 double x=scal*(r-s)/2 ;
 double ksi = tanh(x);
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 rb_vals[0] = scaling * cutoff_f;
 rb_vals[1] = scaling * (ksi * cutoff_f);
@@ -1223,21 +1309,22 @@ double mult_s_r=-dder*scal*scal/4;
 double mult_scal_r = der/2+dder*(r-s)*scal/4;
 double mult_scal = der *(r-s)/2;
 double mult_s=-mult;
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 rb_vals[0] = scaling * cutoff_f;
-rb_ders[0] = 2*Dr*scaling;
+rb_ders[0] = cutoff_der*scaling;
 rb_ders[0 + rb_size * 1] = 0;
 rb_ders[0 + rb_size * 2] = 0;
 rb_ders[0 + rb_size * 3] = 0;
 rb_ders[0 + rb_size * 4] = 0;
 rb_vals[1] = scaling * (ksi * cutoff_f);
-rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
+rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 rb_ders[1 + rb_size * 1] = scaling * mult_scal * cutoff_f;
-rb_ders[1 + rb_size * 2] = scaling * (mult_scal_r * cutoff_f + 2 * mult_scal * Dr);
+rb_ders[1 + rb_size * 2] = scaling * (mult_scal_r * cutoff_f + mult_scal * cutoff_der);
 rb_ders[1 + rb_size * 3] = scaling * mult_s * cutoff_f;
-rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
+rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + mult_s * cutoff_der);
 
          for (int i = 2; i < rb_size; i++) {
                 rb_vals[i] = 2 * ksi*rb_vals[i - 1] - rb_vals[i - 2];
@@ -1266,8 +1353,9 @@ void RadialBasis_Chebyshev_sss_rational::RB_CalcValsOnly(double r, double scal, 
 double x=scal*(r-s)/2 ;
 double inv = 1.0 / sqrt(1.0 + x*x);
 double ksi = x * inv;
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 rb_vals[0] = scaling * cutoff_f;
 rb_vals[1] = scaling * (ksi * cutoff_f);
@@ -1508,15 +1596,16 @@ double x= scal*(r-s)/2;
 double ksi = tanh(x);
 double der = 1-ksi*ksi;
 double mult = der*scal/2;
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 
 rb_vals[0] = scaling *  cutoff_f;
-rb_ders[0] = 2*Dr*scaling;//scaling * (0 * (r - max_dist) * (r - max_dist) + 2 * (r - max_dist));
+rb_ders[0] = cutoff_der*scaling;//scaling * (0 * (r - max_dist) * (r - max_dist) + 2 * (r - max_dist));
 
 rb_vals[1] = scaling * (ksi * cutoff_f);
-rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
+rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 
         
 
@@ -1547,15 +1636,16 @@ double inv = 1.0 / sqrt(1.0 + x*x);
 double ksi = x * inv;
 double der = inv * inv * inv;
 double mult = der*scal/2;
-double Dr=r-max_dist;
-double cutoff_f=Dr * Dr;
+double cutoff_f = 0.0;
+double cutoff_der = 0.0;
+CalcRadialCutoff(r, cutoff_f, cutoff_der);
 
 
 rb_vals[0] = scaling *  cutoff_f;
-rb_ders[0] = 2*Dr*scaling;
+rb_ders[0] = cutoff_der*scaling;
 
 rb_vals[1] = scaling * (ksi * cutoff_f);
-rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
+rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 
          for (int i = 2; i < rb_size; i++) {
                 rb_vals[i] = 2 * ksi*rb_vals[i - 1] - rb_vals[i - 2];
