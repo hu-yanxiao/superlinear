@@ -245,7 +245,7 @@ Gate-specific options:
 | `--two-layer-gate-shared-radial` | Compatibility switch for the default behavior: gate models use an independent first-layer radial contraction table. |
 | `--two-layer-gate-readout` | Add a linear energy head on the first-layer gate scalars. Release3 standalone, CPU LAMMPS, and Kokkos LAMMPS support the compatible single-layer neighbor-site form. |
 | `--two-layer-gate-edge-l1` | Add the directional L=1 edge-conditioned gate term. Initialize it together with the requested outer/gate ranks; it cannot be added later to an already ranked checkpoint. |
-| `--outer-k-rank=<R>` | Contract the outer `k` channels to rank `R` before building the outer scalar graph. `0`/omitted keeps the full graph; `R=1` uses the direct-radial form. Release3 standalone also permits this without a gate. |
+| `--outer-k-rank=<R>` | Contract the outer `k` channels to rank `R` before building the outer scalar graph. `0`/omitted keeps the full graph; `R=1` uses the direct-radial form. The release3 standalone executable also permits this without a gate. |
 | `--two-layer-gate-k-rank=<R_g>` | Independently contract the first-layer gate `k` channels. It requires an outer-rank model and can be initialized together with `--two-layer-gate-edge-l1`. |
 | `--second-layer-gate-factor-pruning=same-k|legacy|q-total` | Gate2 scalar subgraph for `--multi-layer-gate`. It defaults to gate1 and cannot be richer than the outer mode. |
 | `--multi-layer-gate` | Add release3 gate2 on the gate1 endpoint coefficients. This topology is supported by the standalone runtime, but not by the release3 LAMMPS pair styles. |
@@ -264,11 +264,11 @@ runtime pruning-mode branch. Rank-model mathematics, constraints, and runtime
 compatibility are documented in
 [`docs/release3-k-rank.md`](docs/release3-k-rank.md).
 
-Release3 supports gate-free outer rank and ranked edge-L1 in the standalone
-executable. Initialize gate, edge-L1, and both requested ranks in one `init-sh`
-command; adding a gate or edge-L1 later to an existing ranked checkpoint is
-rejected. These combinations have not been ported to the LAMMPS or GPUMD
-interfaces.
+Release3 formally supports gate-free outer rank and ranked edge-L1 in the
+standalone executable. Initialize gate, edge-L1, and both requested ranks in
+one `init-sh` command; adding a gate or edge-L1 later to an existing ranked
+checkpoint is rejected. These combinations have not been ported to or
+validated in the LAMMPS or GPUMD interfaces.
 
 Gate readout is defined only for the single-layer neighbor-site gate topology.
 It is mutually exclusive with outer/gate `K` rank, two-layer residual,
