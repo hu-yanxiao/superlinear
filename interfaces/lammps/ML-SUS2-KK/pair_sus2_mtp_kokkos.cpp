@@ -1642,6 +1642,39 @@ KOKKOS_INLINE_FUNCTION KK_FLOAT PairSUS2MTPKokkos<DeviceType>::int_pow(KK_FLOAT 
 }
 
 template <class DeviceType>
+KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_cutoff(
+    const F_FLOAT dist, F_FLOAT &cutoff, F_FLOAT &cutoff_der) const
+{
+  if (radial_cutoff_type_index == SUS2RadialMTPBasis::CUTOFF_LEGACY) {
+    const F_FLOAT dr = dist - static_cast<F_FLOAT>(max_cutoff);
+    cutoff = dr * dr;
+    cutoff_der = static_cast<F_FLOAT>(2.0) * dr;
+    return;
+  }
+  if (dist >= static_cast<F_FLOAT>(max_cutoff)) {
+    cutoff = static_cast<F_FLOAT>(0.0);
+    cutoff_der = static_cast<F_FLOAT>(0.0);
+    return;
+  }
+
+  const F_FLOAT x = dist / static_cast<F_FLOAT>(max_cutoff);
+  const F_FLOAT one_minus_x = static_cast<F_FLOAT>(1.0) - x;
+  F_FLOAT polynomial = static_cast<F_FLOAT>(0.0);
+  for (int k = radial_cutoff_p - 1; k >= 0; --k) {
+    const F_FLOAT coefficient = static_cast<F_FLOAT>(0.5 * (k + 1) * (k + 2));
+    polynomial = polynomial * x + coefficient;
+  }
+  cutoff = one_minus_x * one_minus_x * one_minus_x * polynomial;
+  F_FLOAT x_p_minus_1 = static_cast<F_FLOAT>(1.0);
+  for (int k = 0; k < radial_cutoff_p - 1; ++k) x_p_minus_1 *= x;
+  const F_FLOAT p = static_cast<F_FLOAT>(radial_cutoff_p);
+  cutoff_der = static_cast<F_FLOAT>(-0.5) * p *
+      (p + static_cast<F_FLOAT>(1.0)) * (p + static_cast<F_FLOAT>(2.0)) *
+      x_p_minus_1 * one_minus_x * one_minus_x /
+      static_cast<F_FLOAT>(max_cutoff);
+}
+
+template <class DeviceType>
 KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_group(
     const int itype, const int jtype, const KK_FLOAT dist, const int mu_group, KK_FLOAT &val,
     KK_FLOAT &der) const
@@ -1700,9 +1733,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
     const F_FLOAT rho = (s_eff > 1.0e-8) ? s_eff : static_cast<F_FLOAT>(1.0e-8);
     const F_FLOAT u = scal_eff * Kokkos::log(1.0 + dist / rho);
     const F_FLOAT u_r = scal_eff / (rho + dist);
-    const F_FLOAT Dr = dist - max_cutoff;
-    const F_FLOAT cutoff = Dr * Dr;
-    const F_FLOAT cutoff_der = 2.0 * Dr;
+    F_FLOAT cutoff = 0.0;
+    F_FLOAT cutoff_der = 0.0;
+    eval_radial_cutoff(dist, cutoff, cutoff_der);
     const F_FLOAT exp_factor = Kokkos::exp(-0.5 * u);
 
     F_FLOAT phi_prev = 0.0;
@@ -1731,13 +1764,14 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
   } else {
     const F_FLOAT transformed = scal * (dist - s_param) / 2.0;
     const F_FLOAT ksi = Kokkos::tanh(transformed);
-    const F_FLOAT Dr = dist - max_cutoff;
-    const F_FLOAT cutoff = Dr * Dr;
+    F_FLOAT cutoff = 0.0;
+    F_FLOAT cutoff_der = 0.0;
+    eval_radial_cutoff(dist, cutoff, cutoff_der);
     const F_FLOAT der_ksi = 1.0 - ksi * ksi;
     const F_FLOAT mult = der_ksi * scal / 2.0;
 
     F_FLOAT basis_prev2 = scaling * cutoff;
-    F_FLOAT der_prev2 = 2.0 * Dr * scaling;
+    F_FLOAT der_prev2 = cutoff_der * scaling;
 
     val = d_regression_coeffs[coeff_offset] * species_factor * basis_prev2;
     der = d_regression_coeffs[coeff_offset] * species_factor * der_prev2;
@@ -1745,7 +1779,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_basic_mu_
     if (radial_basis_size == 1) return;
 
     F_FLOAT basis_prev1 = scaling * ksi * cutoff;
-    F_FLOAT der_prev1 = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+    F_FLOAT der_prev1 = scaling * (mult * cutoff + ksi * cutoff_der);
 
     val += d_regression_coeffs[coeff_offset + 1] * species_factor * basis_prev1;
     der += d_regression_coeffs[coeff_offset + 1] * species_factor * der_prev1;
@@ -1876,9 +1910,9 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 	        (shift_eff > 1.0e-8) ? shift_eff : static_cast<F_FLOAT>(1.0e-8);
 	    const F_FLOAT u = scal_eff * Kokkos::log(1.0 + dist / rho);
 	    const F_FLOAT u_r = scal_eff / (rho + dist);
-	    const F_FLOAT Dr = dist - max_cutoff;
-	    const F_FLOAT cutoff = Dr * Dr;
-	    const F_FLOAT cutoff_der = 2.0 * Dr;
+	    F_FLOAT cutoff = 0.0;
+	    F_FLOAT cutoff_der = 0.0;
+	    eval_radial_cutoff(dist, cutoff, cutoff_der);
 	    const F_FLOAT exp_factor = Kokkos::exp(-0.5 * u);
 
 	    F_FLOAT phi_prev = 0.0;
@@ -1916,12 +1950,13 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 
 	  const F_FLOAT transformed = scal * (dist - shift) / 2.0;
 	  const F_FLOAT ksi = Kokkos::tanh(transformed);
-	  const F_FLOAT Dr = dist - max_cutoff;
-	  const F_FLOAT cutoff = Dr * Dr;
+	  F_FLOAT cutoff = 0.0;
+	  F_FLOAT cutoff_der = 0.0;
+	  eval_radial_cutoff(dist, cutoff, cutoff_der);
 	  const F_FLOAT der_ksi = 1.0 - ksi * ksi;
 	  const F_FLOAT mult = der_ksi * scal / 2.0;
 	  F_FLOAT basis_prev2 = scaling * cutoff;
-	  F_FLOAT der_prev2 = 2.0 * Dr * scaling;
+	  F_FLOAT der_prev2 = cutoff_der * scaling;
 	  F_FLOAT coeff =
 	      d_two_layer_gate_radial_coeffs_direct(mu, 0) * species_factor;
 	  val = coeff * basis_prev2;
@@ -1930,7 +1965,7 @@ KOKKOS_INLINE_FUNCTION void PairSUS2MTPKokkos<DeviceType>::eval_radial_value_bas
 
 	  F_FLOAT basis_prev1 = scaling * ksi * cutoff;
 	  F_FLOAT der_prev1 =
-	      scaling * (mult * cutoff + 2.0 * ksi * Dr);
+	      scaling * (mult * cutoff + ksi * cutoff_der);
 	  coeff =
 	      d_two_layer_gate_radial_coeffs_direct(mu, 1) * species_factor;
 	  val = Kokkos::fma(coeff, basis_prev1, val);

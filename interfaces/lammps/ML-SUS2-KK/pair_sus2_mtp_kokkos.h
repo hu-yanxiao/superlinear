@@ -113,6 +113,9 @@ namespace LAMMPS_NS {
                                           const F_FLOAT &delz) const;
 
   KOKKOS_INLINE_FUNCTION F_FLOAT int_pow(F_FLOAT base, int exp) const;
+  KOKKOS_INLINE_FUNCTION void eval_radial_cutoff(const F_FLOAT dist,
+                                                  F_FLOAT &cutoff,
+                                                  F_FLOAT &cutoff_der) const;
 
 	  KOKKOS_INLINE_FUNCTION void eval_radial_basic_mu_group(const int itype, const int jtype,
 	                                                         const F_FLOAT dist, const int mu_group,

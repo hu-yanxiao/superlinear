@@ -166,6 +166,21 @@ pair_style sus2mtp/kk p.mtp chunksize 129600 radial_mode direct
 mode. Explicit table mode requires an `_lmp` radial basis. The table is built
 only for species pairs that appear in the active simulation atom types.
 
+Release3 SUS2-SH models may opt into the smooth polynomial cutoff by storing
+
+```text
+radial_cutoff_type = polynomial
+radial_cutoff_p = p
+```
+
+immediately after `radial_basis_size`.  `p` is optional and defaults to `5`;
+valid values are `1..64`.  If `radial_cutoff_type` is absent, both CPU and
+Kokkos pair styles retain the historical `(r-r_cut)^2` cutoff exactly, so old
+models remain binary-compatible.  The polynomial is zero at and above
+`r_cut`, and its value and first derivative use the same stable factored
+formula as the standalone release3 executable.  Direct and table radial modes
+both honor the model metadata.
+
 The current table path supports:
 
 ```text

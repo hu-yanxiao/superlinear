@@ -20,6 +20,8 @@
 
 #include "potential_file_reader.h"
 
+#include <string>
+
 namespace LAMMPS_NS {
 
 class SUS2RadialMTPBasis {
@@ -31,6 +33,15 @@ class SUS2RadialMTPBasis {
   //Specifically reads the basis properties (ie. cutoffs and size) and not the radial parameters
   void ReadBasisProperties(TextFileReader &tfr);
 
+  // Release3 radial-cutoff contract.  Missing model fields keep the exact
+  // historical quadratic; polynomial models opt in explicitly.
+  enum RadialCutoffType {
+    CUTOFF_LEGACY = 0,
+    CUTOFF_POLYNOMIAL = 1
+  };
+  void SetRadialCutoff(const std::string &cutoff_type, int cutoff_p);
+  void CalcRadialCutoff(double dist, double &cutoff, double &cutoff_der) const;
+
   virtual void calc_radial_basis(double dist, double scal = 0.1, double s = 0.1, int k = 0) = 0;
   virtual void calc_radial_basis_ders(double dist, double scal = 0.1, double s = 0.1, int k = 0) = 0;
 
@@ -40,6 +51,8 @@ class SUS2RadialMTPBasis {
   double min_cutoff;    //  Minimum radius value
   double max_cutoff;    // Cutoff radius
   double scaling;        // all functions are multiplied by scaling
+  RadialCutoffType radial_cutoff_type = CUTOFF_LEGACY;
+  int radial_cutoff_p = 5;
   
   // SUS2-MLIP specific parameters
   enum BasisType {

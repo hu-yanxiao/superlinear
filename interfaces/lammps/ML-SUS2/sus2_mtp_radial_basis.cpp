@@ -24,9 +24,56 @@
 #include "utils.h"
 
 #include "csignal"
+#include "cmath"
 #include "cstring"
 
 using namespace LAMMPS_NS;
+
+void SUS2RadialMTPBasis::SetRadialCutoff(const std::string &cutoff_type, int cutoff_p)
+{
+  if (cutoff_type == "legacy") {
+    radial_cutoff_type = CUTOFF_LEGACY;
+  } else if (cutoff_type == "polynomial") {
+    radial_cutoff_type = CUTOFF_POLYNOMIAL;
+  } else {
+    lmp->error->all(FLERR, "radial_cutoff_type should be 'legacy' or 'polynomial'.");
+  }
+  if (cutoff_p < 1 || cutoff_p > 64)
+    lmp->error->all(FLERR, "radial_cutoff_p should be in [1, 64].");
+  radial_cutoff_p = cutoff_p;
+}
+
+void SUS2RadialMTPBasis::CalcRadialCutoff(double dist, double &cutoff,
+                                          double &cutoff_der) const
+{
+  if (radial_cutoff_type == CUTOFF_LEGACY) {
+    const double dr = dist - max_cutoff;
+    cutoff = dr * dr;
+    cutoff_der = 2.0 * dr;
+    return;
+  }
+  if (!(max_cutoff > 0.0))
+    lmp->error->all(FLERR, "Polynomial radial cutoff requires max_dist > 0.");
+  if (dist >= max_cutoff) {
+    cutoff = 0.0;
+    cutoff_der = 0.0;
+    return;
+  }
+
+  const double x = dist / max_cutoff;
+  const double one_minus_x = 1.0 - x;
+  double polynomial = 0.0;
+  for (int k = radial_cutoff_p - 1; k >= 0; --k) {
+    const double coefficient = 0.5 * static_cast<double>((k + 1) * (k + 2));
+    polynomial = polynomial * x + coefficient;
+  }
+  cutoff = one_minus_x * one_minus_x * one_minus_x * polynomial;
+  const double p = static_cast<double>(radial_cutoff_p);
+  const double x_p_minus_1 =
+      radial_cutoff_p == 1 ? 1.0 : std::pow(x, radial_cutoff_p - 1);
+  cutoff_der = -0.5 * p * (p + 1.0) * (p + 2.0) * x_p_minus_1 *
+      one_minus_x * one_minus_x / max_cutoff;
+}
 
 SUS2RadialMTPBasis::SUS2RadialMTPBasis(TextFileReader &tfr, LAMMPS *lmp)
 {

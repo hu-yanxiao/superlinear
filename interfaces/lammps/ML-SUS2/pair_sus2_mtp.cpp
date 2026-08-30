@@ -8093,9 +8093,65 @@ access to the buffer size that is not provided in PFR.
     
     utils::logmesg(lmp, "Radial basis type: {}, size: {}, index: {} \n", radial_basis_type, radial_basis_size,radial_basis_type_index);
 
-    // Read the basis function count
+    // Optional release3 cutoff metadata is written immediately after
+    // radial_basis_size.  Its absence must preserve the historical quadratic
+    // bit-for-bit.  A type-only polynomial declaration defaults to p=5.
+    radial_cutoff_type_index = SUS2RadialMTPBasis::CUTOFF_LEGACY;
+    radial_cutoff_p = 5;
     line_tokens = ValueTokenizer(std::string(tfr.next_line()), separators);
     keyword = line_tokens.next_string();
+    if (keyword == "radial_cutoff_type") {
+      if (!is_sh_model)
+        error->one(FLERR,
+                   "radial_cutoff_type is supported only by SUS2-SH release3 models.");
+      const std::string radial_cutoff_type = line_tokens.next_string();
+      if (radial_cutoff_type == "legacy") {
+        radial_cutoff_type_index = SUS2RadialMTPBasis::CUTOFF_LEGACY;
+      } else if (radial_cutoff_type == "polynomial") {
+        radial_cutoff_type_index = SUS2RadialMTPBasis::CUTOFF_POLYNOMIAL;
+      } else {
+        error->one(FLERR,
+                   "radial_cutoff_type should be 'legacy' or 'polynomial'.");
+      }
+      line_tokens = ValueTokenizer(std::string(tfr.next_line()), separators);
+      keyword = line_tokens.next_string();
+      if (keyword == "radial_cutoff_p") {
+        radial_cutoff_p = line_tokens.next_int();
+        if (radial_cutoff_p < 1 || radial_cutoff_p > 64)
+          error->one(FLERR, "radial_cutoff_p should be in [1, 64].");
+        line_tokens = ValueTokenizer(std::string(tfr.next_line()), separators);
+        keyword = line_tokens.next_string();
+      }
+    } else if (keyword == "radial_cutoff_p") {
+      error->one(FLERR,
+                 "radial_cutoff_p requires preceding radial_cutoff_type.");
+    }
+    if (radial_cutoff_type_index == SUS2RadialMTPBasis::CUTOFF_POLYNOMIAL) {
+      const bool supported_polynomial_basis =
+          radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS ||
+          radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_LMP ||
+          radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL ||
+          radial_basis_type_index == SUS2RadialMTPBasis::CHEBYSHEV_SSS_RATIONAL_LMP ||
+          radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P ||
+          radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_LMP ||
+          radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS ||
+          radial_basis_type_index == SUS2RadialMTPBasis::LAGUERRE_LOG1P_POS_LMP ||
+          radial_basis_type_index == SUS2RadialMTPBasis::JACOBI_SSS_LMP;
+      if (!supported_polynomial_basis)
+        error->one(FLERR,
+                   "Polynomial radial cutoff is unsupported for radial basis type '{}'.",
+                   radial_basis_type_str);
+    }
+    radial_basis->SetRadialCutoff(
+        radial_cutoff_type_index == SUS2RadialMTPBasis::CUTOFF_POLYNOMIAL
+            ? "polynomial" : "legacy",
+        radial_cutoff_p);
+    utils::logmesg(lmp, "Radial cutoff type: {}, p: {}\n",
+                   radial_cutoff_type_index == SUS2RadialMTPBasis::CUTOFF_POLYNOMIAL
+                       ? "polynomial" : "legacy",
+                   radial_cutoff_p);
+
+    // Read the basis function count
     if (keyword != "radial_funcs_count")
       lmp->error->one(FLERR, "Error in reading MTP file. Cannot read radial function count.");
     radial_func_count = line_tokens.next_int();    // Assuming count is an int
@@ -9389,6 +9445,8 @@ access to the buffer size that is not provided in PFR.
   // This ensures all procs have correct parameter values before they are used
   //Radial Basis Set Type First
   MPI_Bcast(&radial_basis_type_index, 1, MPI_INT, 0, world);
+  MPI_Bcast(&radial_cutoff_type_index, 1, MPI_INT, 0, world);
+  MPI_Bcast(&radial_cutoff_p, 1, MPI_INT, 0, world);
 
   //Then Single Values
   MPI_Bcast(&scaling, 1, MPI_DOUBLE, 0, world);
@@ -9787,6 +9845,10 @@ access to the buffer size that is not provided in PFR.
       radial_basis = new RBJacobi_sss_lmp(radial_basis_size, lmp);
       radial_basis->scaling = scaling;
     }
+    radial_basis->SetRadialCutoff(
+        radial_cutoff_type_index == SUS2RadialMTPBasis::CUTOFF_POLYNOMIAL
+            ? "polynomial" : "legacy",
+        radial_cutoff_p);
     //Flags
     memory->create(cutsq, np1, np1, "pair:cutsq");
     memory->create(setflag, np1, np1, "pair:setflag");

@@ -51,9 +51,9 @@ void laguerre_log1p_positive_calc(SUS2RadialMTPBasis &basis, double dist, double
   const double rho = laguerre_positive_param(s_raw);
   const double u = scal * log1p(dist / rho);
   const double u_r = scal / (rho + dist);
-  const double Dr = dist - basis.max_cutoff;
-  const double cutoff = Dr * Dr;
-  const double cutoff_der = 2.0 * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  basis.CalcRadialCutoff(dist, cutoff, cutoff_der);
   const double exp_factor = exp(-0.5 * u);
 
   double phi_prev = 0.0;
@@ -133,9 +133,9 @@ void jacobi_sss_calc_lmp(SUS2RadialMTPBasis &basis, LAMMPS *lmp, double dist, do
   double y_curr = sqrt_weight;
   double y_curr_x = sqrt_weight * log_weight_x;
 
-  const double dr = dist - basis.max_cutoff;
-  const double cutoff = dr * dr;
-  const double cutoff_der = 2.0 * dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  basis.CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   auto store_basis = [&](int index, double y, double y_x) {
     basis.radial_basis_vals[index] = basis.scaling * cutoff * y;
@@ -269,9 +269,9 @@ void RBChebyshev_sss_lmp::calc_radial_basis(double dist, double scal, double s, 
   double x = scal * (dist - s) / 2.0;
   double ksi = tanh(x);  // Basis function ksi = tanh(x) (SUS2-MLIP-1.1 standard)
 
-  // Apply cutoff function: (r - max_dist)²
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   // Base functions (i=0)
   radial_basis_vals[0] = scaling * cutoff;
@@ -303,19 +303,19 @@ void RBChebyshev_sss_lmp::calc_radial_basis_ders(double dist, double scal, doubl
   //double mult_scal = der * (dist - s) / 2.0;  // dksi/dscal
   //double mult_s = -mult;  // dksi/ds
 
-  // Apply cutoff function: (r - max_dist)²
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   // Base derivatives (i=0)
-  radial_basis_ders[0] = 2.0 * Dr * scaling;
+  radial_basis_ders[0] = cutoff_der * scaling;
   //radial_basis_ders[0 + size] = 0.0;
   //radial_basis_ders[0 + 2*size] = 0.0;
   //radial_basis_ders[0 + 3*size] = 0.0;
   //radial_basis_ders[0 + 4*size] = 0.0;
 
   // First Chebyshev polynomial derivatives (i=1)
-  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+  radial_basis_ders[1] = scaling * (mult * cutoff + ksi * cutoff_der);
   //radial_basis_ders[1 + size] = scaling * mult_scal * cutoff;
   //radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + 2.0 * mult_scal * Dr);
   //radial_basis_ders[1 + 3*size] = scaling * mult_s * cutoff;
@@ -348,8 +348,9 @@ void RBChebyshev_sss_rational_lmp::calc_radial_basis(double dist, double scal, d
   double inv = 1.0 / sqrt(1.0 + x * x);
   double ksi = x * inv;
 
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   radial_basis_vals[0] = scaling * cutoff;
   radial_basis_vals[1] = scaling * (ksi * cutoff);
@@ -369,11 +370,12 @@ void RBChebyshev_sss_rational_lmp::calc_radial_basis_ders(double dist, double sc
   double der = inv * inv * inv;
   double mult = der * scal / 2.0;
 
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
-  radial_basis_ders[0] = 2.0 * Dr * scaling;
-  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+  radial_basis_ders[0] = cutoff_der * scaling;
+  radial_basis_ders[1] = scaling * (mult * cutoff + ksi * cutoff_der);
 
   for (int i = 2; i < size; i++) {
     radial_basis_ders[i] = 2.0 * (mult * radial_basis_vals[i-1] + ksi * radial_basis_ders[i-1]) - radial_basis_ders[i-2];
@@ -391,9 +393,9 @@ void RBChebyshev_sss::calc_radial_basis(double dist, double scal, double s, int 
   double x = scal * (dist - s) / 2.0;
   double ksi = tanh(x);  // Basis function ksi = tanh(x) (SUS2-MLIP-1.1 standard)
   
-  // Apply cutoff function: (r - max_dist)²
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
   
   // Base functions (i=0)
   radial_basis_vals[0] = scaling * cutoff;
@@ -425,23 +427,23 @@ void RBChebyshev_sss::calc_radial_basis_ders(double dist, double scal, double s,
   double mult_scal = der * (dist - s) / 2.0;  // dksi/dscal
   double mult_s = -mult;  // dksi/ds
   
-  // Apply cutoff function: (r - max_dist)²
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
   
   // Base derivatives (i=0)
-  radial_basis_ders[0] = 2.0 * Dr * scaling;
+  radial_basis_ders[0] = cutoff_der * scaling;
   radial_basis_ders[0 + size] = 0.0;
   radial_basis_ders[0 + 2*size] = 0.0;
   radial_basis_ders[0 + 3*size] = 0.0;
   radial_basis_ders[0 + 4*size] = 0.0;
   
   // First Chebyshev polynomial derivatives (i=1)
-  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+  radial_basis_ders[1] = scaling * (mult * cutoff + ksi * cutoff_der);
   radial_basis_ders[1 + size] = scaling * mult_scal * cutoff;
-  radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + 2.0 * mult_scal * Dr);
+  radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + mult_scal * cutoff_der);
   radial_basis_ders[1 + 3*size] = scaling * mult_s * cutoff;
-  radial_basis_ders[1 + 4*size] = scaling * (mult_s_r * cutoff + 2.0 * mult_s * Dr);
+  radial_basis_ders[1 + 4*size] = scaling * (mult_s_r * cutoff + mult_s * cutoff_der);
   
   // Chebyshev recursion for all 5 derivatives (matching SUS2-MLIP-1.1)
   for (int i = 2; i < size; i++) {
@@ -464,8 +466,9 @@ void RBChebyshev_sss_rational::calc_radial_basis(double dist, double scal, doubl
   double inv = 1.0 / sqrt(1.0 + x * x);
   double ksi = x * inv;
 
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   radial_basis_vals[0] = scaling * cutoff;
   radial_basis_vals[1] = scaling * (ksi * cutoff);
@@ -491,20 +494,21 @@ void RBChebyshev_sss_rational::calc_radial_basis_ders(double dist, double scal, 
   double mult_scal = der * (dist - s) / 2.0;
   double mult_s = -mult;
 
-  double Dr = dist - max_cutoff;
-  double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
-  radial_basis_ders[0] = 2.0 * Dr * scaling;
+  radial_basis_ders[0] = cutoff_der * scaling;
   radial_basis_ders[0 + size] = 0.0;
   radial_basis_ders[0 + 2*size] = 0.0;
   radial_basis_ders[0 + 3*size] = 0.0;
   radial_basis_ders[0 + 4*size] = 0.0;
 
-  radial_basis_ders[1] = scaling * (mult * cutoff + 2.0 * ksi * Dr);
+  radial_basis_ders[1] = scaling * (mult * cutoff + ksi * cutoff_der);
   radial_basis_ders[1 + size] = scaling * mult_scal * cutoff;
-  radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + 2.0 * mult_scal * Dr);
+  radial_basis_ders[1 + 2*size] = scaling * (mult_scal_r * cutoff + mult_scal * cutoff_der);
   radial_basis_ders[1 + 3*size] = scaling * mult_s * cutoff;
-  radial_basis_ders[1 + 4*size] = scaling * (mult_s_r * cutoff + 2.0 * mult_s * Dr);
+  radial_basis_ders[1 + 4*size] = scaling * (mult_s_r * cutoff + mult_s * cutoff_der);
 
   for (int i = 2; i < size; i++) {
     radial_basis_ders[i] = 2.0 * (mult * radial_basis_vals[i-1] + ksi * radial_basis_ders[i-1]) - radial_basis_ders[i-2];
@@ -524,8 +528,9 @@ void RBLaguerre_log1p::calc_radial_basis(double dist, double scal, double s, int
 {
   const double rho = (s > kLaguerreMinRho) ? s : kLaguerreMinRho;
   const double u = scal * log1p(dist / rho);
-  const double Dr = dist - max_cutoff;
-  const double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
   const double exp_factor = exp(-0.5 * u);
 
   double phi_prev = 0.0;
@@ -556,9 +561,9 @@ void RBLaguerre_log1p::calc_radial_basis_ders(double dist, double scal, double s
   const double u_rho = rho_is_active ? (-scal * dist / (rho * (rho + dist))) : 0.0;
   const double u_rho_r = rho_is_active ? (-scal / ((rho + dist) * (rho + dist))) : 0.0;
 
-  const double Dr = dist - max_cutoff;
-  const double cutoff = Dr * Dr;
-  const double cutoff_der = 2.0 * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
 
   const double exp_factor = exp(-0.5 * u);
   double phi_prev = 0.0;
@@ -626,8 +631,9 @@ void RBLaguerre_log1p_lmp::calc_radial_basis(double dist, double scal, double s,
 {
   const double rho = (s > kLaguerreMinRho) ? s : kLaguerreMinRho;
   const double u = scal * log1p(dist / rho);
-  const double Dr = dist - max_cutoff;
-  const double cutoff = Dr * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
   const double exp_factor = exp(-0.5 * u);
 
   double phi_prev = 0.0;
@@ -651,9 +657,9 @@ void RBLaguerre_log1p_lmp::calc_radial_basis_ders(double dist, double scal, doub
   const double rho = (s > kLaguerreMinRho) ? s : kLaguerreMinRho;
   const double u = scal * log1p(dist / rho);
   const double u_r = scal / (rho + dist);
-  const double Dr = dist - max_cutoff;
-  const double cutoff = Dr * Dr;
-  const double cutoff_der = 2.0 * Dr;
+  double cutoff = 0.0;
+  double cutoff_der = 0.0;
+  CalcRadialCutoff(dist, cutoff, cutoff_der);
   const double exp_factor = exp(-0.5 * u);
 
   double phi_prev = 0.0;

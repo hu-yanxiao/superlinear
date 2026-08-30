@@ -146,6 +146,8 @@ class PairSUS2MTP : public Pair {
   // Basis types correspond to SUS2RadialMTPBasis::BasisType enum
   std::string radial_basis_type_str;   // String name of radial basis type for reading from file
   int radial_basis_type_index;         // Index for MPI Bcast
+  int radial_cutoff_type_index = SUS2RadialMTPBasis::CUTOFF_LEGACY;
+  int radial_cutoff_p = 5;
   SUS2RadialMTPBasis *radial_basis; // Pointer to basis object
   double *radial_basis_coeffs;        // These are the radial basis coeffs (c)
   int radial_func_count;              // Number of radial bases (mu_max)
