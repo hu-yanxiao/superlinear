@@ -1986,6 +1986,14 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 	            < expected_sh_size * static_cast<size_t>(3)
 	        || two_layer_edge_mu_ders_cache_.size() < expected_mu_size))
 		return false;
+	if (TwoLayerGateRadialMixingEnabled()) {
+		const size_t expected_radial_val_size =
+			edge_count
+			* static_cast<size_t>(two_layer_edge_cache_eval_block_count_)
+			* static_cast<size_t>(two_layer_edge_cache_rb_size_);
+		if (two_layer_edge_radial_vals_cache_.size() < expected_radial_val_size)
+			return false;
+	}
 	if (need_derivatives && need_param_derivatives) {
 		const size_t expected_radial_val_size =
 			edge_count
@@ -2102,8 +2110,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		? static_cast<int>(two_layer_gate_required_mu_indices_.size())
 		: 0;
 	const int atom_count = neighborhoods.size();
+	// M_l(r) needs the raw radial basis even for value-only line-search
+	// evaluations. Cache it with the other edge primitives so every trial does
+	// not repeat RB_CalcValsOnly for unchanged geometry.
 	const bool need_raw_radial_cache =
-		need_derivatives && need_param_derivatives;
+		(need_derivatives && need_param_derivatives)
+		|| TwoLayerGateRadialMixingEnabled();
 	const bool need_gate_raw_radial_cache =
 		need_raw_radial_cache && decoupled_gate_scaling;
 	size_t edge_count = 0;
@@ -2850,8 +2862,7 @@ void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 				const size_t radial_val_stride =
 					static_cast<size_t>(two_layer_edge_cache_eval_block_count_) * R;
 				const bool use_cached_raw_radial =
-					two_layer_edge_cache_has_param_derivatives_
-					&& two_layer_edge_radial_vals_cache_.size()
+					two_layer_edge_radial_vals_cache_.size()
 						>= (edge + 1) * radial_val_stride;
 				if (use_cached_raw_radial) {
 					radial_mixing_rb_vals =
@@ -9317,6 +9328,7 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 	std::vector<double> radial_mixing_outer;
 	std::vector<double> radial_mixing_outer_ders;
 	std::vector<double> radial_mixing_kernel_to_raw;
+	std::vector<double> radial_mixing_sum_adj_y;
 	int radial_mixing_eval_blocks[kMaxSHL + 1];
 	int radial_mixing_eval_block_count = 0;
 	const double* radial_mixing_coeffs = nullptr;
@@ -9330,6 +9342,7 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 		radial_mixing_outer.resize(outer_k_rank_);
 		radial_mixing_outer_ders.resize(3 * outer_k_rank_);
 		radial_mixing_kernel_to_raw.resize(outer_k_rank_ * sh_k_max_);
+		radial_mixing_sum_adj_y.resize(outer_k_rank_);
 		radial_mixing_coeffs =
 			regression_coeffs.data() + TwoLayerGateRadialMixingCoeffOffset();
 		for (int l = 0; l <= sh_l_max_; ++l) {
@@ -9658,6 +9671,8 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 										kernel_to_raw;
 								}
 							}
+							std::fill(radial_mixing_sum_adj_y.begin(),
+							          radial_mixing_sum_adj_y.end(), 0.0);
 							for (int m = -l; m <= l; ++m) {
 								const int sh_index = SHFlatIndex(l, m);
 								const int sh_der_index = 3 * sh_index;
@@ -9668,6 +9683,7 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 									const double adj =
 										center_linear
 										* site_energy_ders_wrt_moments_[outer];
+									radial_mixing_sum_adj_y[a] += adj * y;
 									if (adj == 0.0)
 										continue;
 									for (int q = 0; q < 3; ++q)
@@ -9681,13 +9697,7 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 							// Likewise contract the moment adjoints over m before
 							// propagating back to the raw k channels.
 							for (int a = 0; a < outer_k_rank_; ++a) {
-								double sum_adj_y = 0.0;
-								for (int m = -l; m <= l; ++m) {
-									const int outer = OuterKRank1OuterBasicIndex(a, l, m);
-									sum_adj_y +=
-										center_linear * site_energy_ders_wrt_moments_[outer]
-										* sh_values_use[SHFlatIndex(l, m)];
-								}
+								const double sum_adj_y = radial_mixing_sum_adj_y[a];
 								if (sum_adj_y == 0.0)
 									continue;
 								for (int k = 0; k < sh_k_max_; ++k) {
@@ -11612,12 +11622,14 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 															* rb_ders_use[mixing_der_base + xi] * wr;
 													kernel_s += coeff
 														* rb_ders_use[mixing_der_base + R + xi];
-													kernel_coord_s += coeff
-														* rb_ders_use[mixing_der_base + 2 * R + xi];
 													kernel_ss += coeff
 														* rb_ders_use[mixing_der_base + 3 * R + xi];
-													kernel_coord_ss += coeff
-														* rb_ders_use[mixing_der_base + 4 * R + xi];
+													if (se_ders_weights != nullptr) {
+														kernel_coord_s += coeff
+															* rb_ders_use[mixing_der_base + 2 * R + xi];
+														kernel_coord_ss += coeff
+															* rb_ders_use[mixing_der_base + 4 * R + xi];
+													}
 												}
 												radial_mixing_param_kernel[ac] = kernel;
 												radial_mixing_param_kernel_t[ac] = kernel_t;
