@@ -966,8 +966,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool two_layer_gate_k_rank_enabled = two_layer_gate_k_rank > 0;
 	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
 	const bool two_layer_gate_readout = HasOpt(opts, "two-layer-gate-readout");
+	const std::string two_layer_gate_radial_mixing =
+		StringOpt(opts, "two-layer-gate-radial-mixing", "none");
+	const bool two_layer_gate_radial_mixing_full =
+		two_layer_gate_radial_mixing == "full";
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate") || multi_layer_gate
-		|| two_layer_gate_readout;
+		|| two_layer_gate_readout || two_layer_gate_radial_mixing_full;
 	const SHFactorPruning two_layer_gate_factor_pruning =
 		ParseFactorPruning(
 			opts, "two-layer-gate-factor-pruning", factor_pruning);
@@ -1054,6 +1058,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-edge-l1 requires --two-layer-gate.");
 	if (two_layer_gate_edge_l1 && lmax < 1)
 		ERROR("--two-layer-gate-edge-l1 requires --l-max >= 1.");
+	if (two_layer_gate_radial_mixing != "none"
+	    && two_layer_gate_radial_mixing != "full")
+		ERROR("--two-layer-gate-radial-mixing should be 'none' or 'full'.");
+	if (HasOpt(opts, "two-layer-gate-radial-mixing")
+	    && !two_layer_gate_radial_mixing_full)
+		ERROR("--two-layer-gate-radial-mixing currently supports only explicit '=full' or omission.");
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be mu-body-linear-combo or mu-scalar-full.");
@@ -1072,6 +1082,13 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--two-layer-gate-edge-l1 first version supports neighbor site mode only.");
 	if (multi_layer_gate && two_layer_gate_edge_l1)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1.");
+	if (two_layer_gate_radial_mixing_full && two_layer_gate_edge_l1)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --two-layer-gate-edge-l1.");
+	if (two_layer_gate_radial_mixing_full && multi_layer_gate)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --multi-layer-gate.");
+	if (two_layer_gate_radial_mixing_full
+	    && (!outer_k_rank_enabled || !two_layer_gate_k_rank_enabled))
+		ERROR("--two-layer-gate-radial-mixing=full requires --outer-k-rank=<Ro> and --two-layer-gate-k-rank=<Rg>.");
 	if (two_layer_gate_readout && multi_layer_gate)
 		ERROR("--two-layer-gate-readout first version supports one gate only.");
 	if (two_layer_gate_readout && two_layer_gate_edge_l1)
@@ -1464,20 +1481,35 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << 1.0e-1;
 		}
 		ofs << "}\n";
-			if (two_layer_gate_mode == "mu-body-linear-combo") {
-				const int gate_body_mix_weight_count =
-					radial_func_count * (two_layer_gate_body_order - 1);
-				ofs << "two_layer_gate_body_mix_weight_count = "
-				    << gate_body_mix_weight_count << "\n";
+		if (two_layer_gate_mode == "mu-body-linear-combo") {
+			const int gate_body_mix_weight_count =
+				radial_func_count * (two_layer_gate_body_order - 1);
+			ofs << "two_layer_gate_body_mix_weight_count = "
+			    << gate_body_mix_weight_count << "\n";
 			ofs << "two_layer_gate_body_mix_weights = {";
 			for (int i = 0; i < gate_body_mix_weight_count; ++i) {
 				if (i != 0)
 					ofs << ", ";
 				ofs << 1.0;
-				}
-					ofs << "}\n";
-				}
-			if (two_layer_gate_readout) {
+			}
+			ofs << "}\n";
+		}
+		if (two_layer_gate_radial_mixing_full) {
+			const int mixing_count =
+				(lmax + 1) * outer_k_rank * two_layer_gate_k_rank
+				* rb_size;
+			ofs << "two_layer_gate_radial_mixing = full\n";
+			ofs << "two_layer_gate_radial_mixing_coeff_count = "
+			    << mixing_count << "\n";
+			ofs << "two_layer_gate_radial_mixing_coeffs = {";
+			for (int i = 0; i < mixing_count; ++i) {
+				if (i != 0)
+					ofs << ", ";
+				ofs << 0.0;
+			}
+			ofs << "}\n";
+		}
+		if (two_layer_gate_readout) {
 				const int readout_count =
 					static_cast<int>(gate_scalar_indices.size());
 				ofs << "two_layer_gate_readout_enabled = true\n";

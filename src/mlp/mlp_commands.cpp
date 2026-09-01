@@ -66,6 +66,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 					"two-layer-gate-mode",
 						"two-layer-gate-site-mode",
 						"two-layer-gate-shared-radial",
+						"two-layer-gate-radial-mixing",
 						"two-layer-gate-edge-l1",
 						"two-layer-gate-readout",
 						"outer-k-rank",
@@ -675,6 +676,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
 					"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
 					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
+					"    --two-layer-gate-radial-mixing=full: add a per-l distance-dependent full matrix from gate-rank channels to outer-rank channels. Default=off\n"
 					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
 					"    --two-layer-gate-readout: add a linear energy readout from the gate scalar basis. Default=off\n"
 					"    --outer-k-rank=<R>: use a q-total K=R outer graph; R=1 contracts directly into the radial rows, R>=2 learns R independent K contractions per l, and 0/default disables it.\n"

@@ -534,10 +534,12 @@ public:
 				std::vector<double> two_layer_gate_radial_coeffs_;
 				std::vector<double> two_layer_gate_scaling_coeffs_;
 				std::vector<double> two_layer_gate_additive_coeffs_;
-				std::vector<double> two_layer_gate_type_coeffs_;
-				std::vector<double> two_layer_gate_weights_;
-				std::vector<double> two_layer_gate_body_mix_weights_;
-				bool two_layer_gate_readout_enabled_ = false;
+					std::vector<double> two_layer_gate_type_coeffs_;
+					std::vector<double> two_layer_gate_weights_;
+					std::vector<double> two_layer_gate_body_mix_weights_;
+					std::string two_layer_gate_radial_mixing_ = "none";
+					std::vector<double> two_layer_gate_radial_mixing_coeffs_;
+					bool two_layer_gate_readout_enabled_ = false;
 				std::vector<double> two_layer_gate_readout_coeffs_;
 				bool multi_layer_gate_enabled_ = false;
 				bool second_layer_gate_shared_radial_ = false;
@@ -898,9 +900,10 @@ public:
 						                                      bool decoupled_gate_scaling = false,
 						                                      const std::string& gate_factor_pruning = "q-total");
 						bool TwoLayerGateMatchesFactorPruning(
-							const std::string& factor_pruning) const;
-							void EnableTwoLayerGateDecoupledScalingFromBase();
-							void UpgradeTwoLayerGateToEdgeL1();
+								const std::string& factor_pruning) const;
+								void EnableTwoLayerGateDecoupledScalingFromBase();
+								void EnableTwoLayerGateRadialMixingFull();
+								void UpgradeTwoLayerGateToEdgeL1();
 							void EnableTwoLayerGateReadout();
 							bool TwoLayerGateReadoutEnabled() const {
 								return two_layer_gate_readout_enabled_;
@@ -929,10 +932,15 @@ public:
 			return two_layer_gate_scalar_moment_indices_[scalar_weight_index];
 		}
 		int TwoLayerGateScalarBodyOrder(int scalar_weight_index) const;
-		int TwoLayerGateWeightCount() const;
+			int TwoLayerGateWeightCount() const;
 			int TwoLayerGateWeightOffset() const;
 			int TwoLayerGateBodyMixWeightCount() const;
 			int TwoLayerGateBodyMixWeightOffset() const;
+			bool TwoLayerGateRadialMixingEnabled() const;
+			int TwoLayerGateRadialMixingCoeffCount() const;
+			int TwoLayerGateRadialMixingCoeffOffset() const;
+			int TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel, int gate_channel, int xi) const;
+			double TwoLayerGateRadialMixingCoeff(int l, int outer_channel, int gate_channel, int xi) const;
 				bool TwoLayerGateEdgeL1Enabled() const;
 				int TwoLayerGateEdgeL1SourceCount() const;
 				int TwoLayerGateEdgeL1WeightCount() const;
@@ -1079,10 +1087,12 @@ public:
 						const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 						const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
 							const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
-						const int gate_type_count = TwoLayerGateTypeCoeffCount();
-						const int gate_weight_count = TwoLayerGateWeightCount();
-						const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
-						const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
+							const int gate_type_count = TwoLayerGateTypeCoeffCount();
+							const int gate_weight_count = TwoLayerGateWeightCount();
+							const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
+							const int gate_radial_mixing_count =
+								TwoLayerGateRadialMixingCoeffCount();
+							const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
 						const int second_gate_radial_count = SecondLayerGateRadialCoeffCount();
 						const int second_gate_additive_count = SecondLayerGateAdditiveCoeffCount();
 						const int second_gate_type_count = SecondLayerGateTypeCoeffCount();
@@ -1103,9 +1113,10 @@ public:
 									new_gate_scaling_offset + gate_scaling_count;
 							const int new_gate_type_offset = new_gate_additive_offset + gate_additive_count;
 						const int new_gate_offset = new_gate_type_offset + gate_type_count;
-						const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
-							const int new_gate_edge_l1_offset =
-								new_gate_body_mix_offset + gate_body_mix_weight_count;
+							const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
+								const int new_gate_edge_l1_offset =
+									new_gate_body_mix_offset + gate_body_mix_weight_count
+									+ gate_radial_mixing_count;
 							const int new_second_gate_radial_offset =
 								new_gate_edge_l1_offset + gate_edge_l1_weight_count;
 							const int new_second_gate_additive_offset =
@@ -1237,6 +1248,12 @@ public:
 								two_layer_gate_body_mix_weights_.assign(
 									gate_body_mix_weight_count, 1.0);
 							}
+						}
+						if (gate_radial_mixing_count > 0
+						    && static_cast<int>(two_layer_gate_radial_mixing_coeffs_.size())
+						       != gate_radial_mixing_count) {
+							two_layer_gate_radial_mixing_coeffs_.assign(
+								gate_radial_mixing_count, 0.0);
 						}
 							if (gate_edge_l1_weight_count > 0) {
 								if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
@@ -1394,7 +1411,9 @@ public:
 									base_nonlinear_size + gate_radial_count
 								+ gate_scaling_count + gate_additive_count
 								+ gate_type_count + gate_weight_count
-								+ gate_body_mix_weight_count + gate_edge_l1_weight_count
+								+ gate_body_mix_weight_count
+								+ gate_radial_mixing_count
+								+ gate_edge_l1_weight_count
 								+ second_gate_radial_count + second_gate_additive_count
 								+ second_gate_type_count + second_gate_weight_count
 									+ second_gate_body_mix_weight_count
@@ -1444,11 +1463,20 @@ public:
 					    != gate_body_mix_weight_count)
 						two_layer_gate_body_mix_weights_.assign(
 							gate_body_mix_weight_count, 1.0);
-						for (int i = 0; i < gate_body_mix_weight_count; ++i)
-							regression_coeffs[TwoLayerGateBodyMixWeightOffset() + i] =
-								two_layer_gate_body_mix_weights_[i];
+							for (int i = 0; i < gate_body_mix_weight_count; ++i)
+								regression_coeffs[TwoLayerGateBodyMixWeightOffset() + i] =
+									two_layer_gate_body_mix_weights_[i];
+						}
+					if (gate_radial_mixing_count > 0) {
+						if (static_cast<int>(two_layer_gate_radial_mixing_coeffs_.size())
+						    != gate_radial_mixing_count)
+							two_layer_gate_radial_mixing_coeffs_.assign(
+								gate_radial_mixing_count, 0.0);
+						for (int i = 0; i < gate_radial_mixing_count; ++i)
+							regression_coeffs[TwoLayerGateRadialMixingCoeffOffset() + i] =
+								two_layer_gate_radial_mixing_coeffs_[i];
 					}
-						if (gate_edge_l1_weight_count > 0) {
+							if (gate_edge_l1_weight_count > 0) {
 						if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
 						    != gate_edge_l1_weight_count)
 							two_layer_gate_edge_l1_weights_.assign(

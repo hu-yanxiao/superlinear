@@ -959,6 +959,11 @@ bool MLMTPR::TwoLayerGateUsesDirectScale() const
 	return two_layer_gate_scale_mode_ == "direct";
 }
 
+bool MLMTPR::TwoLayerGateRadialMixingEnabled() const
+{
+	return two_layer_gate_enabled_ && two_layer_gate_radial_mixing_ == "full";
+}
+
 bool MLMTPR::TwoLayerGateUsesCenterGate() const
 {
 	return false;
@@ -1130,6 +1135,35 @@ void MLMTPR::EnableTwoLayerGateDecoupledScalingFromBase()
 	ClearTwoLayerEdgePrimitiveCache();
 }
 
+void MLMTPR::EnableTwoLayerGateRadialMixingFull()
+{
+	if (!is_sh_potential_)
+		ERROR("--two-layer-gate-radial-mixing=full can only be used with a SUS2-SH model");
+	if (!two_layer_gate_enabled_)
+		ERROR("--two-layer-gate-radial-mixing=full requires --two-layer-gate");
+	if (two_layer_gate_radial_mixing_ == "full")
+		return;
+	if (two_layer_gate_radial_mixing_ != "none")
+		ERROR("SUS2-SH two-layer gate radial mixing mode should be 'none' or 'full'");
+	if (two_layer_gate_edge_l1_enabled_)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --two-layer-gate-edge-l1");
+	if (multi_layer_gate_enabled_)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --multi-layer-gate");
+	if (!OuterKRankEnabled() || !TwoLayerGateKRankEnabled())
+		ERROR("--two-layer-gate-radial-mixing=full requires --outer-k-rank=<Ro> and --two-layer-gate-k-rank=<Rg>");
+	if (OuterKRankUsesDirectRadial())
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with direct radial outer K-rank shortcuts");
+	if (TwoLayerGateUsesDirectScale())
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with direct gate scaling shortcuts");
+	if (p_RadialBasis == nullptr)
+		ERROR("--two-layer-gate-radial-mixing=full requires an initialized radial basis");
+	two_layer_gate_radial_mixing_ = "full";
+	two_layer_gate_radial_mixing_coeffs_.assign(
+		TwoLayerGateRadialMixingCoeffCount(), 0.0);
+	DistributeCoeffs();
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
 void MLMTPR::UpgradeTwoLayerGateToEdgeL1()
 {
 	if (!is_sh_potential_)
@@ -1140,6 +1174,8 @@ void MLMTPR::UpgradeTwoLayerGateToEdgeL1()
 		ERROR("--two-layer-gate-edge-l1 is not compatible with --two-layer-gate-readout");
 	if (two_layer_gate_edge_l1_enabled_)
 		return;
+	if (TwoLayerGateRadialMixingEnabled())
+		ERROR("--two-layer-gate-edge-l1 is not compatible with --two-layer-gate-radial-mixing=full");
 	if (OuterKRankEnabled() || TwoLayerGateKRankEnabled())
 		ERROR("Adding edge-L1 to an existing ranked model is not supported; initialize a new model with --two-layer-gate-edge-l1 and the requested rank options");
 	if (sh_l_max_ < 1)
@@ -1218,6 +1254,8 @@ void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 		ERROR("--multi-layer-gate is not compatible with --outer-k-rank1");
 	if (!two_layer_gate_enabled_)
 		ERROR("--multi-layer-gate requires a two-layer gate model or --two-layer-gate");
+	if (TwoLayerGateRadialMixingEnabled())
+		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-radial-mixing=full");
 	if (two_layer_gate_readout_enabled_)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-readout");
 	if (two_layer_gate_edge_l1_enabled_)
@@ -1591,6 +1629,56 @@ int MLMTPR::TwoLayerGateBodyMixWeightOffset() const
 	return TwoLayerGateWeightOffset() + TwoLayerGateWeightCount();
 }
 
+int MLMTPR::TwoLayerGateRadialMixingCoeffCount() const
+{
+	if (!TwoLayerGateRadialMixingEnabled() || p_RadialBasis == nullptr)
+		return 0;
+	return (sh_l_max_ + 1) * outer_k_rank_ * two_layer_gate_k_rank_
+		* p_RadialBasis->rb_size;
+}
+
+int MLMTPR::TwoLayerGateRadialMixingCoeffOffset() const
+{
+	return TwoLayerGateBodyMixWeightOffset() + TwoLayerGateBodyMixWeightCount();
+}
+
+int MLMTPR::TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel,
+                                               int gate_channel, int xi) const
+{
+	if (!TwoLayerGateRadialMixingEnabled())
+		return -1;
+	if (l < 0 || l > sh_l_max_)
+		ERROR("SUS2-SH two-layer gate radial mixing l index is out of range");
+	if (outer_channel < 0 || outer_channel >= outer_k_rank_
+	    || gate_channel < 0 || gate_channel >= two_layer_gate_k_rank_)
+		ERROR("SUS2-SH two-layer gate radial mixing rank index is out of range");
+	if (p_RadialBasis == nullptr || xi < 0 || xi >= p_RadialBasis->rb_size)
+		ERROR("SUS2-SH two-layer gate radial mixing basis index is out of range");
+	const int R = p_RadialBasis->rb_size;
+	const size_t local = (((static_cast<size_t>(l) * outer_k_rank_
+		+ outer_channel) * two_layer_gate_k_rank_ + gate_channel) * R + xi);
+	if (local >= static_cast<size_t>(TwoLayerGateRadialMixingCoeffCount()))
+		ERROR("SUS2-SH two-layer gate radial mixing coefficient index is out of range");
+	return TwoLayerGateRadialMixingCoeffOffset() + static_cast<int>(local);
+}
+
+double MLMTPR::TwoLayerGateRadialMixingCoeff(int l, int outer_channel,
+                                             int gate_channel, int xi) const
+{
+	const int coeff_index =
+		TwoLayerGateRadialMixingCoeffIndex(l, outer_channel, gate_channel, xi);
+	if (coeff_index >= 0
+	    && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int R = p_RadialBasis->rb_size;
+	const size_t local = (((static_cast<size_t>(l) * outer_k_rank_
+		+ outer_channel) * two_layer_gate_k_rank_ + gate_channel) * R + xi);
+	if (local < two_layer_gate_radial_mixing_coeffs_.size())
+		return two_layer_gate_radial_mixing_coeffs_[local];
+	ERROR("SUS2-SH two-layer gate radial mixing coefficient storage is inconsistent");
+	return 0.0;
+}
+
 bool MLMTPR::TwoLayerGateEdgeL1Enabled() const
 {
 	return two_layer_gate_enabled_ && two_layer_gate_edge_l1_enabled_;
@@ -1612,7 +1700,8 @@ int MLMTPR::TwoLayerGateEdgeL1WeightCount() const
 
 int MLMTPR::TwoLayerGateEdgeL1WeightOffset() const
 {
-	return TwoLayerGateBodyMixWeightOffset() + TwoLayerGateBodyMixWeightCount();
+	return TwoLayerGateRadialMixingCoeffOffset()
+		+ TwoLayerGateRadialMixingCoeffCount();
 }
 
 int MLMTPR::TwoLayerGateEdgeL1SourceMomentIndex(int source_index) const
@@ -3577,10 +3666,12 @@ void MLMTPR::Load(const string& filename)
 					two_layer_gate_radial_coeffs_.clear();
 					two_layer_gate_scaling_coeffs_.clear();
 						two_layer_gate_additive_coeffs_.clear();
-					two_layer_gate_type_coeffs_.clear();
-					two_layer_gate_weights_.clear();
-					two_layer_gate_body_mix_weights_.clear();
-					two_layer_gate_readout_enabled_ = false;
+						two_layer_gate_type_coeffs_.clear();
+						two_layer_gate_weights_.clear();
+						two_layer_gate_body_mix_weights_.clear();
+						two_layer_gate_radial_mixing_ = "none";
+						two_layer_gate_radial_mixing_coeffs_.clear();
+						two_layer_gate_readout_enabled_ = false;
 					two_layer_gate_readout_coeffs_.clear();
 				multi_layer_gate_enabled_ = false;
 				second_layer_gate_shared_radial_ = false;
@@ -4586,12 +4677,44 @@ void MLMTPR::Load(const string& filename)
 				ifs.ignore(1000, '\n');
 				if (!(ifs >> tmpstr))
 					tmpstr = "";
+					} else {
+						two_layer_gate_body_mix_weights_.clear();
+						if (tmpstr == "two_layer_gate_body_mix_weight_count")
+							ERROR("SUS2-SH mu-scalar-full gate models should not contain body mix weights");
+					}
+				if (tmpstr == "two_layer_gate_radial_mixing") {
+					ifs.ignore(2);
+					ifs >> two_layer_gate_radial_mixing_;
+					if (two_layer_gate_radial_mixing_ != "full")
+						ERROR("SUS2-SH two_layer_gate_radial_mixing should be full when present");
+					if (two_layer_gate_edge_l1_enabled_ || multi_layer_gate_enabled_)
+						ERROR("SUS2-SH two-layer gate radial mixing is not compatible with edge-L1 or multi-layer gate");
+					if (OuterKRankUsesDirectRadial() || TwoLayerGateUsesDirectScale())
+						ERROR("SUS2-SH two-layer gate radial mixing is not compatible with direct radial/gate shortcuts");
+					ifs >> tmpstr;
+					if (tmpstr != "two_layer_gate_radial_mixing_coeff_count")
+						ERROR("SUS2-SH two-layer gate radial mixing is missing coefficient count metadata");
+					ifs.ignore(2);
+					int mixing_count = 0;
+					ifs >> mixing_count;
+					const int expected_mixing_count =
+						TwoLayerGateRadialMixingCoeffCount();
+					if (mixing_count != expected_mixing_count)
+						ERROR("SUS2-SH two-layer gate radial mixing coefficient count is inconsistent");
+					ifs >> tmpstr;
+					if (tmpstr != "two_layer_gate_radial_mixing_coeffs")
+						ERROR("SUS2-SH two-layer gate radial mixing is missing coefficients");
+					ReadDoubleList(ifs,
+					               two_layer_gate_radial_mixing_coeffs_,
+					               mixing_count);
+					ifs.ignore(1000, '\n');
+					if (!(ifs >> tmpstr))
+						tmpstr = "";
 				} else {
-					two_layer_gate_body_mix_weights_.clear();
-					if (tmpstr == "two_layer_gate_body_mix_weight_count")
-						ERROR("SUS2-SH mu-scalar-full gate models should not contain body mix weights");
+					two_layer_gate_radial_mixing_ = "none";
+					two_layer_gate_radial_mixing_coeffs_.clear();
 				}
-			if (tmpstr == "two_layer_gate_readout_enabled") {
+				if (tmpstr == "two_layer_gate_readout_enabled") {
 				ifs.ignore(2);
 				ifs >> bool_token;
 				two_layer_gate_readout_enabled_ = ReadBoolToken(bool_token);
@@ -5712,18 +5835,42 @@ void MLMTPR::Save(const string& filename)
 			ofs << TwoLayerGateWeight(i);
 		}
 		ofs << "}\n";
-		if (TwoLayerGateUsesBodyLinearCombo()) {
-			ofs << "two_layer_gate_body_mix_weight_count = "
-			    << TwoLayerGateBodyMixWeightCount() << '\n';
+			if (TwoLayerGateUsesBodyLinearCombo()) {
+				ofs << "two_layer_gate_body_mix_weight_count = "
+				    << TwoLayerGateBodyMixWeightCount() << '\n';
 			ofs << "two_layer_gate_body_mix_weights = {";
 			for (int i = 0; i < TwoLayerGateBodyMixWeightCount(); ++i) {
 				if (i > 0)
 					ofs << ", ";
 				ofs << TwoLayerGateBodyMixWeight(i);
+				}
+				ofs << "}\n";
 			}
-			ofs << "}\n";
-		}
-		if (TwoLayerGateReadoutEnabled()) {
+			if (TwoLayerGateRadialMixingEnabled()) {
+				const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
+				if (mixing_count <= 0)
+					ERROR("SUS2-SH two-layer gate radial mixing has no coefficients");
+				ofs << "two_layer_gate_radial_mixing = full\n";
+				ofs << "two_layer_gate_radial_mixing_coeff_count = "
+				    << mixing_count << '\n';
+				ofs << "two_layer_gate_radial_mixing_coeffs = {";
+				const int R = p_RadialBasis->rb_size;
+				for (int i = 0; i < mixing_count; ++i) {
+					if (i > 0)
+						ofs << ", ";
+					const int xi = i % R;
+					const int q = i / R;
+					const int gate_channel = q % two_layer_gate_k_rank_;
+					const int outer_channel =
+						(q / two_layer_gate_k_rank_) % outer_k_rank_;
+					const int l =
+						q / (two_layer_gate_k_rank_ * outer_k_rank_);
+					ofs << TwoLayerGateRadialMixingCoeff(
+						l, outer_channel, gate_channel, xi);
+				}
+				ofs << "}\n";
+			}
+			if (TwoLayerGateReadoutEnabled()) {
 			const int readout_count = TwoLayerGateReadoutCoeffCount();
 			if (readout_count != TwoLayerGateScalarCount())
 				ERROR("SUS2-SH gate readout coefficient count is inconsistent");

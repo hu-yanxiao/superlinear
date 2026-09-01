@@ -186,6 +186,11 @@ public:
 			const int gate_body_mix_begin = mtpr->TwoLayerGateBodyMixWeightOffset();
 			const int gate_body_mix_end =
 				gate_body_mix_begin + mtpr->TwoLayerGateBodyMixWeightCount();
+			const int gate_radial_mixing_begin =
+				mtpr->TwoLayerGateRadialMixingCoeffOffset();
+			const int gate_radial_mixing_end =
+				gate_radial_mixing_begin
+				+ mtpr->TwoLayerGateRadialMixingCoeffCount();
 				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
 				const int gate_edge_l1_end =
 					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
@@ -215,6 +220,8 @@ public:
 				    || (coeff_index >= gate_type_begin && coeff_index < gate_type_end)
 				    || (coeff_index >= gate_weight_begin && coeff_index < gate_weight_end)
 				    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
+				    || (coeff_index >= gate_radial_mixing_begin
+				        && coeff_index < gate_radial_mixing_end)
 				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 				    || (coeff_index >= second_gate_radial_begin
 				        && coeff_index < second_gate_radial_end)
@@ -1429,6 +1436,10 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	    && index < mtpr.TwoLayerGateBodyMixWeightOffset()
 	        + mtpr.TwoLayerGateBodyMixWeightCount())
 		return "two_layer_gate_body_mix_weight";
+	if (index >= mtpr.TwoLayerGateRadialMixingCoeffOffset()
+	    && index < mtpr.TwoLayerGateRadialMixingCoeffOffset()
+	        + mtpr.TwoLayerGateRadialMixingCoeffCount())
+		return "two_layer_gate_radial_mixing_coeff";
 	if (index >= mtpr.TwoLayerGateEdgeL1WeightOffset()
 	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
 	        + mtpr.TwoLayerGateEdgeL1WeightCount())
@@ -1618,6 +1629,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_weight_end=" << mtpr.TwoLayerGateWeightOffset() + mtpr.TwoLayerGateWeightCount()
 				          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
 				          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
+				          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
+				          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
 					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 					          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 					          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -1715,6 +1728,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " radial_end=" << mtpr.BaseNonlinearCoeffCount()
 			          << " gate_body_mix_begin=" << mtpr.TwoLayerGateBodyMixWeightOffset()
 			          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
+			          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
+			          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -2383,9 +2398,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (default=outer),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
-					"         --two-layer-gate-shared-radial (default for gate models),\n"
-					"         --two-layer-gate-decoupled-scaling|--two-layer-gate-full-decoupled (one-layer gate only),\n"
-					"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
+						"         --two-layer-gate-shared-radial (default for gate models),\n"
+						"         --two-layer-gate-decoupled-scaling|--two-layer-gate-full-decoupled (one-layer gate only),\n"
+						"         --two-layer-gate-radial-mixing=full (per-l full scalar distance kernel; one-layer gate only),\n"
+						"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
 					"         --two-layer-gate-readout (linear energy readout from gate scalars; default=off),\n"
 					"         --outer-k-rank=<R> (per-l K contraction to a q-total K=R outer graph; R=1 uses direct radial sums with no trainable W, R>=2 uses learned W; 0/default=off),\n"
 					"         --outer-k-rank1 (compatibility alias for --outer-k-rank=1),\n"

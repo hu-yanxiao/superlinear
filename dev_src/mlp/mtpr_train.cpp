@@ -505,10 +505,11 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 							"two-layer-gate-mode",
 							"two-layer-gate-tanh-amplitude",
 						"two-layer-gate-site-mode",
-						"two-layer-gate-shared-radial",
-						"two-layer-gate-decoupled-scaling",
-						"two-layer-gate-full-decoupled",
-						"two-layer-gate-edge-l1",
+							"two-layer-gate-shared-radial",
+							"two-layer-gate-decoupled-scaling",
+							"two-layer-gate-full-decoupled",
+							"two-layer-gate-radial-mixing",
+							"two-layer-gate-edge-l1",
 							"two-layer-gate-readout",
 							"outer-k-rank",
 							"outer-k-rank1",
@@ -2079,6 +2080,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (two_layer_gate_mode != "mu-body-linear-combo"
 	    && two_layer_gate_mode != "mu-scalar-full")
 		ERROR("--two-layer-gate-mode should be 'mu-body-linear-combo' or 'mu-scalar-full'");
+	const bool custom_two_layer_gate_radial_mixing =
+		opts["two-layer-gate-radial-mixing"] != "";
+	const std::string two_layer_gate_radial_mixing =
+		custom_two_layer_gate_radial_mixing
+			? opts["two-layer-gate-radial-mixing"]
+			: "none";
+	if (two_layer_gate_radial_mixing != "none"
+	    && two_layer_gate_radial_mixing != "full")
+		ERROR("--two-layer-gate-radial-mixing should be 'none' or 'full'");
 	const bool custom_two_layer_gate_factor_pruning =
 		opts["two-layer-gate-factor-pruning"] != "";
 	const std::string two_layer_gate_factor_pruning =
@@ -2179,9 +2189,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
 	const bool requested_two_layer_gate_readout =
 		opts["two-layer-gate-readout"] != "";
+	const bool requested_two_layer_gate_radial_mixing =
+		two_layer_gate_radial_mixing == "full";
 	const bool requested_two_layer_gate =
 		opts["two-layer-gate"] != "" || requested_multi_layer_gate
-		|| requested_two_layer_gate_readout;
+		|| requested_two_layer_gate_readout
+		|| requested_two_layer_gate_radial_mixing;
 	const bool requested_two_layer_gate_shared_radial =
 		opts["two-layer-gate-shared-radial"] != "";
 	const bool requested_two_layer_gate_decoupled_scaling =
@@ -2240,6 +2253,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--second-layer-gate-* requires --multi-layer-gate unless the loaded model already has release3 multi-layer gate");
 	if (requested_multi_layer_gate && requested_two_layer_gate_edge_l1)
 		ERROR("--multi-layer-gate is not compatible with --two-layer-gate-edge-l1");
+	if (requested_two_layer_gate_radial_mixing && requested_two_layer_gate_edge_l1)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --two-layer-gate-edge-l1");
+	if (requested_two_layer_gate_radial_mixing && requested_multi_layer_gate)
+		ERROR("--two-layer-gate-radial-mixing=full is not compatible with --multi-layer-gate");
+	if (requested_two_layer_gate_radial_mixing
+	    && (!mtpr.OuterKRankEnabled() || !mtpr.TwoLayerGateKRankEnabled())
+	    && (requested_outer_k_rank <= 0 || requested_two_layer_gate_k_rank <= 0))
+		ERROR("--two-layer-gate-radial-mixing=full requires --outer-k-rank=<Ro> and --two-layer-gate-k-rank=<Rg>");
+	if (custom_two_layer_gate_radial_mixing
+	    && !requested_two_layer_gate_radial_mixing
+	    && mtpr.TwoLayerGateRadialMixingEnabled())
+		ERROR("--two-layer-gate-radial-mixing=none does not match the loaded full radial-mixing model");
 	if (requested_two_layer_gate_readout && requested_multi_layer_gate)
 		ERROR("--two-layer-gate-readout first version supports one gate only");
 	if (requested_two_layer_gate_readout && requested_two_layer_gate_edge_l1)
@@ -2263,6 +2288,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (custom_two_layer_gate_factor_pruning && !requested_two_layer_gate
 	    && !mtpr.TwoLayerGateEnabled())
 		ERROR("--two-layer-gate-factor-pruning requires --two-layer-gate when upgrading a plain SH model");
+	if (custom_two_layer_gate_radial_mixing && !requested_two_layer_gate
+	    && !mtpr.TwoLayerGateEnabled())
+		ERROR("--two-layer-gate-radial-mixing requires --two-layer-gate when upgrading a plain SH model");
 	if (requested_two_layer_gate && !mtpr.TwoLayerGateEnabled()) {
 		if (!mtpr.IsSHPotential())
 			ERROR("--two-layer-gate can only upgrade or train a SUS2-SH model");
@@ -2301,6 +2329,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--two-layer-gate-decoupled-scaling is only supported for one-layer gate models");
 		if (!mtpr.TwoLayerGateUsesDecoupledScaling())
 			mtpr.EnableTwoLayerGateDecoupledScalingFromBase();
+	}
+	if (requested_two_layer_gate_radial_mixing) {
+		if (!mtpr.TwoLayerGateEnabled())
+			ERROR("--two-layer-gate-radial-mixing=full requires a two-layer gate model or --two-layer-gate");
+		if (mtpr.TwoLayerGateEdgeL1Enabled())
+			ERROR("--two-layer-gate-radial-mixing=full is not compatible with two-layer gate edge-L1 models");
+		if (mtpr.MultiLayerGateEnabled())
+			ERROR("--two-layer-gate-radial-mixing=full is not compatible with multi-layer gate models");
+		if (!mtpr.TwoLayerGateRadialMixingEnabled())
+			mtpr.EnableTwoLayerGateRadialMixingFull();
 	}
 	if (requested_two_layer_gate_readout) {
 		if (!mtpr.TwoLayerGateEnabled())
