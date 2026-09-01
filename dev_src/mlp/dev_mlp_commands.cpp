@@ -1553,6 +1553,25 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		mtpr.Save(args[1]);
 	} END_COMMAND;
 
+	BEGIN_COMMAND("enable-two-layer-gate-radial-mixing-dev",
+		"enables zero-initialized full radial mixing on a ranked two-layer gate model",
+		"mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.mtp output.mtp\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 enable-two-layer-gate-radial-mixing-dev: "
+			             "input and output model arguments are required\n";
+			return 1;
+		}
+		if (mpi_rank == 0) {
+			MLMTPR mtpr(args[0]);
+			mtpr.EnableTwoLayerGateRadialMixingFull();
+			mtpr.Save(args[1]);
+		}
+#ifdef MLIP_MPI
+		MPI_Barrier(MPI_COMM_WORLD);
+#endif
+	} END_COMMAND;
+
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
 		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"

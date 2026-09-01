@@ -130,6 +130,17 @@ Metadata fields are explicit and omitted when disabled:
 - `two_layer_gate_radial_mixing_coeff_count`
 - `two_layer_gate_radial_mixing_coeffs`
 
+For controlled continuation from a trained release3 checkpoint, the developer
+binary provides:
+
+```bash
+mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.mtp output.mtp
+```
+
+It preserves every existing coefficient, inserts the new block at its formal
+layout offset, and initializes that block to exactly zero.  The upgraded model
+therefore has identical energy, force, and stress before optimization.
+
 The feature is valid only when both `two_layer_gate_k_rank > 0` and
 `outer_k_rank > 0`. The expected weight count is
 

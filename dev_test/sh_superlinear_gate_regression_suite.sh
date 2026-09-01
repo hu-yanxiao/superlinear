@@ -27,6 +27,7 @@ run_two_layer_radial_mixing_suite() {
   local full_zero_raw_model="$tmp_dir/full-radial-zero.raw.mtp"
   local base_model="$tmp_dir/base-no-mixing.mtp"
   local full_zero_model="$tmp_dir/full-radial-zero.mtp"
+  local upgraded_zero_model="$tmp_dir/base-upgraded-full-radial-zero.mtp"
   local full_active_model="$tmp_dir/full-radial-active.mtp"
   local full_active_roundtrip="$tmp_dir/full-radial-active.roundtrip.mtp"
 
@@ -132,6 +133,8 @@ PY
     --two-layer-gate-radial-mixing=full >/dev/null
   "$bin" roundtrip-model-dev "$base_raw_model" "$base_model" >/dev/null
   "$bin" roundtrip-model-dev "$full_zero_raw_model" "$full_zero_model" >/dev/null
+  "$bin" enable-two-layer-gate-radial-mixing-dev \
+    "$base_model" "$upgraded_zero_model" >/dev/null
 
 python3 - "$full_zero_model" "$full_active_model" <<'PY'
 import re
@@ -278,7 +281,7 @@ PY
   outer_k_rank_end=$(layout_field outer_k_rank_end)
 
   "$bin" calc-efs "$base_model" "$cfg" "$base_out" >/dev/null
-  "$bin" calc-efs "$full_zero_model" "$cfg" "$zero_out" >/dev/null
+  "$bin" calc-efs "$upgraded_zero_model" "$cfg" "$zero_out" >/dev/null
   python3 - "$base_out" "$zero_out" <<'PY'
 import re
 import sys
@@ -296,6 +299,8 @@ for x, y in zip(a, b):
         raise SystemExit("zero radial-mixing output mismatch")
 print("zero_mixing_parity ok")
 PY
+  grep -q "two_layer_gate_radial_mixing = full" "$upgraded_zero_model"
+  grep -q "two_layer_gate_radial_mixing_coeff_count = 48" "$upgraded_zero_model"
 
   "$bin" calc-efs "$full_active_model" "$cfg" "$active_out" >/dev/null
   python3 - "$zero_out" "$active_out" <<'PY'
