@@ -1,0 +1,68 @@
+#!/bin/bash
+#BSUB -J vo2_release3_A
+#BSUB -q 33
+#BSUB -n 200
+#BSUB -R "span[ptile=40]"
+#BSUB -e %J.release3_A.err
+#BSUB -o %J.release3_A.out
+
+set -euo pipefail
+
+module purge
+module load compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0 gcc/11.2.0
+
+cd "$LS_SUBCWD"
+
+export SUS2_SH_PRODUCT_ROWS=0
+export SUS2_SH_SITE_DER_CACHE=1
+export SUS2_SH_ACCUM_SKIP_SITE_DERS=1
+export SUS2_SH_PRODUCT_HVT_REVERSE=1
+
+BIN=/work/phy-weigw/app/release3/mlp-sus2
+START_MODEL=../seed/release3_snapshot.mtp
+TRAIN_CFG=../seed/train.cfg
+LOG=train.log
+
+NP=$(wc -l < "$LSB_DJOB_HOSTFILE")
+cmd=(
+  mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$NP"
+  "$BIN" train "$START_MODEL" "$TRAIN_CFG"
+  --init-params=same
+  --skip-preinit
+  --energy-weight=1
+  --force-weight=0.1
+  --stress-weight=0.01
+  --force-loss=l2
+  --do-lin-steps=3000
+  --do-lin-freq=50
+  --stdd-weight=0.0
+  --std-weight=0.100
+  --do-samp
+  --max-iter=100
+  --curr-pot-name=current.mtp
+  --best-pot-name=current.best.mtp
+  --trained-pot-name=trained.mtp
+  --optimizer=bfgs
+  --bfgs-line-search=wolfe
+)
+
+{
+  date -Is
+  echo "variant=release3_A"
+  echo "source_model=release3_snapshot.mtp"
+  echo "max_iter=100"
+  sha256sum "$BIN" "$START_MODEL" "$TRAIN_CFG"
+  printf 'command='
+  printf '%q ' "${cmd[@]}"
+  printf '\n'
+} > metadata.txt
+
+start=$(date +%s)
+"${cmd[@]}" > "$LOG" 2>&1
+rc=$?
+end=$(date +%s)
+{
+  echo "runtime_sec=$((end-start))"
+  echo "exit_code=$rc"
+} > time.txt
+exit "$rc"
