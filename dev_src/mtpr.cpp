@@ -964,6 +964,24 @@ bool MLMTPR::TwoLayerGateRadialMixingEnabled() const
 	return two_layer_gate_enabled_ && two_layer_gate_radial_mixing_ == "full";
 }
 
+bool MLMTPR::HasNonzeroTwoLayerGateRadialMixingCoeffs() const
+{
+	if (!TwoLayerGateRadialMixingEnabled())
+		return false;
+	const int count = TwoLayerGateRadialMixingCoeffCount();
+	const int offset = TwoLayerGateRadialMixingCoeffOffset();
+	if (offset >= 0 && offset + count <= static_cast<int>(regression_coeffs.size())) {
+		for (int i = 0; i < count; ++i)
+			if (regression_coeffs[offset + i] != 0.0)
+				return true;
+		return false;
+	}
+	for (double coeff : two_layer_gate_radial_mixing_coeffs_)
+		if (coeff != 0.0)
+			return true;
+	return false;
+}
+
 bool MLMTPR::TwoLayerGateUsesCenterGate() const
 {
 	return false;

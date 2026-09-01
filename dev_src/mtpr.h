@@ -937,6 +937,7 @@ public:
 			int TwoLayerGateBodyMixWeightCount() const;
 			int TwoLayerGateBodyMixWeightOffset() const;
 			bool TwoLayerGateRadialMixingEnabled() const;
+			bool HasNonzeroTwoLayerGateRadialMixingCoeffs() const;
 			int TwoLayerGateRadialMixingCoeffCount() const;
 			int TwoLayerGateRadialMixingCoeffOffset() const;
 			int TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel, int gate_channel, int xi) const;
