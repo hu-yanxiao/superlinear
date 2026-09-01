@@ -61,8 +61,10 @@ cmd=(
 } > metadata.txt
 
 start=$(date +%s)
+set +e
 "${cmd[@]}" > "$LOG" 2>&1
 rc=$?
+set -e
 end=$(date +%s)
 {
   echo "runtime_sec=$((end-start))"
