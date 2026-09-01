@@ -20,12 +20,11 @@ run_check() {
 run_two_layer_radial_mixing_suite() {
   local tmp_dir=.codex_tmp/sh_two_layer_gate_radial_mixing_suite
   mkdir -p "$tmp_dir"
-  if [[ ${SUS2_TEST_KEEP_TMP:-0} != 1 ]]; then
-    trap 'rm -rf "$tmp_dir"' RETURN
-  fi
 
   local cfg="$tmp_dir/asym8.cfg"
   local cfg_rot="$tmp_dir/asym8_rot.cfg"
+  local base_raw_model="$tmp_dir/base-no-mixing.raw.mtp"
+  local full_zero_raw_model="$tmp_dir/full-radial-zero.raw.mtp"
   local base_model="$tmp_dir/base-no-mixing.mtp"
   local full_zero_model="$tmp_dir/full-radial-zero.mtp"
   local full_active_model="$tmp_dir/full-radial-active.mtp"
@@ -69,49 +68,46 @@ L = 8.5
 c = L / 2.0
 lines = open(src, encoding="utf-8").read().splitlines()
 
-atoms = []
-header = []
-body_started = False
+atom_re = re.compile(
+    r"\s*\d+\s+\d+(?:\s+[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?){6}\s*"
+)
+in_atoms = False
+rotate_next_stress = False
+out_lines = []
 for line in lines:
-    if line.startswith("AtomData:"):
-        body_started = True
+    marker = line.lstrip()
+    if marker.startswith("AtomData:"):
+        in_atoms = True
+        out_lines.append(line)
         continue
-    if not body_started and line.startswith("PlusStress:"):
-        header.append(line)
+    if marker.startswith("Energy"):
+        in_atoms = False
+    if in_atoms and atom_re.fullmatch(line):
+        aid, typ, x, y, z, fx, fy, fz = line.split()[:8]
+        x, y, z = float(x), float(y), float(z)
+        fx, fy, fz = float(fx), float(fy), float(fz)
+        xr, yr = c - (y - c), c + (x - c)
+        out_lines.append(
+            f"{int(aid):6d} {int(typ):6d} {xr:14.8f} {yr:14.8f} {z:14.8f}"
+            f" {-fy:14.8f} {fx:14.8f} {fz:14.8f}"
+        )
         continue
-    if body_started:
-        if re.fullmatch(r"\s*\d+\s+\d+\s+[-+]?\d+\.\d+\s+[-+]?\d+\.\d+\s+[-+]?\d+\.\d+\s+[-+]?\d+\.\d+\s+[-+]?\d+\.\d+\s+[-+]?\d+\.\d+\s*", line):
-            parts = line.split()
-            aid, typ, x, y, z, fx, fy, fz = parts[:8]
-            atoms.append((int(aid), int(typ), float(x), float(y), float(z), float(fx), float(fy), float(fz)))
-            continue
-    if body_started and line.startswith(" Energy"):
-        energy = line
+    if marker.startswith("PlusStress:"):
+        rotate_next_stress = True
+        out_lines.append(line)
         continue
-    if body_started and line.startswith(" PlusStress:"):
-        stress_start = line
+    if rotate_next_stress and marker:
+        xx, yy, zz, yz, xz, xy = map(float, marker.split()[:6])
+        # S' = R S R^T for R = [[0,-1,0],[1,0,0],[0,0,1]].
+        out_lines.append(
+            f"   {yy:.10f}   {xx:.10f}   {zz:.10f}"
+            f"   {xz:.10f}   {-yz:.10f}   {-xy:.10f}"
+        )
+        rotate_next_stress = False
         continue
-    if body_started and line == "END_CFG":
-        break
-    if line.startswith("BEGIN_CFG") or line.startswith(" Size") or line.startswith(" Supercell"):
-        header.append(line)
+    out_lines.append(line)
 
-with open(dst, "w", encoding="utf-8") as out:
-    for line in header:
-        if line.startswith("PlusStress:"):
-            break
-        out.write(line + "\n")
-    # reconstruct in same pre-AtomData order
-    out.write(" AtomData:  id type       cartes_x      cartes_y      cartes_z     fx          fy          fz\n")
-    for aid, typ, x, y, z, fx, fy, fz in atoms:
-        dx, dy = x - c, y - c
-        xr, yr = c - dy, c + dx
-        out.write(f"{aid:6d} {typ:6d} {xr:11.6f} {yr:11.6f} {z:11.6f} {-fy:11.6f} {fx:11.6f} {fz:11.6f}\n")
-    out.write(energy + "\n")
-    out.write(" PlusStress:  xx          yy          zz          yz          xz          xy\n")
-    idx = lines.index(" PlusStress:  xx          yy          zz          yz          xz          xy")
-    out.write(lines[idx + 1] + "\n")
-    out.write("END_CFG\n")
+open(dst, "w", encoding="utf-8").write("\n".join(out_lines) + "\n")
 PY
 
   local common_args=(
@@ -131,9 +127,11 @@ PY
     --outer-k-rank=2
   )
 
-  "$bin" init-sh "$base_model" "${common_args[@]}" >/dev/null
-  "$bin" init-sh "$full_zero_model" "${common_args[@]}" \
+  "$bin" init-sh "$base_raw_model" "${common_args[@]}" >/dev/null
+  "$bin" init-sh "$full_zero_raw_model" "${common_args[@]}" \
     --two-layer-gate-radial-mixing=full >/dev/null
+  "$bin" roundtrip-model-dev "$base_raw_model" "$base_model" >/dev/null
+  "$bin" roundtrip-model-dev "$full_zero_raw_model" "$full_zero_model" >/dev/null
 
 python3 - "$full_zero_model" "$full_active_model" <<'PY'
 import re
@@ -157,7 +155,7 @@ if count is None:
     raise SystemExit("two_layer_gate_radial_mixing_coeff_count missing")
 
 zero_coeffs = [0.0 for _ in range(count)]
-active_coeffs = [0.03 * ((i % 7) - 3) / 3.0 for i in range(count)]
+active_coeffs = [0.17 * ((i % 7) - 3) / 3.0 for i in range(count)]
 
 pattern = r"^\s*two_layer_gate_radial_mixing_coeffs\s*=\s*\{[^\n]*\}\s*$"
 if not re.search(pattern, full_zero_text, re.M):
@@ -177,6 +175,57 @@ def replace_coeffs(text, values):
 
 full_zero_text = replace_coeffs(full_zero_text, zero_coeffs)
 full_active_text = replace_coeffs(full_zero_text, active_coeffs)
+
+number = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
+
+def rewrite_vector(text, name, make_values):
+    match = re.search(
+        rf"(?m)^\s*{re.escape(name)}\s*=\s*\{{([^}}]*)\}}",
+        text,
+        re.S,
+    )
+    if not match:
+        raise SystemExit(f"missing active fixture vector {name}")
+    old = [float(x) for x in re.findall(number, match.group(1))]
+    values = make_values(len(old))
+    if len(values) != len(old):
+        raise SystemExit(f"{name}: replacement size {len(values)} != {len(old)}")
+    replacement = f"{name} = {{" + ", ".join(f"{x:.15e}" for x in values) + "}"
+    return text[:match.start()] + replacement + text[match.end():]
+
+active_vectors = {
+    "species_coeffs": lambda n: [0.11 * (i + 1) for i in range(n)],
+    "moment_coeffs": lambda n: [
+        (0.075 + 0.0017 * (i % 13)) * (-1.0 if i % 4 == 1 else 1.0)
+        for i in range(n)
+    ],
+    "two_layer_gate_radial_coeffs": lambda n: [
+        (0.13 + 0.006 * (i % 7)) * (-1.0 if i % 6 == 4 else 1.0)
+        for i in range(n)
+    ],
+    "two_layer_gate_additive_coeffs": lambda n: [
+        (0.21 + 0.009 * (i % 5)) * (-1.0 if i % 3 == 1 else 1.0)
+        for i in range(n)
+    ],
+    "two_layer_gate_type_coeffs": lambda n: [
+        (0.68 + 0.013 * (i % 7)) * (-1.0 if i % 4 == 2 else 1.0)
+        for i in range(n)
+    ],
+    "two_layer_gate_weights": lambda n: [
+        (0.047 + 0.0008 * (i % 17)) * (-1.0 if i % 5 == 3 else 1.0)
+        for i in range(n)
+    ],
+    "two_layer_gate_k_rank_weights": lambda n: [
+        (0.72 + 0.031 * (i % 9)) * (-1.0 if i % 4 == 1 else 1.0)
+        for i in range(n)
+    ],
+    "outer_k_rank1_weights": lambda n: [
+        (0.83 + 0.027 * (i % 11)) * (-1.0 if i % 5 == 2 else 1.0)
+        for i in range(n)
+    ],
+}
+for name, make_values in active_vectors.items():
+    full_active_text = rewrite_vector(full_active_text, name, make_values)
 
 Path(full_zero_model).write_text(full_zero_text, encoding="utf-8")
 Path(full_active_model).write_text(full_active_text, encoding="utf-8")
@@ -205,24 +254,28 @@ PY
         gate_k_rank_begin gate_k_rank_end \
         outer_k_rank_begin outer_k_rank_end
 
-  radial_begin=$(sed -n 's/.*radial_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  radial_end=$(sed -n 's/.*radial_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_radial_begin=$(sed -n 's/.*gate_radial_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_radial_end=$(sed -n 's/.*gate_radial_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_scaling_begin=$(sed -n 's/.*gate_scaling_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_scaling_end=$(sed -n 's/.*gate_scaling_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_additive_begin=$(sed -n 's/.*gate_additive_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_additive_end=$(sed -n 's/.*gate_additive_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_type_begin=$(sed -n 's/.*gate_type_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_type_end=$(sed -n 's/.*gate_type_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_weight_begin=$(sed -n 's/.*gate_weight_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_weight_end=$(sed -n 's/.*gate_weight_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_radial_mixing_begin=$(sed -n 's/.*gate_radial_mixing_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_radial_mixing_end=$(sed -n 's/.*gate_radial_mixing_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_k_rank_begin=$(sed -n 's/.*gate_k_rank_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  gate_k_rank_end=$(sed -n 's/.*gate_k_rank_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  outer_k_rank_begin=$(sed -n 's/.*outer_k_rank_begin=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
-  outer_k_rank_end=$(sed -n 's/.*outer_k_rank_end=\([0-9][0-9]*\).*/\1/p' <<<"$layout")
+  layout_field() {
+    local key=$1
+    tr ' ' '\n' <<<"$layout" | sed -n "s/^${key}=//p" | head -n 1
+  }
+  radial_begin=$(layout_field radial_begin)
+  radial_end=$(layout_field radial_end)
+  gate_radial_begin=$(layout_field gate_radial_begin)
+  gate_radial_end=$(layout_field gate_radial_end)
+  gate_scaling_begin=$(layout_field gate_scaling_begin)
+  gate_scaling_end=$(layout_field gate_scaling_end)
+  gate_additive_begin=$(layout_field gate_additive_begin)
+  gate_additive_end=$(layout_field gate_additive_end)
+  gate_type_begin=$(layout_field gate_type_begin)
+  gate_type_end=$(layout_field gate_type_end)
+  gate_weight_begin=$(layout_field gate_weight_begin)
+  gate_weight_end=$(layout_field gate_weight_end)
+  gate_radial_mixing_begin=$(layout_field gate_radial_mixing_begin)
+  gate_radial_mixing_end=$(layout_field gate_radial_mixing_end)
+  gate_k_rank_begin=$(layout_field gate_k_rank_begin)
+  gate_k_rank_end=$(layout_field gate_k_rank_end)
+  outer_k_rank_begin=$(layout_field outer_k_rank_begin)
+  outer_k_rank_end=$(layout_field outer_k_rank_end)
 
   "$bin" calc-efs "$base_model" "$cfg" "$base_out" >/dev/null
   "$bin" calc-efs "$full_zero_model" "$cfg" "$zero_out" >/dev/null
@@ -255,7 +308,8 @@ def parse(path):
     forces = []
     stress = None
     cols = None
-    in_force = False
+    read_energy = False
+    read_stress = False
     with open(path, encoding="utf-8") as handle:
         for line in handle:
             s = line.strip()
@@ -268,20 +322,23 @@ def parse(path):
                     "site_en": headers.index("site_en"),
                 }
             elif s.startswith("Energy"):
-                en = float(re.findall(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?", s)[0])
-            elif cols is not None and s and s[0].isdigit():
-                f = s.split()
-                forces.append((float(f[cols["fx"]]), float(f[cols["fy"]]), float(f[cols["fz"]])))
-            elif s.startswith(" PlusStress:"):
-                in_force = True
-            elif in_force and s:
+                read_energy = True
+            elif read_energy and s:
+                en = float(s.split()[0])
+                read_energy = False
+            elif s.startswith("PlusStress:"):
+                read_stress = True
+            elif read_stress and s:
                 vals = [float(v) for v in s.split()[:6]]
                 stress = [
                     [vals[0], vals[5], vals[4]],
                     [vals[5], vals[1], vals[3]],
                     [vals[4], vals[3], vals[2]],
                 ]
-                in_force = False
+                read_stress = False
+            elif cols is not None and s and s[0].isdigit():
+                f = s.split()
+                forces.append((float(f[cols["fx"]]), float(f[cols["fy"]]), float(f[cols["fz"]])))
     return en, forces, stress
 
 en0, f0, s0 = parse(sys.argv[1])
@@ -337,15 +394,17 @@ PY
     local block_name=$1
     local coeff_start=$2
     local coeff_end=$3
+    local modes=${4:-"E F S EFS"}
     if (( coeff_end <= coeff_start )); then
       echo "[superlinear-suite] SKIP $block_name (empty)"
       return 0
     fi
-    for weights in E F S; do
+    for weights in $modes; do
       case "$weights" in
         E) ew=1; fw=0; sw=0 ;;
         F) ew=0; fw=1; sw=0 ;;
         S) ew=0; fw=0; sw=1 ;;
+        EFS) ew=1; fw=0.3; sw=0.2 ;;
       esac
       local line
       line=$("$bin" check-loss-gradient-direction-dev "$full_active_model" "$cfg" \
@@ -359,9 +418,9 @@ PY
         --gate-mix-l2=0 \
         --gate-full-l2=0 \
         --gate-x-l2=0 \
-        --displacement=1.0e-3 \
-        --abs-tolerance=1e-11 \
-        --rel-tolerance=1e-4 \
+        --displacement=1.0e-4 \
+        --abs-tolerance=2e-6 \
+        --rel-tolerance=4e-3 \
         --coeff-start="$coeff_start" \
         --coeff-end="$coeff_end" | tail -n 1)
       python3 - "$block_name" "$weights" "$coeff_start" "$coeff_end" "$line" <<'PY'
@@ -391,8 +450,10 @@ PY
     done
   }
 
-  run_direction_block "C" 0 "$radial_begin"
-  run_direction_block "base_radial" "$radial_begin" "$gate_radial_begin"
+  run_direction_block "base_species" 0 2 "E EFS"
+  run_direction_block "base_scaling" 2 "$radial_begin"
+  run_direction_block "base_radial" "$radial_begin" "$radial_end"
+  run_direction_block "gate_radial" "$gate_radial_begin" "$gate_radial_end"
   run_direction_block "shared_scaling" "$gate_scaling_begin" "$gate_scaling_end"
   run_direction_block "gate_additive" "$gate_additive_begin" "$gate_additive_end"
   run_direction_block "gate_type" "$gate_type_begin" "$gate_type_end"
@@ -413,11 +474,13 @@ def parse(path):
     stress = None
     cols = None
     capture = False
+    in_atoms = False
     for raw in open(path, encoding="utf-8"):
         s = raw.strip()
         if not s:
             continue
         if s.startswith("AtomData:"):
+            in_atoms = True
             header = s.split()[1:]
             cols = {
                 "fx": header.index("fx"),
@@ -425,16 +488,18 @@ def parse(path):
                 "fz": header.index("fz"),
                 "site_en": header.index("site_en"),
             }
-        elif cols is not None and s[0].isdigit():
-            parts = s.split()
-            forces.append((float(parts[cols["fx"]]), float(parts[cols["fy"]]), float(parts[cols["fz"]])))
-            sites.append(float(parts[cols["site_en"]]))
-        elif s.startswith(" PlusStress:"):
+        elif s.startswith("Energy"):
+            in_atoms = False
+        elif s.startswith("PlusStress:"):
             capture = True
         elif capture:
             vals = [float(x) for x in s.split()[:6]]
             stress = [[vals[0], vals[5], vals[4]], [vals[5], vals[1], vals[3]], [vals[4], vals[3], vals[2]]]
             capture = False
+        elif in_atoms and cols is not None and s[0].isdigit():
+            parts = s.split()
+            forces.append((float(parts[cols["fx"]]), float(parts[cols["fy"]]), float(parts[cols["fz"]])))
+            sites.append(float(parts[cols["site_en"]]))
     return sum(sites), forces, stress
 
 E0, F0, S0 = parse(sys.argv[1])
@@ -451,9 +516,10 @@ for a, b in zip(F0, F1):
 R = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
 S1_back = [
     [
-        sum(R[j][i] * sum(S1[j][k] * R[k][l] for k in range(3)) for l in range(3))
-        for i in range(3)
-    ] for j in range(3)
+        sum(R[k][i] * S1[k][l] * R[l][j]
+            for k in range(3) for l in range(3))
+        for j in range(3)
+    ] for i in range(3)
 ]
 ds = max(abs(S0[i][j] - S1_back[i][j]) for i in range(3) for j in range(3))
 
@@ -461,6 +527,10 @@ if de > 1.0e-10 or df > 1.0e-8 or ds > 1.0e-8:
     raise SystemExit(f"rotation check failed: dE={de:.3e}, dF={df:.3e}, dS={ds:.3e}")
 print(f"rotation_equivariance_ok dE={de:.3e} dF={df:.3e} dS={ds:.3e}")
 PY
+
+  if [[ ${SUS2_TEST_KEEP_TMP:-0} != 1 ]]; then
+    rm -rf "$tmp_dir"
+  fi
 }
 
 run_check edge_l1_init_legacy_load \

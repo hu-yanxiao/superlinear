@@ -1,7 +1,8 @@
 # Release3 superlinear per-l radial mixer design
 
-This note defines the agreed minimal release3 superlinear extension. It is a
-design document only; the core source remains unchanged.
+This note defines and records the implemented standalone release3 superlinear
+extension.  The implementation is optional and old release3 model files remain
+an exact fallback path.
 
 ## Scope
 
@@ -97,17 +98,24 @@ space becomes the input basis for the radial mixer.
 
 ## Radial parameterization
 
-Use a separate scalar radial expansion for the mixer:
+Use a separate learned coefficient block over the model's existing raw radial
+basis:
 
 \[
 M_{l,a,c}(r)
 = \sum_{b=0}^{B_s-1} C_{l,a,c,b}\,\phi_b(r).
 \]
 
-Here \(B_s\) is the superlinear radial basis size. The \(\phi_b\) functions
-should use the same cutoff convention as the model radial basis, including the
-same cutoff smoothness. They should depend only on `r`, not on atom type or
-direction.
+Here \(B_s\) equals the model radial basis size.  For each `l`, the implemented
+\(\phi_{l,b}^{t_i t_j}(r)\) is the already available raw-basis evaluation for
+`mu=(k=0,l)`, including the model cutoff and the selected type-pair radial
+scaling map.  It is a scalar with respect to rotations and is independent of
+`m`, but it can depend on the ordered type pair through that existing scaling.
+With `scaling_map=L`, each `l` uses its own scaling block; with
+`scaling_map=K`, all `l` values reuse the `k=0` scaling block.  Reverse-mode
+and force/stress tangent paths include derivatives with respect to both scaling
+parameters, so this reuse is part of the fitted model rather than a detached
+feature.
 
 Saved parameter layout:
 
@@ -238,10 +246,14 @@ Forward and derivatives:
 - `dev_src/mtpr_sh.cpp::CalcSHMomentValuesOnly`: compute \(\phi_b(r)\), edge
   gate-rank \(Z\), and residual \(\Delta O\) inside the neighbor loop before
   outer products are applied.
-- `dev_src/mtpr_sh.cpp::CalcSHMomentValuesWithSiteDerivativeCache`: add the
-  same edge path with \(\phi'_b(r)\) and site derivative cache population.
-- `dev_src/mtpr_sh.cpp::CalcSHMomentValuesWithGradientCache`: add coefficient
-  derivative cache support for nonlinear fitting.
+- The edge-primitive cache remains available.  When it is active, the
+  superlinear path reuses cached SH and contracted radial primitives and
+  recomputes only the small set of raw radial-basis blocks needed by
+  \(\phi_{l,b}\).  The older site-derivative-cache route stays disabled for a
+  superlinear model unless the edge cache supplies the complete primitive set.
+- `dev_src/mtpr_sh.cpp::CalcSHMomentValuesWithGradientCache` and the mixed-loss
+  tangent path propagate the coefficient, radial-scaling, gate-rank and
+  upstream outer-radial derivatives needed by BFGS fitting.
 - `dev_src/mtpr_sh.cpp::CalcSHSiteEnergyDers`: after product-graph backprop,
   propagate adjoints through \(M_l(r)\), \(Z\), \(W^g\), and \(X^o\).
 - Existing constant contraction helpers should remain as the fallback path for
@@ -291,24 +303,25 @@ The hot loop should be grouped by `l`:
 
 This avoids a full dense edge tensor of shape
 `edge_count x l_count x R_outer x R_gate x m_count`. The temporary storage per
-edge is only \(R_\mathrm{gate}(2l+1)+R_\mathrm{outer}R_\mathrm{gate}\), plus
-the radial basis vector. Cache \(\phi_b(r)\) and \(\phi'_b(r)\) only when the
-existing edge primitive cache is already active; the coefficients \(C\) should
-remain live parameters and must not be baked into the cache.
+edge is only \(R_\mathrm{gate}+R_\mathrm{outer}R_\mathrm{gate}\), plus the
+radial basis vector. The current hot path first computes the `K -> R_gate`
+compression once per edge and `l`, builds all `R_outer x R_gate` kernels once,
+and then applies them to the `2l+1` SH components.  Coefficients \(C\) remain
+live contiguous parameters and are never baked into the cache.
 
-The extra arithmetic cost is approximately
+After hoisting the `m`-independent work, the extra forward arithmetic cost is
+approximately
 
 \[
-\sum_l (2l+1)
-\left[
+\sum_l \left[
 K R_\mathrm{gate}
-+ R_\mathrm{gate}R_\mathrm{outer}
++ R_\mathrm{gate}R_\mathrm{outer}B_s
++ (2l+1)R_\mathrm{gate}R_\mathrm{outer}
 \right]
 \]
 
-multiply-adds per edge, plus \(R_\mathrm{gate}R_\mathrm{outer}B_s\) work to
-build \(M_l(r)\). With small ranks this is controlled, but it is an edge-stage
-cost, not a product-graph-stage cost.
+multiply-adds per edge. With small ranks this is controlled, but it is an
+edge-stage cost, not a product-graph-stage cost.
 
 ## Acceptance criteria
 
@@ -316,18 +329,20 @@ cost, not a product-graph-stage cost.
    unchanged outputs.
 2. With the feature enabled and all `superlinear_rank_radial_weights = 0`,
    energy, force, and stress match the disabled model to roundoff.
-3. PyTorch finite differences validate gradients with respect to positions,
-   lattice, gate-rank weights, and superlinear weights.
+3. Standalone C++ finite differences validate gradients with respect to
+   positions, lattice, gate-rank weights, superlinear weights, base radial
+   weights, gate weights, type/additive weights, and radial scaling.
 4. C++ finite differences validate force and stress for at least one model with
    `two_layer_gate_k_rank > 1`, `outer_k_rank > 1`, and nonzero superlinear
    weights.
-5. C++ and PyTorch agree on energy, force, and stress for the same small model
-   and configuration.
+5. Energy-only, force-only, stress-only and combined EFS directional
+   derivatives agree with central finite differences on an active nonzero
+   model.
 6. Serialization round trip preserves all new fields and weights exactly.
 7. Old release3 models load in the new binary without adding implicit weights.
 8. Old binaries either reject new superlinear models clearly or are never given
    such models.
 9. LAMMPS/Kokkos parity is required before using superlinear models outside the
-   standalone executable.
+   standalone executable; this repository does not silently claim that parity.
 10. Cache-on/cache-off parity must cover neighborhood cache, edge primitive
     cache, force derivative cache, and stress.
