@@ -554,6 +554,10 @@ run_check edge_l1_rotation_equivariance \
   bash dev_test/sh_two_layer_gate_edge_l1_rotation_check.sh
 run_check two_layer_gate_radial_mixing \
   run_two_layer_radial_mixing_suite
+run_check radial_mixing_gate_tangent_efs_fd \
+  bash dev_test/sh_superlinear_radial_mixing_gate_tangent_efs_fd_check.sh "$bin"
+run_check radial_mixing_product_graph_fd \
+  bash dev_test/sh_superlinear_radial_mixing_product_graph_fd_check.sh "$bin"
 
 if [[ "${SUS2_SH_SUPERLINEAR_INCLUDE_READOUT:-1}" != "0" ]]; then
   run_check gate_readout_diagnostics \
