@@ -9380,14 +9380,22 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 	const int mu_stride = radial_func_count;
 	std::vector<double> gate_adjoint_by_mu;
 	std::vector<double> center_gate_adjoint_by_mu;
-	std::vector<double> radial_mixing_z;
-	std::vector<double> radial_mixing_dz;
-	std::vector<double> radial_mixing_kernels;
-	std::vector<double> radial_mixing_kernel_ders;
-	std::vector<double> radial_mixing_outer;
-	std::vector<double> radial_mixing_outer_ders;
-	std::vector<double> radial_mixing_kernel_to_raw;
-	std::vector<double> radial_mixing_sum_adj_y;
+	std::vector<double>& radial_mixing_z =
+		sh_site_energy_radial_mixing_z_scratch_;
+	std::vector<double>& radial_mixing_dz =
+		sh_site_energy_radial_mixing_dz_scratch_;
+	std::vector<double>& radial_mixing_kernels =
+		sh_site_energy_radial_mixing_kernel_scratch_;
+	std::vector<double>& radial_mixing_kernel_ders =
+		sh_site_energy_radial_mixing_kernel_der_scratch_;
+	std::vector<double>& radial_mixing_outer =
+		sh_site_energy_radial_mixing_outer_scratch_;
+	std::vector<double>& radial_mixing_outer_ders =
+		sh_site_energy_radial_mixing_outer_der_scratch_;
+	std::vector<double>& radial_mixing_kernel_to_raw =
+		sh_site_energy_radial_mixing_kernel_to_raw_scratch_;
+	std::vector<double>& radial_mixing_sum_adj_y =
+		sh_site_energy_radial_mixing_sum_adj_y_scratch_;
 	int radial_mixing_eval_blocks[kMaxSHL + 1];
 	int radial_mixing_eval_block_count = 0;
 	const double* radial_mixing_coeffs = nullptr;
@@ -10296,15 +10304,19 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 		std::vector<double>& cached_radial_values_all = grad_neighbor_mu_contract_vals_cache_;
 		std::vector<double>& cached_radial_s_all = grad_neighbor_mu_contract_ders_s_cache_;
 		std::vector<double>& cached_radial_ss_all = grad_neighbor_mu_contract_ders_ss_cache_;
-		std::vector<double>& radial_mixing_gate_tangent_delta =
-			sh_gate_tangent_radial_mixing_delta_scratch_;
-		std::vector<double>& radial_mixing_gate_tangent_rank =
-			sh_gate_tangent_radial_mixing_rank_scratch_;
-		if (radial_mixing_active) {
-			radial_mixing_gate_tangent_delta.assign(
-				static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
-			radial_mixing_gate_tangent_rank.resize(two_layer_gate_k_rank_);
-		}
+			std::vector<double>& radial_mixing_gate_tangent_delta =
+				sh_gate_tangent_radial_mixing_delta_scratch_;
+			std::vector<double>& radial_mixing_gate_tangent_rank_t_cache =
+				sh_gate_tangent_radial_mixing_rank_t_cache_scratch_;
+			if (radial_mixing_active) {
+				radial_mixing_gate_tangent_delta.assign(
+					static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
+				const size_t rank_cache_stride =
+					static_cast<size_t>(sh_l_max_ + 1)
+					* two_layer_gate_k_rank_;
+				radial_mixing_gate_tangent_rank_t_cache.assign(
+					neighbor_count * rank_cache_stride, 0.0);
+			}
 		const bool use_edge_cache =
 			HasTwoLayerEdgePrimitiveCache(cache_atom_index, true, true);
 		if (!use_edge_cache) {
@@ -10476,17 +10488,20 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						}
 							if (radial_mixing_active) {
 								for (int l = 0; l <= sh_l_max_; ++l) {
-									const double* gate_k_rank_weights_l =
-										gate_k_rank_weights
-										+ static_cast<size_t>(l)
-											* two_layer_gate_k_rank_ * sh_k_max_;
-									double* gate_rank_t =
-										radial_mixing_gate_tangent_rank.data();
-									std::fill(gate_rank_t,
-								          gate_rank_t + two_layer_gate_k_rank_,
-								          0.0);
-								for (int k = 0; k < sh_k_max_; ++k) {
-										const int mu = k * (sh_l_max_ + 1) + l;
+										const double* gate_k_rank_weights_l =
+											gate_k_rank_weights
+											+ static_cast<size_t>(l)
+												* two_layer_gate_k_rank_ * sh_k_max_;
+										const size_t rank_cache_offset =
+											(static_cast<size_t>(j)
+											 * static_cast<size_t>(sh_l_max_ + 1)
+											 + static_cast<size_t>(l))
+											* static_cast<size_t>(two_layer_gate_k_rank_);
+										double* gate_rank_t =
+											radial_mixing_gate_tangent_rank_t_cache.data()
+											+ rank_cache_offset;
+									for (int k = 0; k < sh_k_max_; ++k) {
+											const int mu = k * (sh_l_max_ + 1) + l;
 										const double x_t = gate_scaled_radial_by_mu[mu];
 										for (int c = 0; c < two_layer_gate_k_rank_; ++c)
 											gate_rank_t[c] +=
@@ -10819,17 +10834,35 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 						const int mixing_sigma_coeff_offset =
 							C + 2 * C * C * mixing_scaling_block
 							+ type_central * C + type_outer;
-						double* gate_rank = radial_mixing_param_z.data();
-						double* gate_rank_t = radial_mixing_param_z_t.data();
-						double* xk_base = radial_mixing_param_xk.data();
-						double* xk_base_t = radial_mixing_param_xk_t.data();
-						std::fill(gate_rank,
-						          gate_rank + two_layer_gate_k_rank_, 0.0);
-						std::fill(gate_rank_t,
-						          gate_rank_t + two_layer_gate_k_rank_, 0.0);
-						for (int k = 0; k < sh_k_max_; ++k) {
-							const int mu = k * (sh_l_max_ + 1) + l;
-							const double center_type_coeff =
+							double* gate_rank_storage = radial_mixing_param_z.data();
+							double* gate_rank_t_storage = radial_mixing_param_z_t.data();
+							double* xk_base = radial_mixing_param_xk.data();
+							double* xk_base_t = radial_mixing_param_xk_t.data();
+							const double* gate_rank = gate_rank_storage;
+							const double* gate_rank_t = gate_rank_t_storage;
+							const bool use_cached_gate_tangent_rank =
+								radial_mixing_active;
+							if (use_cached_gate_tangent_rank) {
+								const size_t rank_cache_offset =
+									(static_cast<size_t>(j)
+									 * static_cast<size_t>(sh_l_max_ + 1)
+									 + static_cast<size_t>(l))
+									* static_cast<size_t>(two_layer_gate_k_rank_);
+								gate_rank_t =
+									radial_mixing_gate_tangent_rank_t_cache.data()
+									+ rank_cache_offset;
+							}
+							std::fill(gate_rank_storage,
+							          gate_rank_storage + two_layer_gate_k_rank_,
+							          0.0);
+							if (!use_cached_gate_tangent_rank)
+								std::fill(gate_rank_t_storage,
+								          gate_rank_t_storage
+								              + two_layer_gate_k_rank_,
+								          0.0);
+							for (int k = 0; k < sh_k_max_; ++k) {
+								const int mu = k * (sh_l_max_ + 1) + l;
+								const double center_type_coeff =
 								regression_coeffs[
 									center_type_coeff_index_base
 									+ mu * outer_type_coeff_stride];
@@ -10846,16 +10879,17 @@ void MLMTPR::AccumulateSHGateTangentGrad(const Neighborhood& nbh,
 									* center_gate_additive_by_mu[mu];
 							xk_base[k] = gate_type_scale_by_mu[mu]
 								* cached_radial_values[mu];
-							xk_base_t[k] =
-								center_type_coeff * tangent_gate_derivative
-								* cached_radial_values[mu];
-							for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
-								const double wg = gate_k_rank_weights_l[
-									static_cast<size_t>(c) * sh_k_max_ + k];
-								gate_rank[c] += wg * xk_base[k];
-								gate_rank_t[c] += wg * xk_base_t[k];
+								xk_base_t[k] =
+									center_type_coeff * tangent_gate_derivative
+									* cached_radial_values[mu];
+								for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
+									const double wg = gate_k_rank_weights_l[
+										static_cast<size_t>(c) * sh_k_max_ + k];
+									gate_rank_storage[c] += wg * xk_base[k];
+									if (!use_cached_gate_tangent_rank)
+										gate_rank_t_storage[c] += wg * xk_base_t[k];
+								}
 							}
-						}
 						if (radial_mixing_active) {
 							for (int a = 0; a < outer_k_rank_; ++a) {
 								for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
@@ -11373,10 +11407,10 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 							&& HasTwoLayerEdgePrimitiveCache(-1, true, true);
 						std::vector<double>& radial_mixing_tangent_delta =
 							sh_combination_radial_mixing_tangent_delta_scratch_;
-						std::vector<double>& radial_mixing_tangent_z =
-							sh_combination_radial_mixing_tangent_z_scratch_;
-						std::vector<double>& radial_mixing_tangent_z_t =
-							sh_combination_radial_mixing_tangent_z_t_scratch_;
+						std::vector<double>& radial_mixing_tangent_z_cache =
+							sh_combination_radial_mixing_tangent_z_cache_scratch_;
+						std::vector<double>& radial_mixing_tangent_z_t_cache =
+							sh_combination_radial_mixing_tangent_z_t_cache_scratch_;
 						std::vector<double>& radial_mixing_tangent_kernel =
 							sh_combination_radial_mixing_tangent_kernel_scratch_;
 						std::vector<double>& radial_mixing_tangent_kernel_t =
@@ -11400,8 +11434,13 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 						if (radial_mixing_active) {
 							radial_mixing_tangent_delta.assign(
 								static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
-						radial_mixing_tangent_z.resize(two_layer_gate_k_rank_);
-						radial_mixing_tangent_z_t.resize(two_layer_gate_k_rank_);
+						const size_t rank_cache_stride =
+							static_cast<size_t>(sh_l_max_ + 1)
+							* two_layer_gate_k_rank_;
+						radial_mixing_tangent_z_cache.resize(
+							static_cast<size_t>(nbh.count) * rank_cache_stride);
+						radial_mixing_tangent_z_t_cache.resize(
+							static_cast<size_t>(nbh.count) * rank_cache_stride);
 						radial_mixing_tangent_kernel.resize(
 							outer_k_rank_ * two_layer_gate_k_rank_);
 						radial_mixing_tangent_kernel_t.resize(
@@ -11513,8 +11552,17 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 									const int mixing_radial_base =
 										mu_to_radial_eval_block_[l] * R;
 										const int mixing_der_base = 5 * mixing_radial_base;
-										double* gate_rank = radial_mixing_tangent_z.data();
-										double* gate_rank_t = radial_mixing_tangent_z_t.data();
+										const size_t rank_cache_offset =
+											(static_cast<size_t>(j)
+											 * static_cast<size_t>(sh_l_max_ + 1)
+											 + static_cast<size_t>(l))
+											* static_cast<size_t>(two_layer_gate_k_rank_);
+										double* gate_rank =
+											radial_mixing_tangent_z_cache.data()
+											+ rank_cache_offset;
+										double* gate_rank_t =
+											radial_mixing_tangent_z_t_cache.data()
+											+ rank_cache_offset;
 										std::fill(gate_rank,
 										          gate_rank + two_layer_gate_k_rank_, 0.0);
 										std::fill(gate_rank_t,
@@ -12006,29 +12054,58 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 									const int mixing_sigma_coeff_offset =
 										C + 2 * C * C * mixing_scaling_block
 										+ type_central * C + type_outer;
-									double* gate_rank = radial_mixing_param_z.data();
-									double* gate_rank_t = radial_mixing_param_z_t.data();
+									double* gate_rank_storage = radial_mixing_param_z.data();
+									double* gate_rank_t_storage = radial_mixing_param_z_t.data();
 									double* xk_base = radial_mixing_param_xk.data();
 									double* xk_base_t = radial_mixing_param_xk_t.data();
-									std::fill(gate_rank,
-									          gate_rank + two_layer_gate_k_rank_, 0.0);
-									std::fill(gate_rank_t,
-									          gate_rank_t + two_layer_gate_k_rank_, 0.0);
-									for (int k = 0; k < sh_k_max_; ++k) {
-										const int mu = k * (sh_l_max_ + 1) + l;
-										xk_base[k] = gate_type_scale_by_mu[mu]
-											* radial_values_use[mu];
-							xk_base_t[k] =
-								(se_ders_weights == nullptr)
-								? 0.0
-								: gate_type_scale_by_mu[mu]
-									* radial_derivatives_use[mu] * wr;
-							for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
-								const double wg = gate_k_rank_weights_l[
-									static_cast<size_t>(c) * sh_k_max_ + k];
-								gate_rank[c] += wg * xk_base[k];
-								gate_rank_t[c] += wg * xk_base_t[k];
-							}
+									const bool use_cached_tangent_ranks =
+										radial_mixing_active
+										&& se_ders_weights != nullptr;
+									const double* gate_rank = gate_rank_storage;
+									const double* gate_rank_t = gate_rank_t_storage;
+									if (use_cached_tangent_ranks) {
+										const size_t rank_cache_offset =
+											(static_cast<size_t>(j)
+											 * static_cast<size_t>(sh_l_max_ + 1)
+											 + static_cast<size_t>(l))
+											* static_cast<size_t>(two_layer_gate_k_rank_);
+										gate_rank =
+											radial_mixing_tangent_z_cache.data()
+											+ rank_cache_offset;
+										gate_rank_t =
+											radial_mixing_tangent_z_t_cache.data()
+											+ rank_cache_offset;
+										for (int k = 0; k < sh_k_max_; ++k) {
+											const int mu = k * (sh_l_max_ + 1) + l;
+											xk_base[k] = gate_type_scale_by_mu[mu]
+												* radial_values_use[mu];
+											xk_base_t[k] =
+												gate_type_scale_by_mu[mu]
+												* radial_derivatives_use[mu] * wr;
+										}
+									} else {
+										std::fill(gate_rank_storage,
+										          gate_rank_storage
+										              + two_layer_gate_k_rank_, 0.0);
+										std::fill(gate_rank_t_storage,
+										          gate_rank_t_storage
+										              + two_layer_gate_k_rank_, 0.0);
+										for (int k = 0; k < sh_k_max_; ++k) {
+											const int mu = k * (sh_l_max_ + 1) + l;
+											xk_base[k] = gate_type_scale_by_mu[mu]
+												* radial_values_use[mu];
+								xk_base_t[k] =
+									(se_ders_weights == nullptr)
+									? 0.0
+									: gate_type_scale_by_mu[mu]
+										* radial_derivatives_use[mu] * wr;
+								for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
+									const double wg = gate_k_rank_weights_l[
+										static_cast<size_t>(c) * sh_k_max_ + k];
+									gate_rank_storage[c] += wg * xk_base[k];
+									gate_rank_t_storage[c] += wg * xk_base_t[k];
+								}
+										}
 									}
 									if (radial_mixing_active) {
 										for (int a = 0; a < outer_k_rank_; ++a) {

@@ -197,8 +197,17 @@ protected:
 				std::vector<double> two_layer_gate_radial_mixing_outer_delta_buffer_;
 				std::vector<double> two_layer_gate_radial_mixing_gate_rank_buffer_;
 				std::vector<double> two_layer_gate_radial_mixing_outer_rank_buffer_;
+				std::vector<double> sh_site_energy_radial_mixing_z_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_dz_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_kernel_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_kernel_der_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_outer_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_outer_der_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_kernel_to_raw_scratch_;
+				std::vector<double> sh_site_energy_radial_mixing_sum_adj_y_scratch_;
 				std::vector<double> sh_gate_tangent_radial_mixing_delta_scratch_;
 				std::vector<double> sh_gate_tangent_radial_mixing_rank_scratch_;
+				std::vector<double> sh_gate_tangent_radial_mixing_rank_t_cache_scratch_;
 				std::vector<double> sh_gate_tangent_radial_mixing_value_adj_scratch_;
 				std::vector<double> sh_gate_tangent_radial_mixing_direct_adj_scratch_;
 				std::vector<double> sh_gate_tangent_radial_mixing_param_z_scratch_;
@@ -212,6 +221,8 @@ protected:
 				std::vector<double> sh_combination_radial_mixing_tangent_delta_scratch_;
 				std::vector<double> sh_combination_radial_mixing_tangent_z_scratch_;
 				std::vector<double> sh_combination_radial_mixing_tangent_z_t_scratch_;
+				std::vector<double> sh_combination_radial_mixing_tangent_z_cache_scratch_;
+				std::vector<double> sh_combination_radial_mixing_tangent_z_t_cache_scratch_;
 				std::vector<double> sh_combination_radial_mixing_tangent_kernel_scratch_;
 				std::vector<double> sh_combination_radial_mixing_tangent_kernel_t_scratch_;
 				std::vector<double> sh_combination_radial_mixing_tangent_outer_scratch_;
