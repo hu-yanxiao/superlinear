@@ -32,6 +32,7 @@ DEFAULT_VARIANTS = (
     "superlinear_zero",
     "superlinear_mix",
 )
+PERF_OPTIONAL_VARIANTS = ("release3",)
 
 REQUIRED_FILES = ("metadata.txt", "time.txt", "train.log", "trace.csv")
 REQUIRED_METADATA_FIELDS = ("variant", "profile_iters", "mpi_ranks", "command")
@@ -84,22 +85,26 @@ class RunRecord:
     exit_code: int
     profile_iters: int
     mpi_ranks: int
-    optimizer: str
-    line_search: str
-    objective_value_calls: int
-    objective_gradient_calls: int
-    objective_total_calls: int
-    line_search_trial_evaluations: int
-    rejected_trials: int
+    optimizer: str | None
+    line_search: str | None
+    objective_value_calls: int | None
+    objective_gradient_calls: int | None
+    objective_total_calls: int | None
+    line_search_trial_evaluations: int | None
+    rejected_trials: int | None
     accepted_steps: int
     trace_rows: int
 
     @property
-    def sec_per_objective_total_call(self) -> float:
+    def sec_per_objective_total_call(self) -> float | None:
+        if self.objective_total_calls is None:
+            return None
         return self.runtime_sec / checked_positive(self.objective_total_calls, "objective_total_calls")
 
     @property
-    def sec_per_gradient_call(self) -> float:
+    def sec_per_gradient_call(self) -> float | None:
+        if self.objective_gradient_calls is None:
+            return None
         return self.runtime_sec / checked_positive(self.objective_gradient_calls, "objective_gradient_calls")
 
     @property
@@ -163,7 +168,7 @@ def parse_float_field(path: Path, values: dict[str, str], key: str) -> float:
     return result
 
 
-def scan_log(path: Path) -> dict[str, str]:
+def scan_log(path: Path, allow_missing_perf: bool = False) -> dict[str, str] | None:
     text = path.read_text(encoding="utf-8", errors="replace")
     text_for_abnormal_scan = text
     if re.search(r"(?m)^center_std weight:\s*0\s*$", text):
@@ -182,6 +187,8 @@ def scan_log(path: Path) -> dict[str, str]:
         line for line in text.splitlines()
         if "SUS2_MTPR_OPTIMIZER_PERF_COUNTERS" in line
     ]
+    if not perf_lines and allow_missing_perf:
+        return None
     if len(perf_lines) != 1:
         raise ProfileError(
             f"{path}: expected exactly one SUS2_MTPR_OPTIMIZER_PERF_COUNTERS line, "
@@ -247,22 +254,40 @@ def parse_run(root: Path, round_name: str, variant: str) -> RunRecord:
     if exit_code != 0:
         raise ProfileError(f"{time_path}: exit_code is {exit_code}, expected 0")
 
-    perf = scan_log(run_dir / "train.log")
-    objective_value_calls = int_perf(run_dir / "train.log", perf, "objective_value_calls")
-    objective_gradient_calls = int_perf(run_dir / "train.log", perf, "objective_gradient_calls")
-    objective_total_calls = int_perf(run_dir / "train.log", perf, "objective_total_calls")
-    if objective_total_calls != objective_value_calls + objective_gradient_calls:
-        raise ProfileError(
-            f"{run_dir / 'train.log'}: objective_total_calls={objective_total_calls} "
-            f"but value+gradient={objective_value_calls + objective_gradient_calls}"
-        )
-
     trace_rows = parse_trace(run_dir / "trace.csv")
-    accepted_steps = int_perf(run_dir / "train.log", perf, "accepted_steps")
-    if trace_rows != accepted_steps:
-        raise ProfileError(
-            f"{run_dir}: trace rows {trace_rows} != accepted_steps {accepted_steps}"
+    perf = scan_log(
+        run_dir / "train.log",
+        allow_missing_perf=variant in PERF_OPTIONAL_VARIANTS,
+    )
+    if perf is None:
+        objective_value_calls = None
+        objective_gradient_calls = None
+        objective_total_calls = None
+        optimizer = None
+        line_search = None
+        line_search_trial_evaluations = None
+        rejected_trials = None
+        accepted_steps = trace_rows
+    else:
+        objective_value_calls = int_perf(run_dir / "train.log", perf, "objective_value_calls")
+        objective_gradient_calls = int_perf(run_dir / "train.log", perf, "objective_gradient_calls")
+        objective_total_calls = int_perf(run_dir / "train.log", perf, "objective_total_calls")
+        if objective_total_calls != objective_value_calls + objective_gradient_calls:
+            raise ProfileError(
+                f"{run_dir / 'train.log'}: objective_total_calls={objective_total_calls} "
+                f"but value+gradient={objective_value_calls + objective_gradient_calls}"
+            )
+        accepted_steps = int_perf(run_dir / "train.log", perf, "accepted_steps")
+        if trace_rows != accepted_steps:
+            raise ProfileError(
+                f"{run_dir}: trace rows {trace_rows} != accepted_steps {accepted_steps}"
+            )
+        optimizer = perf["optimizer"]
+        line_search = perf["line_search"]
+        line_search_trial_evaluations = int_perf(
+            run_dir / "train.log", perf, "line_search_trial_evaluations"
         )
+        rejected_trials = int_perf(run_dir / "train.log", perf, "rejected_trials")
 
     return RunRecord(
         round_name=round_name,
@@ -273,13 +298,13 @@ def parse_run(root: Path, round_name: str, variant: str) -> RunRecord:
         exit_code=exit_code,
         profile_iters=parse_int_field(metadata_path, metadata, "profile_iters"),
         mpi_ranks=parse_int_field(metadata_path, metadata, "mpi_ranks"),
-        optimizer=perf["optimizer"],
-        line_search=perf["line_search"],
+        optimizer=optimizer,
+        line_search=line_search,
         objective_value_calls=objective_value_calls,
         objective_gradient_calls=objective_gradient_calls,
         objective_total_calls=objective_total_calls,
-        line_search_trial_evaluations=int_perf(run_dir / "train.log", perf, "line_search_trial_evaluations"),
-        rejected_trials=int_perf(run_dir / "train.log", perf, "rejected_trials"),
+        line_search_trial_evaluations=line_search_trial_evaluations,
+        rejected_trials=rejected_trials,
         accepted_steps=accepted_steps,
         trace_rows=trace_rows,
     )
@@ -317,6 +342,22 @@ def fmt_float(value: float) -> str:
     return f"{value:.6g}"
 
 
+def fmt_optional_float(value: float | None) -> str:
+    return "NA" if value is None else fmt_float(value)
+
+
+def fmt_optional_int(value: int | None) -> str:
+    return "NA" if value is None else str(value)
+
+
+def mean_optional(values: Iterable[float | None]) -> float | None:
+    materialized = list(values)
+    if any(value is None for value in materialized):
+        return None
+    numeric = [value for value in materialized if value is not None]
+    return sum(numeric) / len(numeric)
+
+
 def print_table(headers: tuple[str, ...], rows: list[tuple[object, ...]]) -> None:
     widths = [len(header) for header in headers]
     rendered_rows: list[tuple[str, ...]] = []
@@ -332,11 +373,32 @@ def print_table(headers: tuple[str, ...], rows: list[tuple[object, ...]]) -> Non
 
 
 def summarize(records: list[RunRecord], rounds: tuple[str, str], variants: tuple[str, ...]) -> None:
-    for field in ("profile_iters", "mpi_ranks", "optimizer", "line_search"):
+    for field in ("profile_iters", "mpi_ranks"):
         values = {getattr(record, field) for record in records}
         if len(values) != 1:
             rendered = ", ".join(repr(value) for value in sorted(values, key=str))
             raise ProfileError(f"inconsistent {field} across runs: {rendered}")
+    for field in ("optimizer", "line_search"):
+        values = {
+            getattr(record, field)
+            for record in records
+            if getattr(record, field) is not None
+        }
+        if not values:
+            raise ProfileError(f"no instrumented run provides {field}")
+        if len(values) != 1:
+            rendered = ", ".join(repr(value) for value in sorted(values, key=str))
+            raise ProfileError(f"inconsistent {field} across instrumented runs: {rendered}")
+
+    missing_perf = [
+        f"{record.round_name}/{record.variant}"
+        for record in records
+        if record.objective_total_calls is None
+    ]
+    if missing_perf:
+        print("perf_counter_compat=" + ",".join(missing_perf))
+        print("perf_counter_compat_note=runtime/trace only; call counters are NA")
+        print()
 
     by_round: dict[str, list[RunRecord]] = {}
     for round_name in rounds:
@@ -365,14 +427,14 @@ def summarize(records: list[RunRecord], rounds: tuple[str, str], variants: tuple
             order_index[(record.round_name, record.variant)],
             record.variant,
             fmt_float(record.runtime_sec),
-            record.objective_total_calls,
-            record.objective_gradient_calls,
+            fmt_optional_int(record.objective_total_calls),
+            fmt_optional_int(record.objective_gradient_calls),
             record.accepted_steps,
-            fmt_float(record.sec_per_objective_total_call),
-            fmt_float(record.sec_per_gradient_call),
+            fmt_optional_float(record.sec_per_objective_total_call),
+            fmt_optional_float(record.sec_per_gradient_call),
             fmt_float(record.sec_per_accepted_step),
-            record.line_search_trial_evaluations,
-            record.rejected_trials,
+            fmt_optional_int(record.line_search_trial_evaluations),
+            fmt_optional_int(record.rejected_trials),
         ))
     print_table(
         (
@@ -408,8 +470,8 @@ def summarize(records: list[RunRecord], rounds: tuple[str, str], variants: tuple
             fmt_float(r2.runtime_sec),
             fmt_float(runtime_avg),
             fmt_float(delta_pct),
-            fmt_float(0.5 * (r1.sec_per_objective_total_call + r2.sec_per_objective_total_call)),
-            fmt_float(0.5 * (r1.sec_per_gradient_call + r2.sec_per_gradient_call)),
+            fmt_optional_float(mean_optional((r1.sec_per_objective_total_call, r2.sec_per_objective_total_call))),
+            fmt_optional_float(mean_optional((r1.sec_per_gradient_call, r2.sec_per_gradient_call))),
             fmt_float(0.5 * (r1.sec_per_accepted_step + r2.sec_per_accepted_step)),
         ))
     print_table(
