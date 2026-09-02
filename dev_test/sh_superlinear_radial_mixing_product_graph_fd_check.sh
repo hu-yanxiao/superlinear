@@ -227,14 +227,28 @@ radial_begin=$(layout_field radial_begin)
 radial_end=$(layout_field radial_end)
 mixing_begin=$(layout_field gate_radial_mixing_begin)
 mixing_end=$(layout_field gate_radial_mixing_end)
+gate_k_begin=$(layout_field gate_k_rank_begin)
+gate_k_end=$(layout_field gate_k_rank_end)
+outer_k_begin=$(layout_field outer_k_rank_begin)
+outer_k_end=$(layout_field outer_k_rank_end)
 linear_begin=$(layout_field linear_begin)
 
-if [[ -z "$radial_begin" || -z "$radial_end" || -z "$mixing_begin" || -z "$mixing_end" || -z "$linear_begin" ]]; then
+if [[ -z "$radial_begin" || -z "$radial_end" || -z "$mixing_begin" || -z "$mixing_end" ||
+      -z "$gate_k_begin" || -z "$gate_k_end" ||
+      -z "$outer_k_begin" || -z "$outer_k_end" || -z "$linear_begin" ]]; then
   echo "failed to parse coefficient layout: $layout" >&2
   exit 1
 fi
 if (( linear_begin <= mixing_end )); then
   echo "unexpected layout without linear/product coefficients: $layout" >&2
+  exit 1
+fi
+main_scaling_begin=2
+main_scaling_end=$radial_begin
+if (( main_scaling_begin >= main_scaling_end ||
+      gate_k_begin >= gate_k_end ||
+      outer_k_begin >= outer_k_end )); then
+  echo "unexpected empty superlinear coefficient range: $layout" >&2
   exit 1
 fi
 
@@ -336,18 +350,27 @@ PY
 
 for hvt in 0 1; do
   for weights in E F S EFS; do
+    run_gradient_case patched "$patched_bin" pass main_scaling "$main_scaling_begin" "$main_scaling_end" "$hvt" "$weights"
     run_gradient_case patched "$patched_bin" pass base_radial "$radial_begin" "$radial_end" "$hvt" "$weights"
     run_gradient_case patched "$patched_bin" pass radial_mixing "$mixing_begin" "$mixing_end" "$hvt" "$weights"
     run_gradient_case patched_zero_c "$patched_bin" pass radial_mixing "$mixing_begin" "$mixing_end" "$hvt" "$weights" "$zero_model"
   done
+  run_gradient_case patched "$patched_bin" pass gate_k_rank "$gate_k_begin" "$gate_k_end" "$hvt" EFS
+  run_gradient_case patched "$patched_bin" pass outer_k_rank "$outer_k_begin" "$outer_k_end" "$hvt" EFS
 done
 
 if [[ -n "$old_bin" ]]; then
   for hvt in 0 1; do
+    run_gradient_case old "$old_bin" pass main_scaling "$main_scaling_begin" "$main_scaling_end" "$hvt" E
+    run_gradient_case old "$old_bin" fail main_scaling "$main_scaling_begin" "$main_scaling_end" "$hvt" F
+    run_gradient_case old "$old_bin" pass main_scaling "$main_scaling_begin" "$main_scaling_end" "$hvt" S
+    run_gradient_case old "$old_bin" fail main_scaling "$main_scaling_begin" "$main_scaling_end" "$hvt" EFS
     run_gradient_case old "$old_bin" pass base_radial "$radial_begin" "$radial_end" "$hvt" E
     for weights in F S EFS; do
       run_gradient_case old "$old_bin" fail base_radial "$radial_begin" "$radial_end" "$hvt" "$weights"
     done
+    run_gradient_case old "$old_bin" fail gate_k_rank "$gate_k_begin" "$gate_k_end" "$hvt" EFS
+    run_gradient_case old "$old_bin" fail outer_k_rank "$outer_k_begin" "$outer_k_end" "$hvt" EFS
   done
 else
   echo "OLD_BIN not set; skipping old f4bc77a failure assertions"
