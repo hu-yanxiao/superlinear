@@ -289,8 +289,12 @@ protected:
 
 	void CalcSHBasisFuncs(const Neighborhood& nbh, double* bf_vals);
 	void CalcSHMomentValuesOnly(const Neighborhood& nbh);
+	void CalcSHMomentValuesOnlyLegacy(const Neighborhood& nbh);
+	void CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
+	void CalcSHMomentValuesWithGradientCacheLegacy(const Neighborhood& nbh);
+	void CalcSHMomentValuesWithGradientCacheRadialMixing(const Neighborhood& nbh);
 	void AccumulateTwoLayerGateRadialMixingForwardEdge(
 		const double* gate_type_scale_by_mu,
 		const double* radial_values,
@@ -409,6 +413,8 @@ protected:
 		bool need_stress);
 	void CalcSHResidualSiteEnergyDers(const Neighborhood& nbh);
 	void CalcSHSiteEnergyDers(const Neighborhood& nbh);
+	void CalcSHSiteEnergyDersLegacy(const Neighborhood& nbh);
+	void CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh);
 	void AddTwoLayerGateReadoutSiteEnergyDers(const Neighborhood& nbh);
 	void AccumulateTwoLayerGateReadoutCombinationGrad(
 		const Neighborhood& nbh,
@@ -427,10 +433,23 @@ protected:
 											const std::vector<double>& neighbor_gate_tangent,
 											const double* center_gate_tangent = nullptr,
 											int cache_atom_index = -1);
+		template <bool RadialMixingEnabled>
+		void AccumulateSHGateTangentGradImpl(
+			const Neighborhood& nbh,
+			std::vector<double>& out_grad_accumulator,
+			const std::vector<double>& neighbor_gate_tangent,
+			const double* center_gate_tangent,
+			int cache_atom_index);
 	void AccumulateSHCombinationGrad(const Neighborhood& nbh,
 										std::vector<double>& out_grad_accumulator,
 										const double se_weight = 0.0,
 										const Vector3* se_ders_weights = nullptr);
+	template <bool RadialMixingEnabled>
+	void AccumulateSHCombinationGradImpl(
+		const Neighborhood& nbh,
+		std::vector<double>& out_grad_accumulator,
+		double se_weight,
+		const Vector3* se_ders_weights);
 	void ReadSHProductGraph(std::ifstream& ifs, std::string& next_token);
 		void WriteSHProductGraph(std::ofstream& ofs);
 		void ValidateSHProductGraphDefinitions() const;
