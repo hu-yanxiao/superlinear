@@ -6,10 +6,11 @@
 #BSUB -e %J.fresh_ab.err
 #BSUB -o %J.fresh_ab.out
 
-set -uo pipefail
+set -eo pipefail
 
 module purge
 module load compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0 gcc/11.2.0
+set -u
 
 cd "$LS_SUBCWD"
 
@@ -105,8 +106,10 @@ run_variant() {
   } >"$run_dir/metadata.txt"
   local start
   start=$(date +%s)
+  set +e
   "${cmd[@]}" >"$run_dir/train.log" 2>&1
   local rc=$?
+  set -e
   local end
   end=$(date +%s)
   {
