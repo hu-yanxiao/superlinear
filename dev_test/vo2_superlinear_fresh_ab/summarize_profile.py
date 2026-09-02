@@ -165,10 +165,17 @@ def parse_float_field(path: Path, values: dict[str, str], key: str) -> float:
 
 def scan_log(path: Path) -> dict[str, str]:
     text = path.read_text(encoding="utf-8", errors="replace")
+    text_for_abnormal_scan = text
+    if re.search(r"(?m)^center_std weight:\s*0\s*$", text):
+        text_for_abnormal_scan = re.sub(
+            r"(?m)(center_std\^2:)-?nan(\s)",
+            r"\1disabled\2",
+            text,
+        )
     for label, pattern in ABNORMAL_PATTERNS:
-        match = pattern.search(text)
+        match = pattern.search(text_for_abnormal_scan)
         if match:
-            line_no = text.count("\n", 0, match.start()) + 1
+            line_no = text_for_abnormal_scan.count("\n", 0, match.start()) + 1
             raise ProfileError(f"{path}: abnormal log token {label!r} at line {line_no}")
 
     perf_lines = [
