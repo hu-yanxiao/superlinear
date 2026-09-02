@@ -300,7 +300,8 @@ protected:
 		const double* radial_values,
 		const double* radial_basis_values,
 		const double* sh_values,
-		double* outer_delta);
+		double* outer_delta,
+		const double* cached_mixing_kernels = nullptr);
 	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
 		void CalcTwoLayerGateScalarValuesOnly(
 			const Neighborhood& nbh,
@@ -680,6 +681,8 @@ public:
 			std::vector<double> two_layer_edge_sh_ders_cache_;
 			std::vector<double> two_layer_edge_radial_vals_cache_;
 			std::vector<double> two_layer_edge_radial_ders_cache_;
+			std::vector<double> two_layer_edge_radial_mixing_kernel_cache_;
+			std::vector<double> two_layer_edge_radial_mixing_kernel_der_cache_;
 			std::vector<double> two_layer_edge_gate_radial_vals_cache_;
 			std::vector<double> two_layer_edge_gate_radial_dr_cache_;
 	std::vector<double> two_layer_edge_mu_vals_cache_;
