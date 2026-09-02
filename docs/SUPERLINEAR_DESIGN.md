@@ -236,6 +236,45 @@ virial convention:
 Stress parity is therefore not a separate formula; it is the same edge
 coordinate derivative accumulated into the stress tensor.
 
+### Forward-state requirement for force and EFS gradients
+
+The reverse and mixed tangent/reverse passes must consume exactly the same
+forward moment state as the value-only evaluator.  In particular, define
+
+\[
+O_i = O_i^{(0)} + \Delta O_i(C).
+\]
+
+The product graph is evaluated at this complete (O_i), so its Jacobian and
+Hessian-vector products must also be evaluated at the complete (O_i).  It is
+not sufficient to add the direct derivatives of \(\Delta O_i\) later while the
+product graph still sees only \(O_i^{(0)}\).  That omission drops terms such as
+
+\[
+\frac{\partial^2 P}{\partial O^2}
+\left[\Delta O,\frac{\partial O}{\partial q}\right]
+\]
+
+from force, stress, and combined EFS parameter gradients whenever the outer
+graph (P(O)) is nonlinear.
+
+For this reason `CalcSHMomentValuesOnly` and
+`CalcSHMomentValuesWithGradientCache` call the same exact edge-forward helper,
+and both add \(\Delta O\) before the Clebsch-Gordan product graph.  The active
+coefficient state is refreshed at every internally callable moment/site entry,
+so a coefficient update cannot leave the gradient path on a stale zero-mixer
+branch.
+
+The regression in
+`dev_test/sh_superlinear_radial_mixing_product_graph_fd_check.sh` deliberately
+uses a strong nonzero mixer and a nonlinear product graph.  The pre-fix binary
+fails central finite differences for force, stress, and combined EFS with
+order-one relative errors, while the corrected binary passes energy, force,
+stress, and EFS for both base-radial and mixer-coefficient blocks with product
+HVT reverse enabled and disabled.  A separate zero-(C) case verifies that the
+direct \(\partial L/\partial C\) remains nonzero and correct even though the
+forward residual is exactly zero.
+
 ## Implementation insertion points
 
 ### Standalone C++ release3
@@ -333,6 +372,27 @@ K R_\mathrm{gate}
 
 multiply-adds per edge. With small ranks this is controlled, but it is an
 edge-stage cost, not a product-graph-stage cost.
+
+## Reproducible fresh initialization
+
+`train ... --init-sh` accepts `--init-random-seed=<uint64>`.  The common
+nonlinear coefficient stream is generated first.  The optional mixer stream is
+drawn only afterward with
+`--two-layer-gate-radial-mixing-init-scale=<nonnegative double>`.  Thus A
+(mixer off), B0 (mixer enabled at zero), and B (active mixer) have bitwise
+identical common initial coefficients for the same seed.
+
+With an explicit seed, `--init-params=random`, and `--max-iter=0`, the trained
+output is saved immediately after randomization and MPI broadcast, before
+shift correction, rescaling, any linear solve, readout initialization, or
+BFGS.  This is the required source for a genuine from-scratch A/B experiment;
+an upgraded trained checkpoint is not a fresh comparison.
+
+`dev_test/sh_init_random_seed_radial_mixing_check.sh` verifies repeatability,
+different-seed separation, common-block identity including the multiline base
+radial block, exact zero B0 coefficients, bounded active B coefficients, and
+strict CLI validation.  The VO2 server protocol is recorded under
+`dev_test/vo2_superlinear_fresh_ab/`.
 
 ## Acceptance criteria
 

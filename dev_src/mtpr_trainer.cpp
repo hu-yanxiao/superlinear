@@ -253,6 +253,15 @@ bool EnvFlagEnabled(const char* name)
 	    && std::strcmp(value, "FALSE") != 0;
 }
 
+struct OptimizerPerfCounters {
+	bool enabled = false;
+	long long objective_value_calls = 0;
+	long long objective_gradient_calls = 0;
+	long long line_search_trial_evaluations = 0;
+	long long rejected_trials = 0;
+	long long accepted_steps = 0;
+};
+
 int SuggestedLinearSolveThreads(int n)
 {
 #ifdef MLIP_INTEL_MKL
@@ -2056,6 +2065,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			p_mlmtpr->TwoLayerGateBodyMixWeightOffset(),
 			p_mlmtpr->TwoLayerGateBodyMixWeightCount());
 		add_coordinate_normalization_block(
+			"gate1-radial-mixing",
+			p_mlmtpr->TwoLayerGateRadialMixingCoeffOffset(),
+			p_mlmtpr->TwoLayerGateRadialMixingCoeffCount());
+		add_coordinate_normalization_block(
 			"gate1-edge-l1",
 			p_mlmtpr->TwoLayerGateEdgeL1WeightOffset(),
 			p_mlmtpr->TwoLayerGateEdgeL1WeightCount());
@@ -3171,6 +3184,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		double cooling_rate = 0.2;
 		bool linesearch = false;
 		const bool use_armijo_value_line_search = (bfgs_line_search == "armijo-value");
+		OptimizerPerfCounters optimizer_perf_counters;
+		optimizer_perf_counters.enabled =
+			EnvFlagEnabled("SUS2_MTPR_OPTIMIZER_PERF_COUNTERS");
 		auto abort_if_any_rank_reports = [&](int local_status, const std::string& message) {
 		int global_status = local_status;
 #ifdef MLIP_MPI
@@ -3414,21 +3430,37 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			// Set_x(), which deliberately clears their local line-search state.
 			// Broadcast root's protocol state before choosing an objective path so
 			// every rank enters matching MPI collectives.
-			if (use_armijo_value_line_search && !optimizer_replicated) {
-				int armijo_value_trial_state = armijo_value_trial ? 1 : 0;
-				MPI_Bcast(
-					&armijo_value_trial_state, 1, MPI_INT, 0, train_comm);
-				armijo_value_trial = (armijo_value_trial_state != 0);
-			}
-	#endif
-			bool armijo_value_trial_accepted = false;
-			bool armijo_value_trial_rejected = false;
-			double armijo_value_only_loss = std::numeric_limits<double>::quiet_NaN();
-			if (armijo_value_trial) {
-				ObjectiveFunctionAndCachePredictions(training_set, objective_neighborhoods);
-				loss_ /= K;
-				std_ /= K;
-				stdd_ /= K;
+				if (use_armijo_value_line_search && !optimizer_replicated) {
+					int armijo_value_trial_state = armijo_value_trial ? 1 : 0;
+					MPI_Bcast(
+						&armijo_value_trial_state, 1, MPI_INT, 0, train_comm);
+					armijo_value_trial = (armijo_value_trial_state != 0);
+				}
+		#endif
+				const bool objective_is_linesearch_trial =
+					use_armijo_value_line_search ? armijo_value_trial : linesearch;
+				bool optimizer_perf_counted_rejected_trial = false;
+				auto record_optimizer_rejected_trial = [&]() {
+					if (optimizer_perf_counters.enabled
+					    && objective_is_linesearch_trial
+					    && !optimizer_perf_counted_rejected_trial) {
+						++optimizer_perf_counters.rejected_trials;
+						optimizer_perf_counted_rejected_trial = true;
+					}
+				};
+				bool armijo_value_trial_accepted = false;
+				bool armijo_value_trial_rejected = false;
+				double armijo_value_only_loss = std::numeric_limits<double>::quiet_NaN();
+				if (armijo_value_trial) {
+					if (optimizer_perf_counters.enabled) {
+						++optimizer_perf_counters.objective_value_calls;
+						if (objective_is_linesearch_trial)
+							++optimizer_perf_counters.line_search_trial_evaluations;
+					}
+					ObjectiveFunctionAndCachePredictions(training_set, objective_neighborhoods);
+					loss_ /= K;
+					std_ /= K;
+					stdd_ /= K;
 				mean_1 /= K;
 				mean_2 /= K;
 				mean_3 /= K;
@@ -3454,21 +3486,28 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					armijo_accept_state = optimizer_armijo_accepts(bfgs_f) ? 1 : 0;
 	#ifdef MLIP_MPI
 				MPI_Bcast(&armijo_accept_state, 1, MPI_INT, 0, train_comm);
-	#endif
-				armijo_value_trial_accepted = (armijo_accept_state != 0);
-				armijo_value_trial_rejected = !armijo_value_trial_accepted;
-				if (armijo_value_trial_rejected
-				    && (optimizer_replicated || prank == 0)) {
-					optimizer_armijo_backtrack(bfgs_f);
-					mask_frozen_coordinates(freeze_species_coeffs);
+					#endif
+					armijo_value_trial_accepted = (armijo_accept_state != 0);
+					armijo_value_trial_rejected = !armijo_value_trial_accepted;
+					if (armijo_value_trial_rejected)
+						record_optimizer_rejected_trial();
+					if (armijo_value_trial_rejected
+					    && (optimizer_replicated || prank == 0)) {
+						optimizer_armijo_backtrack(bfgs_f);
+						mask_frozen_coordinates(freeze_species_coeffs);
+					}
 				}
-			}
 
-			if (!armijo_value_trial_rejected) {
-				if (armijo_value_trial)
-					CalcObjectiveFunctionGradFromCachedPredictions(training_set, objective_neighborhoods);
-				else
-					CalcObjectiveFunctionGrad(training_set, objective_neighborhoods);
+				if (!armijo_value_trial_rejected) {
+					if (optimizer_perf_counters.enabled) {
+						++optimizer_perf_counters.objective_gradient_calls;
+						if (objective_is_linesearch_trial)
+							++optimizer_perf_counters.line_search_trial_evaluations;
+					}
+					if (armijo_value_trial)
+						CalcObjectiveFunctionGradFromCachedPredictions(training_set, objective_neighborhoods);
+					else
+						CalcObjectiveFunctionGrad(training_set, objective_neighborhoods);
 
 				loss_ /= K;
 				std_ /= K;
@@ -3559,14 +3598,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					gradient_armijo_accept_state = optimizer_armijo_accepts(bfgs_f) ? 1 : 0;
 		#ifdef MLIP_MPI
 				MPI_Bcast(&gradient_armijo_accept_state, 1, MPI_INT, 0, train_comm);
-		#endif
-				if (gradient_armijo_accept_state == 0) {
-					armijo_value_trial_accepted = false;
-					armijo_value_trial_rejected = true;
-					if (optimizer_replicated || prank == 0) {
-						optimizer_armijo_backtrack(bfgs_f);
-						mask_frozen_coordinates(freeze_species_coeffs);
-					}
+					#endif
+					if (gradient_armijo_accept_state == 0) {
+						armijo_value_trial_accepted = false;
+						armijo_value_trial_rejected = true;
+						record_optimizer_rejected_trial();
+						if (optimizer_replicated || prank == 0) {
+							optimizer_armijo_backtrack(bfgs_f);
+							mask_frozen_coordinates(freeze_species_coeffs);
+						}
 					if (prank == 0) {
 						std::cerr << "[" << CurrentTimestamp() << "] "
 						          << optimizer_log_name
@@ -4031,12 +4071,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				          MPI_CHAR,
 				          0,
 				          train_comm);
-		}
+				}
 #endif
-		if (rejected_linesearch_from_exception != 0) {
-			restart_or_finish_rejected_linesearch(
-				rejected_linesearch_exception_message,
-				rejected_linesearch_exception_detail);
+			if (rejected_linesearch_from_exception != 0
+			    && !use_armijo_value_line_search)
+				record_optimizer_rejected_trial();
+			if (rejected_linesearch_from_exception != 0) {
+				restart_or_finish_rejected_linesearch(
+					rejected_linesearch_exception_message,
+					rejected_linesearch_exception_detail);
 		}
 			abort_if_any_rank_reports(bfgs_status,
 					optimizer_log_name + " failed at step " + std::to_string(num_step)
@@ -4067,11 +4110,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 #ifdef MLIP_MPI
 		MPI_Bcast(&linesearch_stop_reason, 1, MPI_INT, 0, train_comm);
 #endif
-			if (linesearch_stop_reason != 0) {
-				std::string final_message;
-				std::string detail;
-				if (prank == 0) {
-					if (linesearch_stop_reason == 1) {
+				if (linesearch_stop_reason != 0) {
+					if (!use_armijo_value_line_search)
+						record_optimizer_rejected_trial();
+					std::string final_message;
+					std::string detail;
+					if (prank == 0) {
+						if (linesearch_stop_reason == 1) {
 							final_message = optimizer_log_name + " ended due to linesearch stagnation";
 					} else {
 							final_message = optimizer_log_name + " ended due to linesearch more than 30 iterations";
@@ -4079,10 +4124,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 						oss << "d_x=" << optimizer_x(0) - x[0];
 						detail = oss.str();
 					}
-				}
-	#ifdef MLIP_MPI
-				int final_message_len = static_cast<int>(final_message.size());
-				int detail_len = static_cast<int>(detail.size());
+					}
+		#ifdef MLIP_MPI
+					int final_message_len = static_cast<int>(final_message.size());
+					int detail_len = static_cast<int>(detail.size());
 				MPI_Bcast(&final_message_len, 1, MPI_INT, 0, train_comm);
 				if (prank != 0)
 					final_message.resize(final_message_len);
@@ -4094,16 +4139,19 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				if (detail_len > 0)
 					MPI_Bcast(&detail[0], detail_len, MPI_CHAR, 0, train_comm);
 	#endif
-				restart_or_finish_rejected_linesearch(final_message, detail);
-					} else if (optimizer_replicated || prank == 0) {
-						const bool evaluated_point_accepted =
-							sus2::EvaluatedPointWasAccepted(
-								recovered_accepted_point_from_ascent != 0,
-								use_armijo_value_line_search,
-								armijo_value_trial_accepted,
-								optimizer_is_in_linesearch());
-						linesearch = !evaluated_point_accepted;
-				}
+					restart_or_finish_rejected_linesearch(final_message, detail);
+						} else if (optimizer_replicated || prank == 0) {
+							const bool evaluated_point_accepted =
+								sus2::EvaluatedPointWasAccepted(
+									recovered_accepted_point_from_ascent != 0,
+									use_armijo_value_line_search,
+									armijo_value_trial_accepted,
+									optimizer_is_in_linesearch());
+							if (!evaluated_point_accepted
+							    && !use_armijo_value_line_search)
+								record_optimizer_rejected_trial();
+							linesearch = !evaluated_point_accepted;
+					}
 
 	#ifdef MLIP_MPI
 				if (!optimizer_replicated) {
@@ -4120,12 +4168,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 			#endif
 
-					if (!linesearch && !restarted_rejected_linesearch_this_iteration)
-				{
-					accepted_evaluated_point_this_iteration = true;
-					// Optimizer.x is already the next trial.  Diagnostics and model
-					// checkpoints must instead see the point whose objective and
-					// gradient were evaluated and accepted above.
+						if (!linesearch && !restarted_rejected_linesearch_this_iteration)
+					{
+						accepted_evaluated_point_this_iteration = true;
+						if (optimizer_perf_counters.enabled)
+							++optimizer_perf_counters.accepted_steps;
+						// Optimizer.x is already the next trial.  Diagnostics and model
+						// checkpoints must instead see the point whose objective and
+						// gradient were evaluated and accepted above.
 					std::copy(evaluated_coeffs.begin(), evaluated_coeffs.end(), x);
 					int accepted_loss_increased = 0;
 					if (prank == 0 && accepted_loss_reference_valid) {
@@ -4379,11 +4429,13 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (bfgs_trace_stream.is_open())
 			bfgs_trace_stream.flush();
 
-		if (restored_rejected_linesearch)
-		{
-			CalcObjectiveFunctionGrad(training_set, cache_training_neighborhoods ? &training_neighborhoods : nullptr);
-			loss_ /= K;
-			std_ /= K;
+			if (restored_rejected_linesearch)
+			{
+				if (optimizer_perf_counters.enabled)
+					++optimizer_perf_counters.objective_gradient_calls;
+				CalcObjectiveFunctionGrad(training_set, cache_training_neighborhoods ? &training_neighborhoods : nullptr);
+				loss_ /= K;
+				std_ /= K;
 			stdd_ /= K;
 			mean_1 /= K;
 			mean_2 /= K;
@@ -4463,13 +4515,34 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					         << optimizer_log_name << " recomputed restored final objective after rejected line-search trial"
 				         << endl;
 				MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
+				}
 			}
-		}
 
-		if (prank == 0)
-		{
-			const double joint_std_report = need_std_terms ? (std_l / std_scaling) : 0.0;
-		const double center_std_report = need_std_terms ? (stdd_l / stdd_scaling) : 0.0;
+			if (prank == 0 && optimizer_perf_counters.enabled) {
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "SUS2_MTPR_OPTIMIZER_PERF_COUNTERS"
+				          << " optimizer=" << optimizer_log_name
+				          << " line_search=" << bfgs_line_search
+				          << " objective_value_calls="
+				          << optimizer_perf_counters.objective_value_calls
+				          << " objective_gradient_calls="
+				          << optimizer_perf_counters.objective_gradient_calls
+				          << " objective_total_calls="
+				          << (optimizer_perf_counters.objective_value_calls
+				              + optimizer_perf_counters.objective_gradient_calls)
+				          << " line_search_trial_evaluations="
+				          << optimizer_perf_counters.line_search_trial_evaluations
+				          << " rejected_trials="
+				          << optimizer_perf_counters.rejected_trials
+				          << " accepted_steps="
+				          << optimizer_perf_counters.accepted_steps
+				          << std::endl;
+			}
+
+			if (prank == 0)
+			{
+				const double joint_std_report = need_std_terms ? (std_l / std_scaling) : 0.0;
+			const double center_std_report = need_std_terms ? (stdd_l / stdd_scaling) : 0.0;
 		logstrm1 << "MTPR training ended:" << "\t joint_std^2:" << joint_std_report <<  "\t center_std^2:"  << center_std_report <<"   " << mean_1_l <<"   " << mean_2_l << "   " << mean_3_l << "\t efs:" << bfgs_f - std_l - 0 * stdd_l << endl;
 		MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
 	}

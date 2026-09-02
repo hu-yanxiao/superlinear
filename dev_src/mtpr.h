@@ -194,6 +194,10 @@ protected:
 				std::vector<double> two_layer_gate_center_gate_additive_param_mu_buffer_;
 				std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
 				std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
+				std::vector<double> two_layer_gate_radial_mixing_outer_delta_buffer_;
+				std::vector<double> two_layer_gate_radial_mixing_gate_rank_buffer_;
+				std::vector<double> two_layer_gate_radial_mixing_outer_rank_buffer_;
+				bool two_layer_gate_radial_mixing_active_eval_ = false;
 			std::vector<double> two_layer_gate_tanh_mu_cache_;
 			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
@@ -243,6 +247,12 @@ protected:
 	void CalcSHMomentValuesOnly(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh);
 	void CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh);
+	void AccumulateTwoLayerGateRadialMixingForwardEdge(
+		const double* gate_type_scale_by_mu,
+		const double* radial_values,
+		const double* radial_basis_values,
+		const double* sh_values,
+		double* outer_delta);
 	void CalcSHBasisFuncsDers(const Neighborhood& nbh);
 		void CalcTwoLayerGateScalarValuesOnly(
 			const Neighborhood& nbh,
@@ -1063,6 +1073,9 @@ public:
 		void RandomizeScalingCoeffs(std::mt19937_64& generator, double strength_jitter);
 		void RandomizeRadialCoeffs(std::mt19937_64& generator, double radial_scale);
 		void RandomizeNonlinearCoeffs(std::mt19937_64& generator, double radial_scale, bool include_scaling, double scaling_strength_jitter);
+		void RandomizeTwoLayerGateRadialMixingCoeffs(
+			std::mt19937_64& generator, double scale);
+		void SyncTwoLayerGateRadialMixingCoeffsFromRegression();
 
 	int CoeffCount() //!< number of coefficients
 	{

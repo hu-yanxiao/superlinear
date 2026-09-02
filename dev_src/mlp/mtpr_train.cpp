@@ -188,6 +188,38 @@ double ParseStrictDoubleOption(const std::string& value, const std::string& opt_
 	return result;
 }
 
+struct OptionalRandomSeed {
+	bool has_value = false;
+	std::mt19937_64::result_type value = 0;
+};
+
+OptionalRandomSeed ParseOptionalRandomSeed(
+	const std::map<std::string, std::string>& opts)
+{
+	const auto it = opts.find("init-random-seed");
+	if (it == opts.end() || it->second.empty())
+		return OptionalRandomSeed();
+	const std::string& value = it->second;
+	if (!std::all_of(value.begin(), value.end(), [](char ch) {
+		return ch >= '0' && ch <= '9';
+	}))
+		ERROR("--init-random-seed should be an unsigned integer");
+	std::size_t parsed = 0;
+	unsigned long long seed = 0;
+	try {
+		seed = std::stoull(value, &parsed);
+	} catch (const std::exception&) {
+		ERROR("--init-random-seed is outside the supported uint64 range");
+	}
+	if (parsed != value.size()
+	    || seed > std::numeric_limits<std::mt19937_64::result_type>::max())
+		ERROR("--init-random-seed is outside the supported uint64 range");
+	OptionalRandomSeed result;
+	result.has_value = true;
+	result.value = static_cast<std::mt19937_64::result_type>(seed);
+	return result;
+}
+
 struct ZBLTrainOptions {
 	bool enabled = false;
 	double inner = DefaultZBLInnerCutoff();
@@ -2139,6 +2171,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		opts["init-params"] = "random";
 	if (opts["init-params"] != "random" && opts["init-params"] != "same")
 		ERROR("--init-params should be 'random' or 'same'");
+	const OptionalRandomSeed init_random_seed = ParseOptionalRandomSeed(opts);
+	double radial_mixing_init_scale = 0.0;
+	if (opts["two-layer-gate-radial-mixing-init-scale"] != "")
+		radial_mixing_init_scale = ParseStrictDoubleOption(
+			opts["two-layer-gate-radial-mixing-init-scale"],
+			"--two-layer-gate-radial-mixing-init-scale");
+	if (radial_mixing_init_scale < 0.0)
+		ERROR("--two-layer-gate-radial-mixing-init-scale should be non-negative");
 
 	bool mindist_update = false;
 	if (opts["update-mindist"] != "")
@@ -2918,10 +2958,21 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (opts["init-params"] == "random" && !mtpr.inited) {
 		if (prank == 0) {
 			std::random_device rand_device;
-			std::mt19937_64 generator(rand_device());
+			const std::mt19937_64::result_type seed = init_random_seed.has_value
+				? init_random_seed.value
+				: static_cast<std::mt19937_64::result_type>(rand_device());
+			std::mt19937_64 generator(seed);
 
-			std::cout << "Random initialization of nonlinear coefficients" << std::endl;
+			std::cout << "Random initialization of nonlinear coefficients"
+			          << " seed=" << seed << std::endl;
 			mtpr.RandomizeNonlinearCoeffs(generator, 5e-3, true, 0.12);
+			if (radial_mixing_init_scale > 0.0) {
+				if (!mtpr.TwoLayerGateRadialMixingEnabled())
+					ERROR("--two-layer-gate-radial-mixing-init-scale requires "
+					      "--two-layer-gate-radial-mixing=full");
+				mtpr.RandomizeTwoLayerGateRadialMixingCoeffs(
+					generator, radial_mixing_init_scale);
+			}
 		}
     //     if (prank == 0) {std::cout << mtpr.regression_coeffs[mtpr.radial_func_count*( mtpr.Get_RB_size() + mtpr.species_count)-4] << std::endl;}
 #ifdef MLIP_MPI
@@ -2936,6 +2987,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Random init barrier done" << std::endl;
 #endif
+		mtpr.SyncTwoLayerGateRadialMixingCoeffsFromRegression();
+	}
+	if (maxits == 0 && init_random_seed.has_value
+	    && opts["init-params"] == "random" && !loaded_complete_parameters) {
+		save_model_atomically_collective(
+			trained_fnm, "deterministic fresh initialized model");
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Deterministic fresh initialized model saved to "
+			          << trained_fnm << std::endl;
 	}
 	trainer.shift(do_shift);
 	if (two_layer_gate_readout_linear_init) {

@@ -1,0 +1,133 @@
+#!/bin/bash
+#BSUB -J vo2_superlinear_fresh_ab
+#BSUB -q 33
+#BSUB -n 200
+#BSUB -R "span[ptile=40]"
+#BSUB -e %J.fresh_ab.err
+#BSUB -o %J.fresh_ab.out
+
+set -uo pipefail
+
+module purge
+module load compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0 gcc/11.2.0
+
+cd "$LS_SUBCWD"
+
+export SUS2_SH_PRODUCT_ROWS=0
+export SUS2_SH_SITE_DER_CACHE=1
+export SUS2_SH_ACCUM_SKIP_SITE_DERS=1
+export SUS2_SH_PRODUCT_HVT_REVERSE=1
+export SUS2_MTPR_OPTIMIZER_PERF_COUNTERS=1
+export SUS2_SH_ACCUM_PROFILE=1
+export SUS2_SH_ACCUM_PROFILE_INTERVAL=1000
+export SUS2_SH_TWO_LAYER_PROFILE=1
+export SUS2_SH_TWO_LAYER_PROFILE_INTERVAL=20
+
+RELEASE3_BIN=/work/phy-weigw/app/release3/mlp-sus2
+SUPERLINEAR_BIN=/work/phy-weigw/20260321_Test/superlinear-work-codex/bin/mlp-sus2
+TRAIN_CFG=/work/phy-weigw/hyx/vo2/9.1/train.cfg
+LIVE_VO2_DIR=/work/phy-weigw/hyx/vo2/9.1
+PROFILE_ITERS=${PROFILE_ITERS:-3}
+NP=$(wc -l < "$LSB_DJOB_HOSTFILE")
+
+WORK_DIR=$(pwd -P)
+case "$WORK_DIR/" in
+  "$LIVE_VO2_DIR/"*)
+    echo "refusing to profile inside the live VO2 directory: $WORK_DIR" >&2
+    exit 2
+    ;;
+esac
+for required in "$RELEASE3_BIN" "$SUPERLINEAR_BIN" "$TRAIN_CFG" "$LSB_DJOB_HOSTFILE"
+do
+  if [[ ! -s "$required" ]]; then
+    echo "missing required profile input: $required" >&2
+    exit 2
+  fi
+done
+if [[ ! -s seed/A.raw.mtp || ! -s seed/B0.raw.mtp || ! -s seed/B.raw.mtp ]]; then
+  echo "fresh seed artifacts are missing" >&2
+  exit 2
+fi
+for label in \
+  round1_release3 round1_superlinear_off round1_superlinear_zero round1_superlinear_mix \
+  round2_superlinear_mix round2_superlinear_zero round2_superlinear_off round2_release3
+do
+  if [[ -e "$label" ]]; then
+    echo "refusing to reuse existing result directory: $label" >&2
+    exit 2
+  fi
+done
+
+COMMON=(
+  --init-params=same
+  --skip-preinit
+  --energy-weight=1
+  --force-weight=0.1
+  --stress-weight=0.01
+  --force-loss=l2
+  --do-lin-steps=3000
+  --do-lin-freq=50
+  --stdd-weight=0.0
+  --std-weight=0.100
+  --do-samp
+  --max-iter="$PROFILE_ITERS"
+  --scalar-weight-l2-preset=recommended
+  --optimizer=bfgs
+  --bfgs-line-search=wolfe
+  --bfgs-coordinate-normalization=none
+)
+
+overall_rc=0
+run_variant() {
+  local label=$1
+  local variant=$2
+  local binary=$3
+  local model=$4
+  local run_dir="$PWD/$label"
+  mkdir -p "$run_dir"
+  local cmd=(
+    mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$NP"
+    "$binary" train "$model" "$TRAIN_CFG"
+    "${COMMON[@]}"
+    --curr-pot-name="$run_dir/current.mtp"
+    --best-pot-name="$run_dir/current.best.mtp"
+    --trained-pot-name="$run_dir/trained.mtp"
+    --bfgs-trace-file="$run_dir/trace.csv"
+  )
+  {
+    date -u '+%Y-%m-%dT%H:%M:%SZ'
+    echo "run_label=$label"
+    echo "variant=$variant"
+    echo "profile_iters=$PROFILE_ITERS"
+    echo "mpi_ranks=$NP"
+    sha256sum "$binary" "$model" "$TRAIN_CFG"
+    printf 'command='
+    printf '%q ' "${cmd[@]}"
+    printf '\n'
+  } >"$run_dir/metadata.txt"
+  local start
+  start=$(date +%s)
+  "${cmd[@]}" >"$run_dir/train.log" 2>&1
+  local rc=$?
+  local end
+  end=$(date +%s)
+  {
+    echo "runtime_sec=$((end-start))"
+    echo "exit_code=$rc"
+  } >"$run_dir/time.txt"
+  if [[ "$rc" -ne 0 ]]; then
+    overall_rc=$rc
+  fi
+}
+
+run_variant round1_release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round1_superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round1_superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
+run_variant round1_superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
+
+run_variant round2_superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
+run_variant round2_superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
+run_variant round2_superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round2_release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
+
+exit "$overall_rc"

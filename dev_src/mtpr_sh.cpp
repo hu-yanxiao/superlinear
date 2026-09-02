@@ -2761,8 +2761,64 @@ void MLMTPR::PrepareTwoLayerEdgeGateTypeScaleCache(
 	}
 }
 
+void MLMTPR::AccumulateTwoLayerGateRadialMixingForwardEdge(
+	const double* gate_type_scale_by_mu,
+	const double* radial_values,
+	const double* radial_basis_values,
+	const double* sh_values,
+	double* outer_delta)
+{
+	if (!two_layer_gate_radial_mixing_active_eval_)
+		return;
+	const int R = p_RadialBasis->rb_size;
+	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+	const double* mixing_coeffs =
+		regression_coeffs.data() + TwoLayerGateRadialMixingCoeffOffset();
+	two_layer_gate_radial_mixing_gate_rank_buffer_.resize(
+		two_layer_gate_k_rank_);
+	two_layer_gate_radial_mixing_outer_rank_buffer_.resize(outer_k_rank_);
+	double* gate_rank =
+		two_layer_gate_radial_mixing_gate_rank_buffer_.data();
+	double* outer_rank =
+		two_layer_gate_radial_mixing_outer_rank_buffer_.data();
+
+	for (int l = 0; l <= sh_l_max_; ++l) {
+		std::fill(gate_rank, gate_rank + two_layer_gate_k_rank_, 0.0);
+		for (int k = 0; k < sh_k_max_; ++k) {
+			const int mu = k * (sh_l_max_ + 1) + l;
+			const double x = gate_type_scale_by_mu[mu] * radial_values[mu];
+			for (int c = 0; c < two_layer_gate_k_rank_; ++c)
+				gate_rank[c] += TwoLayerGateKRankWeight(c, l, k) * x;
+		}
+		std::fill(outer_rank, outer_rank + outer_k_rank_, 0.0);
+		const int radial_base = mu_to_radial_eval_block_[l] * R;
+		for (int a = 0; a < outer_k_rank_; ++a) {
+			for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
+				const double* coeff_row = mixing_coeffs
+					+ (((l * outer_k_rank_ + a)
+					    * two_layer_gate_k_rank_ + c) * R);
+				double kernel = 0.0;
+				for (int xi = 0; xi < R; ++xi)
+					kernel += coeff_row[xi]
+						* radial_basis_values[radial_base + xi];
+				outer_rank[a] += kernel * gate_rank[c];
+			}
+		}
+		for (int m = -l; m <= l; ++m) {
+			const int sh_index = SHFlatIndex(l, m);
+			const double y = sh_values[sh_index];
+			for (int a = 0; a < outer_k_rank_; ++a)
+				outer_delta[static_cast<size_t>(a) * sh_count + sh_index]
+					+= outer_rank[a] * y;
+		}
+	}
+}
+
 void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 {
+	two_layer_gate_radial_mixing_active_eval_ =
+		TwoLayerGateRadialMixingEnabled()
+		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
@@ -2816,24 +2872,20 @@ void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 		}
 	}
 	const bool radial_mixing_active =
-		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		two_layer_gate_radial_mixing_active_eval_;
 	// Exact zero-C fast path: the mixer contribution vanishes identically.
-	std::vector<double> radial_mixing_outer_delta;
-	if (radial_mixing_active)
+	std::vector<double>& radial_mixing_outer_delta =
+		two_layer_gate_radial_mixing_outer_delta_buffer_;
+	if (radial_mixing_active) {
 		radial_mixing_outer_delta.assign(
 			static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
-	std::vector<double> radial_mixing_gate_rank_buffer;
-	if (radial_mixing_active)
-		radial_mixing_gate_rank_buffer.assign(two_layer_gate_k_rank_, 0.0);
-	std::vector<double> radial_mixing_outer_rank_buffer;
+		two_layer_gate_radial_mixing_gate_rank_buffer_.resize(
+			two_layer_gate_k_rank_);
+		two_layer_gate_radial_mixing_outer_rank_buffer_.resize(outer_k_rank_);
+	}
 	int radial_mixing_eval_blocks[kMaxSHL + 1];
 	int radial_mixing_eval_block_count = 0;
-	const double* radial_mixing_coeffs = nullptr;
 	if (radial_mixing_active) {
-		radial_mixing_outer_rank_buffer.assign(outer_k_rank_, 0.0);
-		radial_mixing_coeffs =
-			regression_coeffs.data() + TwoLayerGateRadialMixingCoeffOffset();
 		for (int l = 0; l <= sh_l_max_; ++l) {
 			const int eval_block = mu_to_radial_eval_block_[l];
 			bool found = false;
@@ -2962,46 +3014,13 @@ void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)
 					gate_type_scale_by_mu =
 						two_layer_gate_type_scale_mu_buffer_.data();
 				}
-				if (radial_mixing_active) {
-					double* gate_rank = radial_mixing_gate_rank_buffer.data();
-					double* outer_rank = radial_mixing_outer_rank_buffer.data();
-					for (int l = 0; l <= sh_l_max_; ++l) {
-						std::fill(gate_rank,
-						          gate_rank + two_layer_gate_k_rank_, 0.0);
-						for (int k = 0; k < sh_k_max_; ++k) {
-							const int mu = k * (sh_l_max_ + 1) + l;
-							const double x =
-								gate_type_scale_by_mu[mu]
-								* radial_values_use[mu];
-							for (int c = 0; c < two_layer_gate_k_rank_; ++c)
-								gate_rank[c] +=
-									TwoLayerGateKRankWeight(c, l, k) * x;
-						}
-						std::fill(outer_rank, outer_rank + outer_k_rank_, 0.0);
-						const int mixing_radial_base =
-							mu_to_radial_eval_block_[l] * R;
-						for (int a = 0; a < outer_k_rank_; ++a) {
-							for (int c = 0; c < two_layer_gate_k_rank_; ++c) {
-								const double* coeff_row = radial_mixing_coeffs
-									+ (((l * outer_k_rank_ + a)
-									    * two_layer_gate_k_rank_ + c) * R);
-								double kernel = 0.0;
-								for (int xi = 0; xi < R; ++xi)
-									kernel += coeff_row[xi]
-										* radial_mixing_rb_vals[mixing_radial_base + xi];
-								outer_rank[a] += kernel * gate_rank[c];
-							}
-						}
-						for (int m = -l; m <= l; ++m) {
-							const double y = sh_values_use[SHFlatIndex(l, m)];
-							for (int a = 0; a < outer_k_rank_; ++a)
-								radial_mixing_outer_delta[
-									static_cast<size_t>(a) * sh_count
-									+ SHFlatIndex(l, m)] +=
-										outer_rank[a] * y;
-						}
-					}
-				}
+				if (radial_mixing_active)
+					AccumulateTwoLayerGateRadialMixingForwardEdge(
+						gate_type_scale_by_mu,
+						radial_values_use,
+						radial_mixing_rb_vals,
+						sh_values_use,
+						radial_mixing_outer_delta.data());
 				if (use_basic_mu_groups) {
 					for (int mu = 0; mu < radial_func_count; ++mu) {
 						const double scaled_radial =
@@ -3804,6 +3823,9 @@ void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)
 
 void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 {
+	two_layer_gate_radial_mixing_active_eval_ =
+		TwoLayerGateRadialMixingEnabled()
+		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH does not use precomputed LAMMPS radial tables in training.");
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
@@ -3849,6 +3871,17 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 	std::fill(moment_vals, moment_vals + alpha_moments_count, 0.0);
 
 	const int radial_coeff_base = C + 2 * C * C * K_;
+	const bool radial_mixing_active =
+		two_layer_gate_radial_mixing_active_eval_;
+	std::vector<double>& radial_mixing_outer_delta =
+		two_layer_gate_radial_mixing_outer_delta_buffer_;
+	if (radial_mixing_active) {
+		radial_mixing_outer_delta.assign(
+			static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
+		two_layer_gate_radial_mixing_gate_rank_buffer_.resize(
+			two_layer_gate_k_rank_);
+		two_layer_gate_radial_mixing_outer_rank_buffer_.resize(outer_k_rank_);
+	}
 
 	for (int j = 0; j < nbh.count; ++j) {
 		const Vector3& rvec = nbh.vecs[j];
@@ -3856,12 +3889,15 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 		const int type_outer = nbh.types[j];
 		const double* cached_sh_values = nullptr;
 		const double* cached_radial_values = nullptr;
+		const double* cached_rb_vals_read = nullptr;
 		if (use_edge_cache) {
 			const size_t edge = TwoLayerEdgePrimitiveOffset(-1, j);
 			cached_sh_values =
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			cached_radial_values =
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
+			cached_rb_vals_read =
+				two_layer_edge_radial_vals_cache_.data() + edge * radial_val_stride;
 		} else {
 			double* cached_sh_values_write =
 				grad_neighbor_sh_values_cache_.data() + static_cast<size_t>(j) * sh_count;
@@ -3893,6 +3929,7 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 				+ static_cast<size_t>(j) * mu_stride;
 			cached_sh_values = cached_sh_values_write;
 			cached_radial_values = cached_radial_values_write;
+			cached_rb_vals_read = cached_rb_vals;
 			EvalRealSH(rvec, r, sh_l_max_, cached_sh_values_write, cached_sh_ders);
 
 			for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
@@ -3960,6 +3997,13 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 						gate_type_scale_by_mu =
 							two_layer_gate_type_scale_mu_buffer_.data();
 					}
+				if (radial_mixing_active)
+					AccumulateTwoLayerGateRadialMixingForwardEdge(
+						gate_type_scale_by_mu,
+						cached_radial_values,
+						cached_rb_vals_read,
+						cached_sh_values,
+						radial_mixing_outer_delta.data());
 				double* gate_scaled_radial_by_mu =
 					two_layer_gate_scaled_mu_vals_buffer_.data();
 				for (int mu = 0; mu < radial_func_count; ++mu)
@@ -3973,6 +4017,14 @@ void MLMTPR::CalcSHMomentValuesWithGradientCache(const Neighborhood& nbh)
 	}
 
 	ContractOuterKRank1Values(moment_vals);
+	if (radial_mixing_active)
+		for (int a = 0; a < outer_k_rank_; ++a)
+			for (int l = 0; l <= sh_l_max_; ++l)
+				for (int m = -l; m <= l; ++m)
+					moment_vals[OuterKRank1OuterBasicIndex(a, l, m)] +=
+						radial_mixing_outer_delta[
+							static_cast<size_t>(a) * sh_count
+							+ SHFlatIndex(l, m)];
 	if (UseSHProductRows()) {
 		ApplySHProductRowsForward();
 	} else {
@@ -9251,12 +9303,14 @@ void MLMTPR::CalcSHSiteEnergyDers(const Neighborhood& nbh)
 		CalcSHResidualSiteEnergyDers(nbh);
 		return;
 	}
+	two_layer_gate_radial_mixing_active_eval_ =
+		TwoLayerGateRadialMixingEnabled()
+		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (TwoLayerGateRadialMixingEnabled() && use_lmp_table)
 		ERROR("SUS2-SH two-layer gate radial mixing requires direct radial basis evaluation.");
 	const bool radial_mixing_active =
-		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		two_layer_gate_radial_mixing_active_eval_;
 	// With C == 0, all current-C force chains vanish exactly. Direct
 	// derivatives with respect to C are retained in the parameter path.
 	const bool use_edge_der_cache =
@@ -10993,7 +11047,7 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 						TwoLayerGateRadialMixingEnabled();
 					const bool radial_mixing_active =
 						radial_mixing_enabled
-						&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+						&& two_layer_gate_radial_mixing_active_eval_;
 					if (radial_mixing_active) {
 						radial_mixing_tangent_delta.assign(
 							static_cast<size_t>(outer_k_rank_) * sh_count, 0.0);
@@ -11692,14 +11746,15 @@ void MLMTPR::AccumulateSHCombinationGrad(const Neighborhood& nbh,
 											const double z_t_energy_factor =
 												gate_rank_t[c] * sum_energy_y
 												+ gate_rank[c] * sum_energy_wdy;
+											const int mixing_coeff_base =
+												TwoLayerGateRadialMixingCoeffIndex(l, a, c, 0);
 											for (int xi = 0; xi < R; ++xi) {
 												const double rb = rb_vals_use[mixing_radial_base + xi];
 												const double rb_t =
 													(se_ders_weights == nullptr)
 													? 0.0
 													: rb_ders_use[mixing_der_base + xi] * wr;
-												grad_out[TwoLayerGateRadialMixingCoeffIndex(
-													l, a, c, xi)] +=
+												grad_out[mixing_coeff_base + xi] +=
 													rb * (z_value_factor + z_t_energy_factor)
 													+ rb_t * z_energy_factor;
 											}

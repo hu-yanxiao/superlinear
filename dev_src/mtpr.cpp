@@ -3331,6 +3331,39 @@ void MLMTPR::RandomizeNonlinearCoeffs(std::mt19937_64& generator, double radial_
 	RandomizeRadialCoeffs(generator, radial_scale);
 }
 
+void MLMTPR::RandomizeTwoLayerGateRadialMixingCoeffs(
+	std::mt19937_64& generator, double scale)
+{
+	if (!std::isfinite(scale) || scale < 0.0)
+		ERROR("SUS2-SH radial mixing initialization scale should be finite and non-negative");
+	if (!TwoLayerGateRadialMixingEnabled())
+		ERROR("SUS2-SH radial mixing initialization requires radial mixing=full");
+	const int count = TwoLayerGateRadialMixingCoeffCount();
+	const int offset = TwoLayerGateRadialMixingCoeffOffset();
+	if (offset < 0 || offset + count > static_cast<int>(regression_coeffs.size()))
+		ERROR("SUS2-SH radial mixing coefficient storage is inconsistent");
+	two_layer_gate_radial_mixing_coeffs_.resize(count);
+	std::uniform_real_distribution<double> uniform(-scale, scale);
+	for (int i = 0; i < count; ++i) {
+		const double value = uniform(generator);
+		two_layer_gate_radial_mixing_coeffs_[i] = value;
+		regression_coeffs[offset + i] = value;
+	}
+}
+
+void MLMTPR::SyncTwoLayerGateRadialMixingCoeffsFromRegression()
+{
+	if (!TwoLayerGateRadialMixingEnabled())
+		return;
+	const int count = TwoLayerGateRadialMixingCoeffCount();
+	const int offset = TwoLayerGateRadialMixingCoeffOffset();
+	if (offset < 0 || offset + count > static_cast<int>(regression_coeffs.size()))
+		ERROR("SUS2-SH radial mixing coefficient storage is inconsistent");
+	two_layer_gate_radial_mixing_coeffs_.assign(
+		regression_coeffs.begin() + offset,
+		regression_coeffs.begin() + offset + count);
+}
+
 void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 {
 	if (OuterKRank1Enabled())
@@ -11279,6 +11312,9 @@ void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 void MLMTPR::PrepareEvalCaches()
 {
 	LinCoeff();
+	two_layer_gate_radial_mixing_active_eval_ =
+		TwoLayerGateRadialMixingEnabled()
+		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
 }
 
 void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
