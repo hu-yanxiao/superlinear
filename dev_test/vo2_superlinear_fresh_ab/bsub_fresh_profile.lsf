@@ -48,9 +48,7 @@ if [[ ! -s seed/A.raw.mtp || ! -s seed/B0.raw.mtp || ! -s seed/B.raw.mtp ]]; the
   echo "fresh seed artifacts are missing" >&2
   exit 2
 fi
-for label in \
-  round1_release3 round1_superlinear_off round1_superlinear_zero round1_superlinear_mix \
-  round2_superlinear_mix round2_superlinear_zero round2_superlinear_off round2_release3
+for label in round1 round2
 do
   if [[ -e "$label" ]]; then
     echo "refusing to reuse existing result directory: $label" >&2
@@ -120,14 +118,14 @@ run_variant() {
   fi
 }
 
-run_variant round1_release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round1_superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round1_superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
-run_variant round1_superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
+run_variant round1/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round1/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round1/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
+run_variant round1/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
 
-run_variant round2_superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
-run_variant round2_superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
-run_variant round2_superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round2_release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round2/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
+run_variant round2/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
+run_variant round2/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round2/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
 
 exit "$overall_rc"

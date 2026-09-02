@@ -40,6 +40,9 @@ iterations by default and records accepted-step traces, wall time,
 binary/model hashes, and superlinear objective/line-search counters.  Compare
 time per objective/gradient call and per accepted step across both rounds;
 do not infer mixer overhead from aggregate wall time alone.
+After all eight runs finish, use `summarize_profile.py <campaign-directory>`;
+it refuses incomplete runs, inconsistent counters, non-finite traces, or error
+tokens before computing the two-round per-call and per-step summaries.
 
 The short profile is intentionally non-resumable.  Every output directory must
 be absent before submission, and any failed campaign must be diagnosed and
