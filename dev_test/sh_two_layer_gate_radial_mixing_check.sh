@@ -8,6 +8,7 @@ mkdir -p "$tmp_dir"
 
 init_model="$tmp_dir/init.mtp"
 roundtrip_model="$tmp_dir/roundtrip.mtp"
+legacy_layout_model="$tmp_dir/legacy-layout.mtp"
 nonzero_model="$tmp_dir/nonzero.mtp"
 train="$tmp_dir/one.cfg"
 
@@ -36,18 +37,41 @@ import sys
 text = open(sys.argv[1]).read()
 if "two_layer_gate_radial_mixing = full" not in text:
     raise SystemExit("missing radial mixing mode marker")
+if "two_layer_gate_radial_mixing_layout = direct-k" not in text:
+    raise SystemExit("missing direct-K radial mixing layout marker")
 match = re.search(r"two_layer_gate_radial_mixing_coeff_count\s*=\s*(\d+)", text)
 if not match:
     raise SystemExit("missing radial mixing coefficient count")
 count = int(match.group(1))
-expected = (2 + 1) * 2 * 2 * 4
+expected = (2 + 1) * 2 * 3 * 4
 if count != expected:
     raise SystemExit(f"unexpected radial mixing coefficient count: {count} != {expected}")
 PY
 
 ./bin/mlp-sus2 roundtrip-model-dev "$init_model" "$roundtrip_model" >/dev/null
 grep -q "two_layer_gate_radial_mixing = full" "$roundtrip_model"
-grep -q "two_layer_gate_radial_mixing_coeff_count = 48" "$roundtrip_model"
+grep -q "two_layer_gate_radial_mixing_layout = direct-k" "$roundtrip_model"
+grep -q "two_layer_gate_radial_mixing_coeff_count = 72" "$roundtrip_model"
+
+python3 - "$init_model" "$legacy_layout_model" <<'PY'
+import sys
+
+source, target = sys.argv[1:]
+lines = open(source, encoding="utf-8").readlines()
+lines = [
+    line for line in lines
+    if not line.startswith("two_layer_gate_radial_mixing_layout =")
+]
+open(target, "w", encoding="utf-8").writelines(lines)
+PY
+if ./bin/mlp-sus2 roundtrip-model-dev \
+  "$legacy_layout_model" "$tmp_dir/legacy-accepted.mtp" \
+  >"$tmp_dir/legacy.out" 2>"$tmp_dir/legacy.err"; then
+  echo "unmarked legacy radial mixer was accepted" >&2
+  exit 1
+fi
+grep -q "legacy gate-rank radial mixer models are not compatible" \
+  "$tmp_dir/legacy.err"
 
 python3 - "$init_model" "$nonzero_model" <<'PY'
 import re

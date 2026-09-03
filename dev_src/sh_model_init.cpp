@@ -1496,9 +1496,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		}
 		if (two_layer_gate_radial_mixing_full) {
 			const int mixing_count =
-				(lmax + 1) * outer_k_rank * two_layer_gate_k_rank
-				* rb_size;
+				(lmax + 1) * outer_k_rank * kmax * rb_size;
 			ofs << "two_layer_gate_radial_mixing = full\n";
+			ofs << "two_layer_gate_radial_mixing_layout = direct-k\n";
 			ofs << "two_layer_gate_radial_mixing_coeff_count = "
 			    << mixing_count << "\n";
 			ofs << "two_layer_gate_radial_mixing_coeffs = {";

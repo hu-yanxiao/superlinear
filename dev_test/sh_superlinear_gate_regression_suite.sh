@@ -300,7 +300,8 @@ for x, y in zip(a, b):
 print("zero_mixing_parity ok")
 PY
   grep -q "two_layer_gate_radial_mixing = full" "$upgraded_zero_model"
-  grep -q "two_layer_gate_radial_mixing_coeff_count = 48" "$upgraded_zero_model"
+  grep -q "two_layer_gate_radial_mixing_layout = direct-k" "$upgraded_zero_model"
+  grep -q "two_layer_gate_radial_mixing_coeff_count = 72" "$upgraded_zero_model"
 
   "$bin" calc-efs "$full_active_model" "$cfg" "$active_out" >/dev/null
   python3 - "$zero_out" "$active_out" <<'PY'
@@ -386,7 +387,8 @@ print("roundtrip_parity ok")
 PY
   grep -q "two_layer_gate_radial_mixing = full" "$full_active_model"
   grep -q "two_layer_gate_radial_mixing = full" "$full_active_roundtrip"
-  grep -q "two_layer_gate_radial_mixing_coeff_count = 48" "$full_active_roundtrip"
+  grep -q "two_layer_gate_radial_mixing_layout = direct-k" "$full_active_roundtrip"
+  grep -q "two_layer_gate_radial_mixing_coeff_count = 72" "$full_active_roundtrip"
 
   "$bin" check-efs-fd-dev "$full_active_model" "$cfg" \
     --max-configs=1 \
@@ -558,6 +560,8 @@ run_check radial_mixing_gate_tangent_efs_fd \
   bash dev_test/sh_superlinear_radial_mixing_gate_tangent_efs_fd_check.sh "$bin"
 run_check radial_mixing_product_graph_fd \
   bash dev_test/sh_superlinear_radial_mixing_product_graph_fd_check.sh "$bin"
+run_check radial_mixing_scaling_maps \
+  bash dev_test/sh_superlinear_radial_mixing_scaling_map_check.sh "$bin"
 
 if [[ "${SUS2_SH_SUPERLINEAR_INCLUDE_READOUT:-1}" != "0" ]]; then
   run_check gate_readout_diagnostics \

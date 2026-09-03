@@ -107,7 +107,7 @@ def coeff_count(name):
     return int(match.group(1))
 
 mix_count = coeff_count("two_layer_gate_radial_mixing_coeff_count")
-if mix_count != 48:
+if mix_count != 72:
     raise SystemExit(f"unexpected radial mixing coeff count: {mix_count}")
 
 shared = text

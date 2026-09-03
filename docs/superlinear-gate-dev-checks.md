@@ -2,7 +2,7 @@
 
 This file records the local, standalone checks for the release3 superlinear
 gate paths.  In this branch the checked implementations include the per-`l`
-distance-dependent gate-to-outer radial mixer
+distance-dependent direct `K`-to-outer radial mixer
 (`--two-layer-gate-radial-mixing=full`), the edge-conditioned `L=1` gate
 (`--two-layer-gate-edge-l1`), and the first-gate scalar energy readout
 (`--two-layer-gate-readout`).
@@ -34,6 +34,7 @@ regressions.
 | Active mixer changes E/F/stress and survives save/load exactly | `two_layer_gate_radial_mixing` suite block |
 | E-, F-, S-, and EFS-loss gradients cover base species/scaling/radial, gate radial/additive/type/weights, gate rank, outer rank, and mixer coefficients | `two_layer_gate_radial_mixing` suite block |
 | Active mixer coordinate finite differences and rotation invariance/equivariance hold for E/F/stress | `two_layer_gate_radial_mixing` suite block |
+| Direct mixer uses the correct `(k,l)` radial scaling block for compact `K`, compact `L`, and full `LK`, including E/F/stress and scaling-parameter derivatives | `dev_test/sh_superlinear_radial_mixing_scaling_map_check.sh` |
 | Linear component readout remains consistent with direct E/F | `dev_test/sh_two_layer_gate_edge_l1_linear_components_check.sh` |
 | Rotation invariance/equivariance holds for energy, force, and stress | `dev_test/sh_two_layer_gate_edge_l1_rotation_check.sh` |
 | Pair/weighted cache profile instrumentation is present and disable switches work | `dev_test/sh_two_layer_gate_edge_l1_pair_cache_profile_check.sh`, `dev_test/sh_two_layer_gate_edge_l1_weighted_cache_profile_check.sh` |

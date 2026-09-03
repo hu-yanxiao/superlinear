@@ -1651,7 +1651,7 @@ int MLMTPR::TwoLayerGateRadialMixingCoeffCount() const
 {
 	if (!TwoLayerGateRadialMixingEnabled() || p_RadialBasis == nullptr)
 		return 0;
-	return (sh_l_max_ + 1) * outer_k_rank_ * two_layer_gate_k_rank_
+	return (sh_l_max_ + 1) * outer_k_rank_ * sh_k_max_
 		* p_RadialBasis->rb_size;
 }
 
@@ -1661,36 +1661,36 @@ int MLMTPR::TwoLayerGateRadialMixingCoeffOffset() const
 }
 
 int MLMTPR::TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel,
-                                               int gate_channel, int xi) const
+                                               int k_channel, int xi) const
 {
 	if (!TwoLayerGateRadialMixingEnabled())
 		return -1;
 	if (l < 0 || l > sh_l_max_)
 		ERROR("SUS2-SH two-layer gate radial mixing l index is out of range");
 	if (outer_channel < 0 || outer_channel >= outer_k_rank_
-	    || gate_channel < 0 || gate_channel >= two_layer_gate_k_rank_)
-		ERROR("SUS2-SH two-layer gate radial mixing rank index is out of range");
+	    || k_channel < 0 || k_channel >= sh_k_max_)
+		ERROR("SUS2-SH two-layer gate radial mixing channel index is out of range");
 	if (p_RadialBasis == nullptr || xi < 0 || xi >= p_RadialBasis->rb_size)
 		ERROR("SUS2-SH two-layer gate radial mixing basis index is out of range");
 	const int R = p_RadialBasis->rb_size;
 	const size_t local = (((static_cast<size_t>(l) * outer_k_rank_
-		+ outer_channel) * two_layer_gate_k_rank_ + gate_channel) * R + xi);
+		+ outer_channel) * sh_k_max_ + k_channel) * R + xi);
 	if (local >= static_cast<size_t>(TwoLayerGateRadialMixingCoeffCount()))
 		ERROR("SUS2-SH two-layer gate radial mixing coefficient index is out of range");
 	return TwoLayerGateRadialMixingCoeffOffset() + static_cast<int>(local);
 }
 
 double MLMTPR::TwoLayerGateRadialMixingCoeff(int l, int outer_channel,
-                                             int gate_channel, int xi) const
+                                             int k_channel, int xi) const
 {
 	const int coeff_index =
-		TwoLayerGateRadialMixingCoeffIndex(l, outer_channel, gate_channel, xi);
+		TwoLayerGateRadialMixingCoeffIndex(l, outer_channel, k_channel, xi);
 	if (coeff_index >= 0
 	    && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
 	const int R = p_RadialBasis->rb_size;
 	const size_t local = (((static_cast<size_t>(l) * outer_k_rank_
-		+ outer_channel) * two_layer_gate_k_rank_ + gate_channel) * R + xi);
+		+ outer_channel) * sh_k_max_ + k_channel) * R + xi);
 	if (local < two_layer_gate_radial_mixing_coeffs_.size())
 		return two_layer_gate_radial_mixing_coeffs_[local];
 	ERROR("SUS2-SH two-layer gate radial mixing coefficient storage is inconsistent");
@@ -4743,6 +4743,14 @@ void MLMTPR::Load(const string& filename)
 					if (OuterKRankUsesDirectRadial() || TwoLayerGateUsesDirectScale())
 						ERROR("SUS2-SH two-layer gate radial mixing is not compatible with direct radial/gate shortcuts");
 					ifs >> tmpstr;
+					if (tmpstr != "two_layer_gate_radial_mixing_layout")
+						ERROR("SUS2-SH legacy gate-rank radial mixer models are not compatible with the direct K-to-outer mixer; recreate or reinitialize the radial mixer");
+					ifs.ignore(2);
+					std::string mixing_layout;
+					ifs >> mixing_layout;
+					if (mixing_layout != "direct-k")
+						ERROR("SUS2-SH two-layer gate radial mixing layout should be direct-k");
+					ifs >> tmpstr;
 					if (tmpstr != "two_layer_gate_radial_mixing_coeff_count")
 						ERROR("SUS2-SH two-layer gate radial mixing is missing coefficient count metadata");
 					ifs.ignore(2);
@@ -5902,6 +5910,7 @@ void MLMTPR::Save(const string& filename)
 				if (mixing_count <= 0)
 					ERROR("SUS2-SH two-layer gate radial mixing has no coefficients");
 				ofs << "two_layer_gate_radial_mixing = full\n";
+				ofs << "two_layer_gate_radial_mixing_layout = direct-k\n";
 				ofs << "two_layer_gate_radial_mixing_coeff_count = "
 				    << mixing_count << '\n';
 				ofs << "two_layer_gate_radial_mixing_coeffs = {";
@@ -5911,13 +5920,13 @@ void MLMTPR::Save(const string& filename)
 						ofs << ", ";
 					const int xi = i % R;
 					const int q = i / R;
-					const int gate_channel = q % two_layer_gate_k_rank_;
+					const int k_channel = q % sh_k_max_;
 					const int outer_channel =
-						(q / two_layer_gate_k_rank_) % outer_k_rank_;
+						(q / sh_k_max_) % outer_k_rank_;
 					const int l =
-						q / (two_layer_gate_k_rank_ * outer_k_rank_);
+						q / (sh_k_max_ * outer_k_rank_);
 					ofs << TwoLayerGateRadialMixingCoeff(
-						l, outer_channel, gate_channel, xi);
+						l, outer_channel, k_channel, xi);
 				}
 				ofs << "}\n";
 			}
