@@ -85,6 +85,9 @@ protected:
 	bool outer_k_rank1_enabled_ = false;
 	int outer_k_rank_ = 0;
 	bool outer_k_rank1_direct_radial_ = false;
+	// Absent model metadata retains the legacy factorized/cross-channel model.
+	std::string outer_channel_mode_ = "cross-channel";
+	std::string outer_radial_mode_ = "legacy-plus-mixer";
 	int outer_k_rank1_basic_begin_ = 0;
 	int outer_k_rank1_basic_count_ = 0;
 	int outer_k_rank1_product_begin_ = 0;
@@ -472,6 +475,7 @@ protected:
 	void ContractOuterKRank1MomentDers(const Neighborhood& nbh);
 	void BackpropOuterKRank1Adjoints(std::vector<double>& adjoints) const;
 	void AbsorbOuterKRank1WeightsIntoRadialCoeffs();
+	void ValidateOuterModeConfiguration() const;
 	int TwoLayerGateKRankBasicIndex(int channel, int l, int m) const;
 	int TwoLayerGateKRankRawBasicIndex(int l, int m, int k) const;
 	void ContractTwoLayerGateKRankValues(double* values) const;
@@ -925,11 +929,18 @@ public:
 						bool OuterKRank1Enabled() const { return outer_k_rank1_enabled_; }
 						bool OuterKRankEnabled() const { return outer_k_rank_ > 0; }
 						int OuterKRank() const { return outer_k_rank_; }
+						bool OuterUsesPureRadialMatrix() const {
+							return OuterKRankEnabled() && outer_radial_mode_ == "pure-matrix";
+						}
+						bool OuterUsesSameChannelGraph() const {
+							return OuterKRankEnabled() && outer_channel_mode_ == "same-channel";
+						}
 						bool OuterKRankUsesDirectRadial() const {
 							return outer_k_rank_ == 1 && outer_k_rank1_direct_radial_;
 						}
 						bool OuterKRankHasTrainableWeights() const {
-							return OuterKRankEnabled() && !OuterKRankUsesDirectRadial();
+							return OuterKRankEnabled() && !OuterKRankUsesDirectRadial()
+								&& !OuterUsesPureRadialMatrix();
 						}
 					int OuterKRank1BasicBegin() const { return outer_k_rank1_basic_begin_; }
 					int OuterKRank1BasicCount() const { return outer_k_rank1_basic_count_; }
@@ -1113,6 +1124,7 @@ public:
 	double RadialFirstCoeffValueToRaw(double coeff_value) const;
 	double RadialFirstCoeffDerivativeFromValue(double coeff_value) const;
 	bool IsRedundantRadialSpeciesCoeff(int coeff_index) const;
+	bool IsUnusedOuterRadialCoeff(int coeff_index) const;
 	void BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs = false) const;
 	int ActiveCoeffCount(bool exclude_scal_coeffs = false) const;
 	int ScalingSlopeOffset(int scaling_block, int type_central, int type_outer) const;
@@ -1149,6 +1161,8 @@ public:
 	}
 		void DistributeCoeffs()									//Combine radial and linear coefficients in one array
 		{
+				if (OuterUsesPureRadialMatrix())
+					ValidateOuterModeConfiguration();
 				const int base_nonlinear_size = BaseNonlinearCoeffCount();
 						const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 						const int gate_scaling_count = TwoLayerGateScalingCoeffCount();
@@ -1314,6 +1328,16 @@ public:
 								two_layer_gate_body_mix_weights_.assign(
 									gate_body_mix_weight_count, 1.0);
 							}
+						}
+						if (OuterUsesPureRadialMatrix()
+						    && static_cast<int>(old_coeffs.size()) == expected_new_size) {
+							// Already distributed physical W values are authoritative
+							// when rebuilding the parameter layout of a resumed model.
+							const int mixing_offset = new_gate_body_mix_offset
+								+ gate_body_mix_weight_count;
+							two_layer_gate_radial_mixing_coeffs_.assign(
+								old_coeffs.begin() + mixing_offset,
+								old_coeffs.begin() + mixing_offset + gate_radial_mixing_count);
 						}
 						if (gate_radial_mixing_count > 0
 						    && static_cast<int>(two_layer_gate_radial_mixing_coeffs_.size())

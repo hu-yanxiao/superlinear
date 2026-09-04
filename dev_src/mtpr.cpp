@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include "mtpr.h"
 
@@ -1412,7 +1413,7 @@ void MLMTPR::BuildTwoLayerGateBodyOrderBuckets()
 	    != TwoLayerGateBodyMixWeightCount())
 		ERROR("SUS2-SH two-layer gate body mix metadata has inconsistent sizes");
 	if (two_layer_gate_body_order_max_ < 2
-	    || two_layer_gate_body_order_max_ > sh_body_order_)
+	    || two_layer_gate_body_order_max_ > (OuterUsesPureRadialMatrix() ? 6 : sh_body_order_))
 		ERROR("SUS2-SH mu-body-order gate body order is out of range");
 
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
@@ -1651,8 +1652,14 @@ int MLMTPR::TwoLayerGateRadialMixingCoeffCount() const
 {
 	if (!TwoLayerGateRadialMixingEnabled() || p_RadialBasis == nullptr)
 		return 0;
-	return (sh_l_max_ + 1) * outer_k_rank_ * sh_k_max_
-		* p_RadialBasis->rb_size;
+	size_t count = static_cast<size_t>(sh_l_max_ + 1);
+	for (int dimension : {outer_k_rank_, sh_k_max_, p_RadialBasis->rb_size}) {
+		if (dimension <= 0 || count > static_cast<size_t>(std::numeric_limits<int>::max())
+		                               / static_cast<size_t>(dimension))
+			ERROR("SUS2-SH radial matrix coefficient count exceeds supported index range");
+		count *= static_cast<size_t>(dimension);
+	}
+	return static_cast<int>(count);
 }
 
 int MLMTPR::TwoLayerGateRadialMixingCoeffOffset() const
@@ -1890,7 +1897,7 @@ const double* MLMTPR::OuterKRank1WeightData() const
 void MLMTPR::AbsorbOuterKRank1WeightsIntoRadialCoeffs()
 {
 	if (!OuterKRankEnabled() || outer_k_rank_ != 1
-	    || outer_k_rank1_direct_radial_)
+	    || outer_k_rank1_direct_radial_ || OuterUsesPureRadialMatrix())
 		return;
 	const int expected_weight_count =
 		(sh_l_max_ + 1) * sh_k_max_;
@@ -1920,6 +1927,34 @@ void MLMTPR::AbsorbOuterKRank1WeightsIntoRadialCoeffs()
 	}
 	outer_k_rank1_weights_.clear();
 	outer_k_rank1_direct_radial_ = true;
+}
+
+void MLMTPR::ValidateOuterModeConfiguration() const
+{
+	if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
+		ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
+	if (outer_radial_mode_ != "legacy-plus-mixer" && outer_radial_mode_ != "pure-matrix")
+		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer or pure-matrix");
+	const bool pure = outer_radial_mode_ == "pure-matrix";
+	if (pure != (outer_channel_mode_ == "same-channel"))
+		ERROR("SUS2-SH pure-matrix and same-channel outer modes must be selected together");
+	if (!pure)
+		return;
+	if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
+	    || !two_layer_gate_enabled_ || !TwoLayerGateRadialMixingEnabled())
+		ERROR("SUS2-SH pure-matrix outer requires a ranked two-layer gate and full radial mixing");
+	if (!TwoLayerGateUsesSharedRadial())
+		ERROR("SUS2-SH pure-matrix outer requires an independent shared-radial gate block");
+	if (outer_k_rank1_direct_radial_ || TwoLayerGateUsesDirectScale()
+	    || multi_layer_gate_enabled_ || two_layer_gate_edge_l1_enabled_
+	    || two_layer_residual_enabled_)
+		ERROR("SUS2-SH pure-matrix outer is incompatible with direct shortcuts, multi-layer, edge-L1, or residual modes");
+	if (!outer_k_rank1_weights_.empty() || OuterKRank1WeightCount() != 0)
+		ERROR("SUS2-SH pure-matrix outer must not contain a factorized outer weight block");
+	const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
+	if (mixing_count <= 0
+	    || two_layer_gate_radial_mixing_coeffs_.size() != static_cast<size_t>(mixing_count))
+		ERROR("SUS2-SH pure-matrix outer has inconsistent physical matrix coefficient metadata");
 }
 
 int MLMTPR::LinearCoeffCount() const
@@ -3090,7 +3125,7 @@ int MLMTPR::CountRadialFirstCoeffsNeedingPositiveRepair(double min_value) const
 	// corresponding radial row.  Its sign is physical: forcing the first
 	// coefficient positive would no longer be a gauge change and would alter a
 	// loaded model before the first optimizer step.
-	if (OuterKRankUsesDirectRadial())
+	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix())
 		return 0;
 	const double positive_floor = min_value > 0.0 ? min_value : kRadialFirstCoeffPositiveFloor;
 	if (p_RadialBasis == nullptr)
@@ -3136,7 +3171,7 @@ bool MLMTPR::IsRadialFirstCoeff(int coeff_index) const
 {
 	// Direct rank-1 rows are signed effective coefficients d=W*c.  They must use
 	// ordinary physical coordinates when not covered by the weight-norm chart.
-	if (OuterKRankUsesDirectRadial())
+	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix())
 		return false;
 	if (p_RadialBasis == nullptr)
 		return false;
@@ -3173,6 +3208,20 @@ bool MLMTPR::IsRedundantRadialSpeciesCoeff(int coeff_index) const
 	return false;
 }
 
+bool MLMTPR::IsUnusedOuterRadialCoeff(int coeff_index) const
+{
+	// The gate retains its own radial rows. Only the obsolete outer radial
+	// expansion coefficients are frozen: scaling and type factors remain active.
+	if (!OuterUsesPureRadialMatrix() || !TwoLayerGateUsesSharedRadial()
+	    || p_RadialBasis == nullptr)
+		return false;
+	const int local = coeff_index - RadialCoeffOffset();
+	const int block_size = RadialCoeffBlockSize();
+	return block_size > 0 && local >= 0
+	    && local < radial_func_count * block_size
+	    && local % block_size < p_RadialBasis->rb_size;
+}
+
 void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs) const
 {
 	active_coeff_indices.clear();
@@ -3186,7 +3235,8 @@ void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, boo
 		    && ((coeff_index >= scal_begin && coeff_index < scal_end)
 		        || (coeff_index >= gate_scal_begin && coeff_index < gate_scal_end)))
 			continue;
-		if (IsRedundantRadialSpeciesCoeff(coeff_index))
+		if (IsRedundantRadialSpeciesCoeff(coeff_index)
+		    || IsUnusedOuterRadialCoeff(coeff_index))
 			continue;
 		active_coeff_indices.push_back(coeff_index);
 	}
@@ -3302,6 +3352,26 @@ void MLMTPR::RandomizeRadialCoeffs(std::mt19937_64& generator, double radial_sca
 	const int radial_coeff_offset = RadialCoeffOffset();
 	const int block_size = RadialCoeffBlockSize();
 	const int rb_size = p_RadialBasis->rb_size;
+	if (OuterUsesPureRadialMatrix()) {
+		// The compatibility R table has no outer physical meaning in pure mode.
+		// Initialize the independent gate rows and the complete distance matrix,
+		// without changing that unused table or copying it into the gate.
+		const int gate_offset = TwoLayerGateRadialCoeffOffset();
+		const int gate_count = TwoLayerGateRadialCoeffCount();
+		if (!TwoLayerGateUsesSharedRadial() || gate_count != radial_func_count * rb_size
+		    || gate_offset + gate_count > static_cast<int>(regression_coeffs.size()))
+			ERROR("Pure-W random initialization requires an independent gate radial table");
+		two_layer_gate_radial_coeffs_.resize(gate_count);
+		for (int i = 0; i < gate_count; ++i) {
+			double value = radial_scale * uniform(generator);
+			if (i % rb_size == 0)
+				value = PositiveRadialFirstCoeff(value, kRadialFirstCoeffPositiveFloor);
+			two_layer_gate_radial_coeffs_[i] = value;
+			regression_coeffs[gate_offset + i] = value;
+		}
+		RandomizeTwoLayerGateRadialMixingCoeffs(generator, radial_scale);
+		return;
+	}
 
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const int block_offset = radial_coeff_offset + mu * block_size;
@@ -3678,6 +3748,8 @@ void MLMTPR::Load(const string& filename)
 			outer_k_rank1_enabled_ = false;
 			outer_k_rank_ = 0;
 			outer_k_rank1_direct_radial_ = false;
+			outer_channel_mode_ = "cross-channel";
+			outer_radial_mode_ = "legacy-plus-mixer";
 			outer_k_rank1_basic_begin_ = 0;
 		outer_k_rank1_basic_count_ = 0;
 		outer_k_rank1_product_begin_ = 0;
@@ -3722,6 +3794,7 @@ void MLMTPR::Load(const string& filename)
 						two_layer_gate_body_mix_weights_.clear();
 						two_layer_gate_radial_mixing_ = "none";
 						two_layer_gate_radial_mixing_coeffs_.clear();
+						two_layer_gate_radial_mixing_active_eval_ = false;
 						two_layer_gate_readout_enabled_ = false;
 					two_layer_gate_readout_coeffs_.clear();
 				multi_layer_gate_enabled_ = false;
@@ -4335,8 +4408,31 @@ void MLMTPR::Load(const string& filename)
 			// explicit rank field.
 			outer_k_rank_ = 1;
 		}
-		if (outer_k_rank_ <= 0 || outer_k_rank_ > sh_k_max_)
-			ERROR("SUS2-SH outer K-rank should be in [1, sh_k_max]");
+		// The optional modes follow the explicit rank (or the legacy implicit
+		// rank-1 marker) and precede all primitive/weight metadata.
+		if (tmpstr == "outer_channel_mode") {
+			ifs.ignore(2);
+			ifs >> outer_channel_mode_;
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "outer_radial_mode") {
+			ifs.ignore(2);
+			ifs >> outer_radial_mode_;
+			ifs >> tmpstr;
+		}
+		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
+			ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
+		if (outer_radial_mode_ != "legacy-plus-mixer" && outer_radial_mode_ != "pure-matrix")
+			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer or pure-matrix");
+		if ((outer_channel_mode_ == "same-channel")
+		    != (outer_radial_mode_ == "pure-matrix"))
+			ERROR("SUS2-SH pure-matrix and same-channel outer modes must be selected together");
+		if (outer_k_rank_ <= 0
+		    || (!OuterUsesPureRadialMatrix() && outer_k_rank_ > sh_k_max_))
+			ERROR("SUS2-SH outer K-rank must be positive; only pure-matrix mode allows rank above sh_k_max");
+		if (outer_k_rank_ > std::numeric_limits<int>::max()
+			/ ((sh_l_max_ + 1) * (sh_l_max_ + 1)))
+			ERROR("SUS2-SH outer primitive count exceeds supported index range");
 		if (tmpstr != "outer_k_rank1_basic_begin")
 			ERROR("SUS2-SH outer K-rank metadata is missing outer_k_rank1_basic_begin");
 		ifs.ignore(2);
@@ -4367,6 +4463,11 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr != "outer_k_rank1_weights")
 			ERROR("SUS2-SH outer K-rank1 metadata is missing outer_k_rank1_weights");
 		ReadDoubleList(ifs, outer_k_rank1_weights_, outer_weight_count);
+		if (OuterUsesPureRadialMatrix()) {
+			char closing_brace = '\0';
+			if (!(ifs >> closing_brace) || closing_brace != '}')
+				ERROR("SUS2-SH pure-matrix outer weights must be an empty list");
+		}
 		ifs.ignore(1000, '\n');
 		ifs >> tmpstr;
 
@@ -4375,8 +4476,9 @@ void MLMTPR::Load(const string& filename)
 		if (outer_k_rank1_basic_count_ != expected_basic_count)
 			ERROR("SUS2-SH outer K-rank contracted primitive count is inconsistent");
 		if (outer_k_rank1_basic_begin_ < alpha_index_basic_count
-		    || outer_k_rank1_basic_begin_ + outer_k_rank1_basic_count_
-		       > alpha_moments_count)
+		    || outer_k_rank1_basic_begin_ > alpha_moments_count
+		    || outer_k_rank1_basic_count_
+		       > alpha_moments_count - outer_k_rank1_basic_begin_)
 			ERROR("SUS2-SH outer K-rank1 contracted primitive range is invalid");
 		if (outer_k_rank1_product_begin_ < 0
 		    || outer_k_rank1_product_begin_ > static_cast<int>(sh_products_.size()))
@@ -4437,9 +4539,9 @@ void MLMTPR::Load(const string& filename)
 		if (two_layer_gate_k_rank_basic_count_ != expected_gate_basic_count)
 			ERROR("SUS2-SH gate K-rank primitive count is inconsistent");
 		if (two_layer_gate_k_rank_basic_begin_ != alpha_index_basic_count
-		    || two_layer_gate_k_rank_basic_begin_
-		          + two_layer_gate_k_rank_basic_count_
-		       > outer_k_rank1_basic_begin_)
+		    || two_layer_gate_k_rank_basic_begin_ > outer_k_rank1_basic_begin_
+		    || two_layer_gate_k_rank_basic_count_
+		       > outer_k_rank1_basic_begin_ - two_layer_gate_k_rank_basic_begin_)
 			ERROR("SUS2-SH gate K-rank primitive range is invalid");
 		if (two_layer_gate_k_rank_product_begin_ != 0
 		    || two_layer_gate_k_rank_product_begin_
@@ -4894,7 +4996,8 @@ void MLMTPR::Load(const string& filename)
 		}
 			if (two_layer_gate_include_one_body_)
 				ERROR("SUS2-SH two-layer gate currently requires two_layer_gate_include_one_body = false");
-				if (two_layer_gate_body_order_max_ < 2 || two_layer_gate_body_order_max_ > sh_body_order_)
+				if (two_layer_gate_body_order_max_ < 2
+				    || two_layer_gate_body_order_max_ > (OuterUsesPureRadialMatrix() ? 6 : sh_body_order_))
 					ERROR("SUS2-SH mu-body-order gate body order is out of range");
 				BuildTwoLayerGateBodyOrderBuckets();
 			if (outer_k_rank1_enabled_) {
@@ -5095,7 +5198,8 @@ void MLMTPR::Load(const string& filename)
 		}
 		}
 
-		if (OuterKRankEnabled() && outer_k_rank_ == 1) {
+			ValidateOuterModeConfiguration();
+			if (OuterKRankEnabled() && outer_k_rank_ == 1 && !OuterUsesPureRadialMatrix()) {
 			// A rank-1 K contraction has no independent matrix degree of
 			// freedom: W(l,k) multiplies exactly one freely trainable radial
 			// row c(k,l,:).  Canonicalize legacy files to
@@ -5375,6 +5479,8 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 {
 	if (!is_sh_potential_)
 		ERROR("calc-eij currently supports SUS2-SH models only");
+	if (OuterUsesPureRadialMatrix())
+		ERROR("calc-eij does not yet support pure distance-matrix models; use calc-efs for their physical energies and forces");
 	if (!has_sh_scalar_info_)
 		ERROR("calc-eij requires sh_scalar_info metadata; initialize or rewrite the model with --write-sh-scalar-info");
 	if (TwoLayerResidualEnabled())
@@ -5551,6 +5657,10 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::Save(const string& filename)
 {
+	if (OuterUsesPureRadialMatrix()) {
+		ValidateOuterModeConfiguration();
+		ValidateSHProductGraphDefinitions();
+	}
 	ofstream ofs(filename);
 	if (!ofs.is_open())
 		ERROR("MLMTPR::Save(): Cannot open file \"" + filename + "\"");
@@ -5719,7 +5829,8 @@ void MLMTPR::Save(const string& filename)
 		ofs << "}\n";
 	}
 	if (is_sh_potential_ && OuterKRankEnabled()) {
-		if (outer_k_rank_ > sh_k_max_)
+		ValidateOuterModeConfiguration();
+		if (outer_k_rank_ > sh_k_max_ && !OuterUsesPureRadialMatrix())
 			ERROR("SUS2-SH outer K-rank exceeds sh_k_max");
 		if (outer_k_rank1_basic_count_
 		    != outer_k_rank_ * (sh_l_max_ + 1) * (sh_l_max_ + 1))
@@ -5730,18 +5841,22 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
+		if (OuterUsesPureRadialMatrix()) {
+			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+			ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
+		}
 		ofs << "outer_k_rank1_basic_begin = " << outer_k_rank1_basic_begin_ << '\n';
 		ofs << "outer_k_rank1_basic_count = " << outer_k_rank1_basic_count_ << '\n';
 		ofs << "outer_k_rank1_product_begin = " << outer_k_rank1_product_begin_ << '\n';
 		// Keep a fixed all-ones compatibility shell in rank-1 files so older
 		// experimental readers can still load them. These are not runtime or
 		// optimizer parameters in the direct-radial representation.
-		const int serialized_outer_weight_count =
-			outer_k_rank_ * (sh_l_max_ + 1) * sh_k_max_;
+		const int serialized_outer_weight_count = OuterUsesPureRadialMatrix()
+			? 0 : outer_k_rank_ * (sh_l_max_ + 1) * sh_k_max_;
 		ofs << "outer_k_rank1_weight_count = "
 		    << serialized_outer_weight_count << '\n';
 		ofs << "outer_k_rank1_weights = {";
-		for (int l = 0; l <= sh_l_max_; ++l) {
+		for (int l = 0; serialized_outer_weight_count > 0 && l <= sh_l_max_; ++l) {
 			for (int channel = 0; channel < outer_k_rank_; ++channel) {
 				for (int k = 0; k < sh_k_max_; ++k) {
 					if (l != 0 || channel != 0 || k != 0)
@@ -10605,6 +10720,39 @@ void MLMTPR::ValidateSHProductGraphDefinitions() const
 		if (OuterKRankEnabled() && moment < outer_k_rank1_basic_begin_)
 			ERROR("SUS2-SH outer K-rank alpha_moment_mapping references the gate graph");
 	}
+	if (OuterUsesSameChannelGraph()) {
+		// Bind each outer primitive to its physical output channel, then
+		// propagate that label through the actual DAG. Metadata alone must not
+		// silently permit a cross-channel product in a channelwise model.
+		std::vector<int> channel_by_moment(alpha_moments_count, -1);
+		for (int channel = 0; channel < outer_k_rank_; ++channel)
+			for (int l = 0; l <= sh_l_max_; ++l)
+				for (int m = -l; m <= l; ++m) {
+					const int node = OuterKRank1OuterBasicIndex(channel, l, m);
+					if (node < 0 || node >= alpha_moments_count)
+						ERROR("SUS2-SH channelwise outer primitive index is out of range");
+					channel_by_moment[node] = channel;
+				}
+		for (int p = outer_k_rank1_product_begin_; p < static_cast<int>(sh_products_.size()); ++p) {
+			const SHProduct& product = sh_products_[p];
+			const int channel = channel_by_moment[product.left];
+			if (channel < 0 || channel_by_moment[product.right] != channel
+			    || (channel_by_moment[product.target] >= 0
+			        && channel_by_moment[product.target] != channel))
+				ERROR("SUS2-SH same-channel outer graph contains a cross-channel product");
+			channel_by_moment[product.target] = channel;
+		}
+		std::vector<int> scalar_counts(outer_k_rank_, 0);
+		for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
+			const int channel = channel_by_moment[alpha_moment_mapping[scalar]];
+			if (channel < 0)
+				ERROR("SUS2-SH same-channel outer scalar has no output-channel label");
+			++scalar_counts[channel];
+		}
+		for (int count : scalar_counts)
+			if (count <= 0 || count != scalar_counts.front())
+				ERROR("SUS2-SH same-channel outer requires the same scalar count in every channel");
+	}
 }
 
 void MLMTPR::ResizeLinearComponentStorage()
@@ -11323,7 +11471,7 @@ void MLMTPR::PrepareEvalCaches()
 	LinCoeff();
 	two_layer_gate_radial_mixing_active_eval_ =
 		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
 }
 
 void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
@@ -11967,6 +12115,73 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 	const double cutoff = p_RadialBasis->max_dist;
 	if (!(cutoff > 0.0))
 		ERROR("Radial smoothness penalty requires a positive cutoff");
+	if (OuterUsesPureRadialMatrix()) {
+		// This model regularizes the actual distance matrix, not the retired
+		// outer R table and not weight-normalization chart coordinates:
+		// lambda / ((L+1)*O*K*C*C) * sum(l,o,k,p,q) int_0^cutoff |W'_lok|^2 dr.
+		// The grid is the same midpoint quadrature as in the legacy objective.
+		// Averaging over O keeps the penalty strength independent of width.
+		// Type/gate multipliers already belong to x and are not part of W.
+		// No gate-radial penalty is added: legacy gate scalar/full L2 stays
+		// in AddScalarWeightL2Penalty, exactly as before.
+		const int matrix_rows = TwoLayerGateRadialMixingCoeffCount() / R;
+		if (matrix_rows <= 0)
+			ERROR("Pure distance-matrix smoothness requires nonempty W rows");
+		const double matrix_weight = coeff * cutoff
+			/ (static_cast<double>(grid_size) * matrix_rows
+			   * static_cast<double>(C) * C);
+		for (int type_central = 0; type_central < C; ++type_central) {
+			for (int type_outer = 0; type_outer < C; ++type_outer) {
+				for (int q = 0; q < grid_size; ++q) {
+					const double r = cutoff * (static_cast<double>(q) + 0.5)
+						/ static_cast<double>(grid_size);
+					for (int l = 0; l <= sh_l_max_; ++l) {
+						for (int k = 0; k < sh_k_max_; ++k) {
+							const int mu = k * (sh_l_max_ + 1) + l;
+							const int scaling_block = mu_to_K[mu];
+							const int slope_offset = ScalingSlopeOffset(
+								scaling_block, type_central, type_outer);
+							const int shift_offset = ScalingShiftOffset(
+								scaling_block, type_central, type_outer);
+							p_RadialBasis->RB_Calc(r,
+								regression_coeffs[slope_offset],
+								regression_coeffs[shift_offset], RadialBasisKForMu(mu));
+							// All O entries share the basis/scaling of this input
+							// (k,l). Evaluate it once, accumulate every output's
+							// chain-rule contribution to the shared scal/s slots.
+							for (int o = 0; o < outer_k_rank_; ++o) {
+								const int row_begin =
+									TwoLayerGateRadialMixingCoeffIndex(l, o, k, 0);
+								double w_der = 0.0;
+								double w_der_slope = 0.0;
+								double w_der_shift = 0.0;
+								for (int b = 0; b < R; ++b) {
+									const double c = regression_coeffs[row_begin + b] * scaling;
+									w_der += c * p_RadialBasis->rb_ders[b];
+									if (out_penalty_grad_accumulator != nullptr) {
+										w_der_slope += c * p_RadialBasis->rb_ders[2 * R + b];
+										w_der_shift += c * p_RadialBasis->rb_ders[4 * R + b];
+									}
+								}
+								out_penalty_accumulator += matrix_weight * w_der * w_der;
+								if (out_penalty_grad_accumulator == nullptr)
+									continue;
+								const double common_grad = 2.0 * matrix_weight * w_der;
+								for (int b = 0; b < R; ++b)
+									(*out_penalty_grad_accumulator)[row_begin + b] +=
+										common_grad * p_RadialBasis->rb_ders[b] * scaling;
+								(*out_penalty_grad_accumulator)[slope_offset] +=
+									common_grad * w_der_slope;
+								(*out_penalty_grad_accumulator)[shift_offset] +=
+									common_grad * w_der_shift;
+							}
+						}
+					}
+				}
+			}
+		}
+		return;
+	}
 	const double weight = coeff * cutoff
 	                    / (static_cast<double>(grid_size)
 	                       * static_cast<double>(radial_func_count)
@@ -12172,6 +12387,11 @@ void MLMTPR::AddPenaltyGrad(const double coeff,													// Must calculate ad
 							double& out_penalty_accumulator,
 							Array1D* out_penalty_grad_accumulator)
 {
+	if (OuterUsesPureRadialMatrix()) {
+		if (coeff != 0.0)
+			ERROR("SUS2-SH pure-matrix outer does not support the legacy radial norm/orthogonality penalty; set its weight to zero and use physical radial-matrix smoothness");
+		return;
+	}
 	const int C = species_count;
 	const int K = radial_func_count;
 	const int R = p_RadialBasis->rb_size;
@@ -12225,6 +12445,10 @@ void MLMTPR::AddPenaltyGrad(const double coeff,													// Must calculate ad
 
 void MLMTPR::Orthogonalize()
 {
+	// This legacy operation changes only the obsolete factorized outer R
+	// rows. Pure W and the independent gate radial block are physical values.
+	if (OuterUsesPureRadialMatrix())
+		return;
 	const int C = species_count;
 	const int K = radial_func_count;
 	const int R = p_RadialBasis->rb_size;

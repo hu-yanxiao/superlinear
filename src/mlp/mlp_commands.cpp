@@ -71,6 +71,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 						"two-layer-gate-readout",
 						"outer-k-rank",
 						"outer-k-rank1",
+						"superlinear-mode",
 						"two-layer-gate-k-rank",
 						"multi-layer-gate",
 						"second-layer-gate-body-order",
@@ -569,7 +570,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"    --stress-weight=<double>: weight of stresses in the fitting. Default=0.001\n"
 		"    --init-random-seed=<uint64>: deterministic seed for a fresh random initialization.\n"
 		"    --two-layer-gate-radial-mixing-init-scale=<double>: initialize only the\n"
-		"        superlinear radial-mixing block uniformly in [-scale,scale]. Default=0\n"
+		"        distance-matrix block uniformly in [-scale,scale] with --init-params=random.\n"
+		"        Legacy default=0; pure-W default=0.005 (explicit 0 is supported).\n"
 		"    --scale-by-force=<double>: Default=0. If >0 then configurations near equilibrium\n"
 		"                               (with roughtly force < <double>) get more weight. \n"
 		"    --valid-cfgs=<string>: filename with configuration to validate\n"
@@ -641,9 +643,9 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"        inner=0 and outer_ij=min(zbl_outer, factor*(Rcov_i+Rcov_j)).\n"
 			"    --weighting=<string>: how to weight configuration wtih different sizes\n"
 		"        relative to each other. Default=vibrations. Other=molecules, structures.\n"
-		"    --init-params=<string>: how to initialize parameters if a potential was not\n"
-		"        pre-fitted. Default is random. Other is same - this is when interaction\n"
-		"        of all species is the same (more accurate fit, but longer optimization)\n"
+		"    --init-params=same|random: nonlinear parameter initialization. Default=same:\n"
+		"        retain supplied model parameters, not equal parameters across species/channels.\n"
+		"        random explicitly randomizes nonlinear coefficients of incomplete models.\n"
 		"    --do-lin: enable linear pre-fitting path inside nonlinear training.\n"
 		"    --two-layer-gate-readout-linear-init: before BFGS, freeze the trained model\n"
 		"        and solve only the gate-readout coefficients against the E/F/stress residual.\n"
@@ -673,13 +675,19 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"    --radial-cutoff-p=<int>: smooth-polynomial cutoff exponent in [1,64]. Default=5\n"
 					"    --scaling-map=K|L|LK: share scal/s by radial k, share by angular l, or keep one block per (k,l). Default=LK\n"
 					"    --sh-factor-pruning=same-k|legacy|q-total: outer scalar graph. Default=q-total\n"
+					"    --superlinear-mode=legacy|pure-w-channelwise: new-model architecture. Default=legacy.\n"
+					"        pure-w-channelwise uses full W_l(K x O), no P*R branch, O positive and possibly >K;\n"
+					"        one K=1 angular graph is bound to O same-channel copies. Requires --outer-k-rank=O.\n"
+					"        Enables two-layer gate/full mixing; gate rank defaults to K, gate pruning=q-total,\n"
+					"        outer pruning=same-k, gate body-order independent in [2,6]. W is deterministic/nonzero.\n"
+					"        Input k/lk scaling is shared across O; resume requires architecture match.\n"
 					"    --two-layer-gate: initialize the first SUS2-SH mu gate.\n"
 					"    --two-layer-gate-body-order=<int>: gate1 scalar body-order cutoff. Default=--body-order\n"
 					"    --two-layer-gate-factor-pruning=same-k|legacy|q-total: gate1 scalar subgraph. Default=outer\n"
 					"    --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full: gate scalar parameterization. Default=mu-body-linear-combo\n"
 					"    --two-layer-gate-site-mode=neighbor: gate on neighbor j only. Default=neighbor\n"
 					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
-					"    --two-layer-gate-radial-mixing=full: add a per-l distance-dependent full matrix from gate-rank channels to outer-rank channels. Default=off\n"
+					"    --two-layer-gate-radial-mixing=full: per-l distance matrix directly from K gate-scalar channels to O outer channels. Legacy default=off\n"
 					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
 					"    --two-layer-gate-readout: add a linear energy readout from the gate scalar basis. Default=off\n"
 					"    --outer-k-rank=<R>: use a q-total K=R outer graph; R=1 contracts directly into the radial rows, R>=2 learns R independent K contractions per l, and 0/default disables it.\n"

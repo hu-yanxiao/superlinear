@@ -1,5 +1,13 @@
 # SUS2-SH
 
+This superlinear development branch, `codex/pure-w-channelwise`, adds a
+complete distance matrix `W_l(r): K -> O` with independent outer channels.
+Use `--superlinear-mode=pure-w-channelwise` explicitly; legacy models keep
+their existing interpretation. Training defaults to `--init-params=same`.
+See [the mathematical contract and validation commands](docs/PURE_W_CHANNELWISE_DESIGN.md).
+The new format is implemented in this CPU/reference branch; compatibility
+with separate GPU/GPUMD/LAMMPS backends is not claimed.
+
 SUS2-SH is the spherical-harmonic line of SUS2. It keeps the original C++
 SUS2 training flow, BFGS optimizer, CFG/MTP file conventions, and model I/O,
 while replacing moment-tensor angular channels with real spherical harmonics.

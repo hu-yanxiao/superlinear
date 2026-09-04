@@ -545,6 +545,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 							"two-layer-gate-readout",
 							"outer-k-rank",
 							"outer-k-rank1",
+							"superlinear-mode",
 							"two-layer-gate-k-rank",
 						"multi-layer-gate",
 							"second-layer-gate-body-order",
@@ -2168,12 +2169,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--atomic-energy-weight should be a finite non-negative value");
 
 	if (opts["init-params"] == "")
-		opts["init-params"] = "random";
+		opts["init-params"] = "same";
 	if (opts["init-params"] != "random" && opts["init-params"] != "same")
 		ERROR("--init-params should be 'random' or 'same'");
 	const OptionalRandomSeed init_random_seed = ParseOptionalRandomSeed(opts);
 	double radial_mixing_init_scale = 0.0;
-	if (opts["two-layer-gate-radial-mixing-init-scale"] != "")
+	const bool custom_radial_mixing_init_scale =
+		opts["two-layer-gate-radial-mixing-init-scale"] != "";
+	if (custom_radial_mixing_init_scale)
 		radial_mixing_init_scale = ParseStrictDoubleOption(
 			opts["two-layer-gate-radial-mixing-init-scale"],
 			"--two-layer-gate-radial-mixing-init-scale");
@@ -2261,6 +2264,24 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ParseOptionalNonnegativeInteger(opts, "outer-k-rank");
 	const int requested_two_layer_gate_k_rank =
 		ParseOptionalNonnegativeInteger(opts, "two-layer-gate-k-rank");
+	const std::string requested_superlinear_mode = opts["superlinear-mode"];
+	if (!requested_superlinear_mode.empty()
+	    && requested_superlinear_mode != "legacy"
+	    && requested_superlinear_mode != "pure-w-channelwise")
+		ERROR("--superlinear-mode should be legacy or pure-w-channelwise");
+	if (!requested_superlinear_mode.empty()
+	    && ((requested_superlinear_mode == "pure-w-channelwise")
+	        != (mtpr.OuterUsesPureRadialMatrix() && mtpr.OuterUsesSameChannelGraph())))
+		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
+	if (mtpr.OuterUsesPureRadialMatrix()) {
+		if (!opts["sh-factor-pruning"].empty() && opts["sh-factor-pruning"] != "same-k")
+			ERROR("--sh-factor-pruning must be same-k for the loaded pure-W channelwise model; the graph is not changed during resume");
+		const auto gate_body_it = opts.find("two-layer-gate-body-order");
+		if (gate_body_it != opts.end() && !gate_body_it->second.empty()
+		    && ParseOptionalNonnegativeInteger(opts, "two-layer-gate-body-order")
+		        != mtpr.TwoLayerGateBodyOrderCount() + 1)
+			ERROR("--two-layer-gate-body-order must match the loaded pure-W gate graph; changing it requires init-sh/inline initialization");
+	}
 	bool plain_to_gate_upgrade = false;
 	bool edge_l1_gate_upgrade = false;
 	bool multi_layer_gate_upgrade = false;
@@ -2558,7 +2579,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("Atomic model save failed during " + context + ": " + save_error);
 	};
 
-	MTPR_trainer trainer(&mtpr, weight_energy, weight_force, weight_stress, scale_by_force, 1e-9, curr_fnm, 0);
+	const double legacy_radial_penalty = mtpr.OuterUsesPureRadialMatrix() ? 0.0 : 1e-9;
+	MTPR_trainer trainer(&mtpr, weight_energy, weight_force, weight_stress,
+	                    scale_by_force, legacy_radial_penalty, curr_fnm, 0);
+	if (prank == 0 && mtpr.OuterUsesPureRadialMatrix())
+		std::cout << "pure-w-channelwise: legacy outer radial norm/orthogonality penalty disabled; "
+		          << "distance-matrix smoothness regularizes physical W(r)." << std::endl;
 	//LOSS FUNCTIONAL MODIFICATION!!!
 	trainer.weighting = weighting;
         trainer.do_lin=do_lin;
@@ -2966,13 +2992,19 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "Random initialization of nonlinear coefficients"
 			          << " seed=" << seed << std::endl;
 			mtpr.RandomizeNonlinearCoeffs(generator, 5e-3, true, 0.12);
-			if (radial_mixing_init_scale > 0.0) {
+			if (radial_mixing_init_scale > 0.0
+			    || (mtpr.OuterUsesPureRadialMatrix() && custom_radial_mixing_init_scale)) {
 				if (!mtpr.TwoLayerGateRadialMixingEnabled())
 					ERROR("--two-layer-gate-radial-mixing-init-scale requires "
 					      "--two-layer-gate-radial-mixing=full");
 				mtpr.RandomizeTwoLayerGateRadialMixingCoeffs(
 					generator, radial_mixing_init_scale);
 			}
+			if (mtpr.OuterUsesPureRadialMatrix())
+				std::cout << "Pure-W random initialization: independent gate rows and physical W; "
+				          << "unused R unchanged, W scale="
+				          << (custom_radial_mixing_init_scale ? radial_mixing_init_scale : 5e-3)
+				          << std::endl;
 		}
     //     if (prank == 0) {std::cout << mtpr.regression_coeffs[mtpr.radial_func_count*( mtpr.Get_RB_size() + mtpr.species_count)-4] << std::endl;}
 #ifdef MLIP_MPI
@@ -2997,6 +3029,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "[" << CurrentTimestamp() << "] "
 			          << "Deterministic fresh initialized model saved to "
 			          << trained_fnm << std::endl;
+	}
+	if (maxits == 0 && opts["init-params"] == "same"
+	    && mtpr.OuterUsesPureRadialMatrix()) {
+		// Initialization-only pure-W runs export the supplied physical seed,
+		// before shift, linear warmup, rescaling or optimizer setup can change it.
+		save_model_atomically_collective(trained_fnm, "pure-W same initial model");
+		if (prank == 0)
+			std::cout << "[" << CurrentTimestamp() << "] "
+			          << "Pure-W same initial snapshot saved to " << trained_fnm
+			          << " (no parameter reset or linear solve)" << std::endl;
 	}
 	trainer.shift(do_shift);
 	if (two_layer_gate_readout_linear_init) {

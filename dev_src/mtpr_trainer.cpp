@@ -1198,7 +1198,9 @@ void MTPR_trainer::TrainLinear(int prank,
 	    && context == "bfgs refresh step 1") {
 		int injected = 0;
 		if (mpi_rank != 0) {
-			const int coeff_index = p_mlmtpr->RadialCoeffOffset();
+			const int coeff_index = p_mlmtpr->OuterUsesPureRadialMatrix()
+				? p_mlmtpr->TwoLayerGateRadialMixingCoeffOffset()
+				: p_mlmtpr->RadialCoeffOffset();
 			p_mlmtpr->Coeff()[coeff_index] = std::nextafter(
 				p_mlmtpr->Coeff()[coeff_index],
 				std::numeric_limits<double>::infinity());
@@ -1244,11 +1246,18 @@ void MTPR_trainer::TrainLinear(int prank,
 	std::vector<double> preserved_radial_values;
 	if (radial_parameterization == "weight-norm") {
 		const int row_size = p_mlmtpr->p_RadialBasis->rb_size;
-		const int outer_begin = p_mlmtpr->RadialCoeffOffset();
-		const int outer_stride = p_mlmtpr->RadialCoeffBlockSize();
+		const bool pure_matrix = p_mlmtpr->OuterUsesPureRadialMatrix();
+		const int outer_begin = pure_matrix
+			? p_mlmtpr->TwoLayerGateRadialMixingCoeffOffset()
+			: p_mlmtpr->RadialCoeffOffset();
+		const int outer_stride = pure_matrix
+			? row_size : p_mlmtpr->RadialCoeffBlockSize();
+		const int outer_rows = pure_matrix
+			? p_mlmtpr->TwoLayerGateRadialMixingCoeffCount() / row_size
+			: p_mlmtpr->radial_func_count;
 		preserved_radial_indices.reserve(
-			2 * p_mlmtpr->radial_func_count * row_size);
-		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+			(outer_rows + p_mlmtpr->radial_func_count) * row_size);
+		for (int mu = 0; mu < outer_rows; ++mu)
 			for (int xi = 0; xi < row_size; ++xi)
 				preserved_radial_indices.push_back(
 					outer_begin + mu * outer_stride + xi);
@@ -1924,10 +1933,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				max_abs = std::max(max_abs, std::abs(value));
 			}
 			if (max_abs == 0.0) {
-				if (!is_gate1 && !p_mlmtpr->OuterKRankUsesDirectRadial())
+				if (!is_gate1 && !p_mlmtpr->OuterKRankUsesDirectRadial()
+				    && !p_mlmtpr->OuterUsesPureRadialMatrix())
 					ERROR("MTPR_trainer::Train(): cannot select a nonzero radial weight-normalization pivot.");
 				// The norm/log-direction chart is undefined at the origin.  This
-				// occurs legitimately when a legacy rank-1 W(l,k)=0 is absorbed.
+				// occurs legitimately for a zero pure-W row or when a legacy
+				// rank-1 W(l,k)=0 is absorbed.
 				// Leave the complete row in ordinary physical coordinates so BFGS
 				// can move it away from zero without injecting an arbitrary epsilon.
 				if (is_gate1)
@@ -1982,11 +1993,23 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				++outer_radial_weight_norm_row_count;
 		};
 
-		const int radial_begin = p_mlmtpr->RadialCoeffOffset();
-		const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
-		for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
-			add_radial_weight_norm_row(
-				radial_begin + mu * radial_stride, false, mu);
+		if (p_mlmtpr->OuterUsesPureRadialMatrix()) {
+			// Physical W rows are contiguous in the internal (l,o,k,b)
+			// layout.  The mathematical matrix is K x O; each b-vector gets
+			// its own chart.  Obsolete outer R rows are deliberately skipped.
+			const int matrix_begin = p_mlmtpr->TwoLayerGateRadialMixingCoeffOffset();
+			const int matrix_rows = p_mlmtpr->TwoLayerGateRadialMixingCoeffCount()
+				/ radial_weight_norm_row_size;
+			for (int row = 0; row < matrix_rows; ++row)
+				add_radial_weight_norm_row(
+					matrix_begin + row * radial_weight_norm_row_size, false, row);
+		} else {
+			const int radial_begin = p_mlmtpr->RadialCoeffOffset();
+			const int radial_stride = p_mlmtpr->RadialCoeffBlockSize();
+			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+				add_radial_weight_norm_row(
+					radial_begin + mu * radial_stride, false, mu);
+		}
 
 		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
 			const int gate1_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
@@ -3119,6 +3142,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	if (prank == 0 && use_radial_weight_norm) {
 		std::cout << "[" << CurrentTimestamp() << "] "
 		          << "outer radial weight-normalization coordinates enabled"
+		          << " outer_target="
+		          << (p_mlmtpr->OuterUsesPureRadialMatrix() ? "pure-W" : "radial-R")
 		          << " outer_rows=" << outer_radial_weight_norm_row_count
 		          << " gate1_rows=" << gate1_radial_weight_norm_row_count
 		          << " outer_zero_fallback_rows="

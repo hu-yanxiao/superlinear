@@ -375,31 +375,44 @@ public:
 		MLMTPR* mtpr = dynamic_cast<MLMTPR*>(p_mlip);
 		if (mtpr == nullptr)
 			ERROR("Radial weight-normalization gradient check requires MLMTPR.");
-		if (mu < 0 || mu >= mtpr->radial_func_count)
+		const int row_size = mtpr->p_RadialBasis->rb_size;
+		const bool pure_matrix = !gate1 && mtpr->OuterUsesPureRadialMatrix();
+		const int row_count = pure_matrix
+			? mtpr->TwoLayerGateRadialMixingCoeffCount() / row_size
+			: mtpr->radial_func_count;
+		if (mu < 0 || mu >= row_count)
 			ERROR("--mu is outside the radial row range.");
 		if (gate1 && !mtpr->TwoLayerGateUsesSharedRadial())
 			ERROR("Gate1 radial weight-normalization gradient check requires an independent gate1 radial table.");
-		const int row_size = mtpr->p_RadialBasis->rb_size;
 		const int row_begin = gate1
 			? mtpr->TwoLayerGateRadialCoeffOffset() + mu * row_size
-			: mtpr->RadialCoeffOffset() + mu * mtpr->RadialCoeffBlockSize();
+			: (pure_matrix
+				? mtpr->TwoLayerGateRadialMixingCoeffOffset() + mu * row_size
+				: mtpr->RadialCoeffOffset() + mu * mtpr->RadialCoeffBlockSize());
 		std::vector<double> original(row_size, 0.0);
 		std::copy(mtpr->Coeff() + row_begin,
 		          mtpr->Coeff() + row_begin + row_size,
 		          original.begin());
 		int pivot = 0;
 		double pivot_sign = 1.0;
-		if (!sus2::RadialWeightNormChart::SelectSignedPivot(
+		const bool zero_physical_fallback =
+			(gate1 || pure_matrix || mtpr->OuterKRankUsesDirectRadial())
+			&& std::all_of(original.begin(), original.end(),
+				[](double value) { return value == 0.0; });
+		if (!zero_physical_fallback && !sus2::RadialWeightNormChart::SelectSignedPivot(
 		        original.data(), row_size, pivot, pivot_sign))
 			ERROR("Cannot select a pivot for the radial weight-normalization row.");
 		std::vector<double> coordinates(row_size, 0.0);
-		if (!sus2::RadialWeightNormChart::PackWithPivot(
+		if (!zero_physical_fallback && !sus2::RadialWeightNormChart::PackWithPivot(
 		        original.data(), row_size, pivot, pivot_sign, coordinates.data()))
 			ERROR("Cannot pack the selected radial row into weight-normalization coordinates.");
 
 		CalcObjectiveFunctionGrad(configs);
 		std::vector<double> coordinate_gradient(row_size, 0.0);
-		if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
+		if (zero_physical_fallback)
+			std::copy(&loss_grad_[row_begin], &loss_grad_[row_begin] + row_size,
+				coordinate_gradient.begin());
+		else if (!sus2::RadialWeightNormChart::PullbackGradientWithPivot(
 		        original.data(),
 		        coordinates.data(),
 		        &loss_grad_[row_begin],
@@ -415,7 +428,9 @@ public:
 		for (int coord = 0; coord < row_size; ++coord) {
 			trial_coordinates = coordinates;
 			trial_coordinates[coord] += displacement;
-			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+			if (zero_physical_fallback)
+				trial_physical = trial_coordinates;
+			else if (!sus2::RadialWeightNormChart::UnpackWithPivot(
 			        trial_coordinates.data(),
 			        row_size,
 			        pivot,
@@ -427,7 +442,9 @@ public:
 			const double loss_plus = ObjectiveFunction(configs);
 
 			trial_coordinates[coord] -= 2.0 * displacement;
-			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
+			if (zero_physical_fallback)
+				trial_physical = trial_coordinates;
+			else if (!sus2::RadialWeightNormChart::UnpackWithPivot(
 			        trial_coordinates.data(),
 			        row_size,
 			        pivot,
@@ -631,6 +648,7 @@ struct DevLinearComponentsFDResult {
 struct DevLinearReadoutResult {
 	int energy_components = 0;
 	int force_components = 0;
+	int stress_components = 0;
 	int worst_energy_config = -1;
 	int worst_force_config = -1;
 	int worst_force_atom = -1;
@@ -643,6 +661,10 @@ struct DevLinearReadoutResult {
 	double worst_force_rel_err = 0.0;
 	double worst_force_direct = 0.0;
 	double worst_force_linear = 0.0;
+	double worst_stress_abs_err = 0.0;
+	double worst_stress_rel_err = 0.0;
+	double worst_stress_direct = 0.0;
+	double worst_stress_linear = 0.0;
 };
 
 struct DevGateFastPathResult {
@@ -1319,7 +1341,8 @@ double LinearEquationCurrentCoeff(const MLMTPR& mtpr, int column)
 DevLinearReadoutResult CheckLinearReadout(
 	MLMTPR& mtpr,
 	const std::vector<Configuration>& configs,
-	int max_atoms)
+	int max_atoms,
+	bool check_stress)
 {
 	DevLinearReadoutResult result;
 	const int coeff_count = mtpr.LinearEquationCount();
@@ -1333,7 +1356,7 @@ DevLinearReadoutResult CheckLinearReadout(
 		mtpr.CalcEFS(direct, neighborhoods);
 
 		Configuration component_cfg = configs[cfg_index];
-		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, false);
+		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, check_stress);
 		double linear_energy = 0.0;
 		for (int k = 0; k < coeff_count; ++k)
 			linear_energy += mtpr.energy_cmpnts[k] * coeffs[k];
@@ -1346,6 +1369,19 @@ DevLinearReadoutResult CheckLinearReadout(
 		if (result.worst_energy_abs_err > old_energy_abs)
 			result.worst_energy_config = cfg_index;
 		++result.energy_components;
+		if (check_stress) {
+			for (int a = 0; a < 3; ++a) {
+				for (int b = 0; b < 3; ++b) {
+					double linear_stress = 0.0;
+					for (int k = 0; k < coeff_count; ++k)
+						linear_stress += mtpr.stress_cmpnts[k][a][b] * coeffs[k];
+					UpdateWorst(direct.stresses[a][b], linear_stress,
+						result.worst_stress_abs_err, result.worst_stress_rel_err,
+						result.worst_stress_direct, result.worst_stress_linear);
+					++result.stress_components;
+				}
+			}
+		}
 
 		const int atom_limit = max_atoms <= 0
 			? direct.size()
@@ -1780,7 +1816,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-radial-weight-norm-roundtrip-dev",
-		"checks outer and gate1 radial weight-normalization coordinate round trips",
+		"checks outer R (pure mode: W) and gate1 radial weight-normalization coordinate round trips",
 		"mlp-sus2 check-radial-weight-norm-roundtrip-dev model.mtp --abs-tolerance=1e-12 --rel-tolerance=1e-12\n"
 	) {
 		if (args.size() != 1) {
@@ -1804,7 +1840,17 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		int worst_xi = -1;
 		bool worst_is_gate1 = false;
 		bool tolerance_failed = false;
+		int zero_fallback_rows = 0;
 		auto check_row = [&](const double* physical, int mu, bool is_gate1) {
+			if ((is_gate1 || mtpr.OuterUsesPureRadialMatrix()
+			     || mtpr.OuterKRankUsesDirectRadial())
+			    && std::all_of(physical, physical + row_size,
+				[](double value) { return value == 0.0; })) {
+				// At zero the trainer keeps the original physical coordinates;
+				// their roundtrip is the identity, not an epsilon-seeded chart.
+				++zero_fallback_rows;
+				return;
+			}
 			int pivot = 0;
 			double pivot_sign = 1.0;
 			if (!sus2::RadialWeightNormChart::SelectSignedPivot(
@@ -1840,9 +1886,14 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				}
 			}
 		};
-		for (int mu = 0; mu < mtpr.radial_func_count; ++mu) {
-			const int row_begin =
-				mtpr.RadialCoeffOffset() + mu * mtpr.RadialCoeffBlockSize();
+		const bool pure_matrix = mtpr.OuterUsesPureRadialMatrix();
+		const int outer_row_count = pure_matrix
+			? mtpr.TwoLayerGateRadialMixingCoeffCount() / row_size
+			: mtpr.radial_func_count;
+		for (int mu = 0; mu < outer_row_count; ++mu) {
+			const int row_begin = pure_matrix
+				? mtpr.TwoLayerGateRadialMixingCoeffOffset() + mu * row_size
+				: mtpr.RadialCoeffOffset() + mu * mtpr.RadialCoeffBlockSize();
 			check_row(mtpr.Coeff() + row_begin, mu, false);
 		}
 		int gate1_row_count = 0;
@@ -1854,8 +1905,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
-			          << "outer_rows=" << mtpr.radial_func_count
+			          << "outer_rows=" << outer_row_count
+			          << " outer_target=" << (pure_matrix ? "pure-W" : "radial-R")
 			          << " gate1_rows=" << gate1_row_count
+			          << " zero_fallback_rows=" << zero_fallback_rows
 			          << " row_size=" << row_size
 			          << " max_direction_radius=" << max_direction_radius
 			          << " worst_block=" << (worst_is_gate1 ? "gate1" : "outer")
@@ -1870,7 +1923,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-radial-weight-norm-gradient-dev",
-		"checks an outer or gate1 radial weight-normalization loss gradient",
+		"checks an outer R (pure mode: flattened l,o,k W row) or gate1 weight-normalization loss gradient",
 		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --radial-block=outer|gate1 --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
 	) {
 		if (args.size() != 2) {
@@ -1927,6 +1980,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "radial_block=" << radial_block
+			          << " outer_target="
+			          << (mtpr.OuterUsesPureRadialMatrix() ? "pure-W" : "radial-R")
 			          << " mu=" << mu
 			          << " checked_coords=" << result.checked_count
 			          << " base_loss=" << result.base_loss
@@ -2059,8 +2114,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 	} END_COMMAND;
 
 	BEGIN_COMMAND("check-linear-readout-dev",
-		"checks direct E/F prediction against the current linear component readout",
-		"mlp-sus2 check-linear-readout-dev model.mtp cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-8 --rel-tolerance=1e-8\n"
+		"checks direct E/F (optionally stress) against the current linear component readout",
+		"mlp-sus2 check-linear-readout-dev model.mtp cfg --max-configs=1 --max-atoms=1 --check-stress --abs-tolerance=1e-8 --rel-tolerance=1e-8\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-linear-readout-dev: model and cfg arguments are required\n";
@@ -2086,7 +2141,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double rel_tolerance = ParseDevDoubleOption(opts, "rel-tolerance", 1.0e-8);
 
 		const DevLinearReadoutResult result =
-			CheckLinearReadout(mtpr, configs, max_atoms);
+			CheckLinearReadout(mtpr, configs, max_atoms, opts["check-stress"] != "");
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "energy_components=" << result.energy_components
@@ -2104,6 +2159,11 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " force_linear=" << result.worst_force_linear
 			          << " force_abs_err=" << result.worst_force_abs_err
 			          << " force_rel_err=" << result.worst_force_rel_err
+			          << " stress_components=" << result.stress_components
+			          << " stress_direct=" << result.worst_stress_direct
+			          << " stress_linear=" << result.worst_stress_linear
+			          << " stress_abs_err=" << result.worst_stress_abs_err
+			          << " stress_rel_err=" << result.worst_stress_rel_err
 			          << std::endl;
 		}
 		const bool energy_failed =
@@ -2112,7 +2172,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const bool force_failed =
 			result.worst_force_abs_err > abs_tolerance
 			&& result.worst_force_rel_err > rel_tolerance;
-		if (energy_failed || force_failed)
+		const bool stress_failed =
+			result.worst_stress_abs_err > abs_tolerance
+			&& result.worst_stress_rel_err > rel_tolerance;
+		if (energy_failed || force_failed || stress_failed)
 			exit(1);
 	} END_COMMAND;
 
@@ -2411,6 +2474,12 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --scaling-map=K|L|LK (default=LK),\n"
+				"         --superlinear-mode=legacy|pure-w-channelwise (default=legacy),\n"
+				"           pure-w-channelwise: complete distance matrix W_l(K x O), no P*R residual, O may exceed K;\n"
+				"           one K=1 angular graph is bound to O independent channels; requires --outer-k-rank=O;\n"
+				"           enables full mixer/two-layer gate, gate rank defaults to K, gate pruning=q-total;\n"
+				"           outer pruning=same-k; input k (or lk) scaling is shared over all output o;\n"
+				"           deterministic nonzero W initialization; train defaults to --init-params=same (retain parameters).\n"
 				"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"

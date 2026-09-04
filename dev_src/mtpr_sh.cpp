@@ -1428,6 +1428,15 @@ void MLMTPR::ContractOuterKRank1Values(double* values) const
 {
 	if (!OuterKRankEnabled())
 		return;
+	if (OuterUsesPureRadialMatrix()) {
+		// The complete outer primitive is supplied by W(r), not P*diag(R).
+		// Clear this destination even for W=0; a zero pure matrix must never
+		// recover the legacy baseline or retain a prior evaluation's values.
+		std::fill(values + outer_k_rank1_basic_begin_,
+		          values + outer_k_rank1_basic_begin_ + outer_k_rank1_basic_count_,
+		          0.0);
+		return;
+	}
 	if (OuterKRankUsesDirectRadial()) {
 		for (int l = sh_l_max_; l >= 0; --l) {
 			for (int m = -l; m <= l; ++m) {
@@ -1458,6 +1467,14 @@ void MLMTPR::ContractOuterKRank1MomentDers(const Neighborhood& nbh)
 	if (!OuterKRankEnabled())
 		return;
 	ContractOuterKRank1Values(moment_vals);
+	if (OuterUsesPureRadialMatrix()) {
+		for (int node = outer_k_rank1_basic_begin_;
+		     node < outer_k_rank1_basic_begin_ + outer_k_rank1_basic_count_; ++node)
+			for (int j = 0; j < nbh.count; ++j)
+				for (int axis = 0; axis < 3; ++axis)
+					moment_ders(node, j, axis) = 0.0;
+		return;
+	}
 	if (OuterKRankUsesDirectRadial()) {
 		for (int l = sh_l_max_; l >= 0; --l) {
 			for (int m = -l; m <= l; ++m) {
@@ -1501,6 +1518,8 @@ void MLMTPR::BackpropOuterKRank1Adjoints(
 		return;
 	if (adjoints.size() < static_cast<size_t>(alpha_moments_count))
 		ERROR("SUS2-SH outer K-rank1 adjoint buffer is too small");
+	if (OuterUsesPureRadialMatrix())
+		return; // W's adjoint is handled directly by the distance-matrix path.
 	if (OuterKRankUsesDirectRadial()) {
 		for (int l = sh_l_max_; l >= 0; --l) {
 			for (int m = -l; m <= l; ++m) {
@@ -1986,7 +2005,7 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 	            < expected_sh_size * static_cast<size_t>(3)
 	        || two_layer_edge_mu_ders_cache_.size() < expected_mu_size))
 		return false;
-	if (HasNonzeroTwoLayerGateRadialMixingCoeffs()) {
+	if (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs()) {
 		const size_t expected_radial_val_size =
 			edge_count
 			* static_cast<size_t>(two_layer_edge_cache_eval_block_count_)
@@ -2126,7 +2145,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	// not repeat RB_CalcValsOnly for unchanged geometry.
 	const bool cache_radial_mixing_kernels =
 		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
 	const bool need_raw_radial_cache =
 		(need_derivatives && need_param_derivatives)
 		|| cache_radial_mixing_kernels;
@@ -2422,7 +2441,10 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					double dot_coord_s = 0.0;
 					double dot_ss = 0.0;
 					double dot_coord_ss = 0.0;
-					for (int xi = 0; xi < R; ++xi) {
+					// W contracts the raw basis directly. Keep the legacy cache
+					// slots zero, but do not contract unused outer R coefficients.
+					const int outer_basis_count = OuterUsesPureRadialMatrix() ? 0 : R;
+					for (int xi = 0; xi < outer_basis_count; ++xi) {
 						const double coeff = regression_coeffs[radial_offset + xi];
 						dot_val += coeff * rb_vals[radial_base + xi];
 						if (need_derivatives) {
@@ -3084,7 +3106,7 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 {
 	two_layer_gate_radial_mixing_active_eval_ =
 		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
@@ -3279,6 +3301,8 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 						sh_values_use,
 						radial_mixing_outer_delta.data(),
 						cached_mixing_kernels);
+				if (OuterUsesPureRadialMatrix())
+					continue;
 				if (use_basic_mu_groups) {
 					for (int mu = 0; mu < radial_func_count; ++mu) {
 						const double scaled_radial =
@@ -4282,7 +4306,7 @@ void MLMTPR::CalcSHMomentValuesWithGradientCacheRadialMixing(const Neighborhood&
 {
 	two_layer_gate_radial_mixing_active_eval_ =
 		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH does not use precomputed LAMMPS radial tables in training.");
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
@@ -4468,6 +4492,8 @@ void MLMTPR::CalcSHMomentValuesWithGradientCacheRadialMixing(const Neighborhood&
 						cached_sh_values,
 						radial_mixing_outer_delta.data(),
 						cached_mixing_kernels);
+				if (OuterUsesPureRadialMatrix())
+					continue;
 				double* gate_scaled_radial_by_mu =
 					two_layer_gate_scaled_mu_vals_buffer_.data();
 				for (int mu = 0; mu < radial_func_count; ++mu)
@@ -4508,6 +4534,9 @@ void MLMTPR::CalcSHMomentValuesWithGradientCacheRadialMixing(const Neighborhood&
 void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
+	const bool pure_matrix = OuterUsesPureRadialMatrix();
+	if (pure_matrix && use_lmp_table)
+		ERROR("Pure distance-matrix linear components require direct radial basis evaluation");
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
 
@@ -4594,7 +4623,7 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
 					}
 				}
-				for (int mu = 0; mu < radial_func_count; ++mu) {
+				for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 					const int radial_base = mu_to_radial_eval_block_[mu] * R;
 					const int radial_offset = radial_coeff_base + mu * (R + C);
 					double radial_value = 0.0;
@@ -4633,6 +4662,50 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 					gate_type_scale_by_mu =
 						two_layer_gate_type_scale_mu_buffer_.data();
 				}
+				if (pure_matrix) {
+					// Partial coordinate derivative at fixed gate scalars x.
+					// Their environment chain is added by AccumulateSHBasisGateDers.
+					const size_t kernel_stride =
+						static_cast<size_t>(sh_l_max_ + 1) * outer_k_rank_ * sh_k_max_;
+					const size_t edge = use_edge_cache ? TwoLayerEdgePrimitiveOffset(-1, j) : 0;
+					const double* kernels = use_edge_cache
+						? two_layer_edge_radial_mixing_kernel_cache_.data() + edge * kernel_stride : nullptr;
+					const double* kernel_ders = use_edge_cache
+						? two_layer_edge_radial_mixing_kernel_der_cache_.data() + edge * kernel_stride : nullptr;
+					for (int l = 0; l <= sh_l_max_; ++l) {
+						for (int o = 0; o < outer_k_rank_; ++o) {
+							double value = 0.0;
+							double derivative = 0.0;
+							for (int k = 0; k < sh_k_max_; ++k) {
+								const int mu = k * (sh_l_max_ + 1) + l;
+								const size_t lok = (static_cast<size_t>(l) * outer_k_rank_ + o) * sh_k_max_ + k;
+								double kernel = kernels == nullptr ? 0.0 : kernels[lok];
+								double kernel_der = kernel_ders == nullptr ? 0.0 : kernel_ders[lok];
+								if (kernels == nullptr) {
+									const int basis_begin = mu_to_radial_eval_block_[mu] * R;
+									const int coeff_begin = TwoLayerGateRadialMixingCoeffIndex(l, o, k, 0);
+									for (int b = 0; b < R; ++b) {
+										kernel += regression_coeffs[coeff_begin + b] * rb_vals[basis_begin + b];
+										kernel_der += regression_coeffs[coeff_begin + b] * rb_ders[basis_begin + b];
+									}
+								}
+								value += gate_type_scale_by_mu[mu] * kernel;
+								derivative += gate_type_scale_by_mu[mu] * kernel_der;
+							}
+							for (int m = -l; m <= l; ++m) {
+								const int node = OuterKRank1OuterBasicIndex(o, l, m);
+								const int sh_index = SHFlatIndex(l, m);
+								const double y = sh_values_use[sh_index];
+								moment_vals[node] += value * y;
+								for (int axis = 0; axis < 3; ++axis)
+									moment_ders(node, j, axis) +=
+										derivative * rvec[axis] * inv_r * y
+										+ value * sh_ders_use[3 * sh_index + axis];
+							}
+						}
+					}
+					continue;
+				}
 				double* gate_scaled_radial_by_mu =
 					two_layer_gate_scaled_mu_vals_buffer_.data();
 			double* gate_scaled_der_by_mu =
@@ -4665,7 +4738,8 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	if (active_two_layer_gate_values_ == nullptr)
 		basis_ders.set(0);
 
-	ContractOuterKRank1MomentDers(nbh);
+	if (!pure_matrix)
+		ContractOuterKRank1MomentDers(nbh);
 	const bool use_product_rows = UseSHProductRows();
 	if (use_product_rows) {
 		ApplySHProductRowsDers(nbh);
@@ -9050,6 +9124,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	std::vector<double>& edge_l1_projection_linear_adjoints)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
+	const bool pure_matrix = OuterUsesPureRadialMatrix();
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
 	if (alpha_scalar_moments == 0)
@@ -9163,7 +9238,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 						rb_vals[eval_block * R + xi] =
 							p_RadialBasis->rb_vals[xi] * scaling;
 				}
-				for (int mu = 0; mu < radial_func_count; ++mu) {
+				for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 					const int radial_base = mu_to_radial_eval_block_[mu] * R;
 					const int radial_offset = radial_coeff_base + mu * (R + C);
 					double radial_value = 0.0;
@@ -9217,7 +9292,37 @@ void MLMTPR::AccumulateSHBasisGateDers(
 					gate_signal_derivative
 					* radial_values_use[mu] * sh_values_use[sh_index];
 			};
-			if (use_basic_mu_groups) {
+			if (pure_matrix) {
+				// d A[o,l,m] / d gate[j,k,l] = W[l,o,k](r) *
+				// d x[j,k,l]/d gate[j,k,l] * Y[l,m].  Accumulating these
+				// tangents through the existing outer DAG preserves the full
+				// gate-environment force/stress chain in every linear column.
+				const int l = mu % (sh_l_max_ + 1);
+				const int k = mu / (sh_l_max_ + 1);
+				const double gate_signal_derivative =
+					OuterTypeCoeffFast(regression_coeffs,
+						center_type_coeff_offset, center_type_coeff_stride,
+						R, type_central, mu) * two_layer_gate_additive_mu_buffer_[mu];
+				const size_t kernel_stride =
+					static_cast<size_t>(sh_l_max_ + 1) * outer_k_rank_ * sh_k_max_;
+				const double* kernels = use_edge_cache
+					? two_layer_edge_radial_mixing_kernel_cache_.data()
+						+ TwoLayerEdgePrimitiveOffset(-1, j) * kernel_stride
+					: nullptr;
+				for (int o = 0; o < outer_k_rank_; ++o) {
+					const size_t lok = (static_cast<size_t>(l) * outer_k_rank_ + o) * sh_k_max_ + k;
+					double kernel = kernels == nullptr ? 0.0 : kernels[lok];
+					if (kernels == nullptr) {
+						const int basis_begin = mu_to_radial_eval_block_[mu] * R;
+						const int coeff_begin = TwoLayerGateRadialMixingCoeffIndex(l, o, k, 0);
+						for (int b = 0; b < R; ++b)
+							kernel += regression_coeffs[coeff_begin + b] * rb_vals[basis_begin + b];
+					}
+					for (int m = -l; m <= l; ++m)
+						sh_gate_moment_ders_[OuterKRank1OuterBasicIndex(o, l, m)] =
+							gate_signal_derivative * kernel * sh_values_use[SHFlatIndex(l, m)];
+				}
+			} else if (use_basic_mu_groups) {
 				for (int cursor = basic_mu_offsets_[mu];
 				     cursor < basic_mu_offsets_[mu + 1];
 				     ++cursor)
@@ -9229,7 +9334,8 @@ void MLMTPR::AccumulateSHBasisGateDers(
 					if (basic_mu_cache_[basic_index] == mu)
 						set_basic_tangent(basic_index);
 			}
-			ContractOuterKRank1Values(sh_gate_moment_ders_.data());
+			if (!pure_matrix)
+				ContractOuterKRank1Values(sh_gate_moment_ders_.data());
 
 			if (use_product_rows) {
 				for (const SHProductRow& row : sh_product_rows_) {
@@ -10262,7 +10368,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 	}
 	two_layer_gate_radial_mixing_active_eval_ =
 		TwoLayerGateRadialMixingEnabled()
-		&& HasNonzeroTwoLayerGateRadialMixingCoeffs();
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (TwoLayerGateRadialMixingEnabled() && use_lmp_table)
 		ERROR("SUS2-SH two-layer gate radial mixing requires direct radial basis evaluation.");
