@@ -60,6 +60,64 @@ For any coordinate or parameter theta,
 
 For a shared scaling parameter s, dphi_b/ds is accumulated for every associated k,l,o. Force-loss parameter derivatives also require d²W/(dr ds) and the derivatives of the gate signal x; they are not obtained by differentiating W alone. The linear E/F/stress design matrix must use the same complete W primitives and gate chain as the final predictor.
 
+### Exact shared-scaling pullback
+
+For one edge and fixed (l,k), write the adjoint contraction with W and its
+radial derivative as `sum(o) [a_o W_o + b_o W'_o]`. The coefficients `a_o`
+include the SH value/coordinate adjoints and gate-signal tangent; `b_o`
+includes the radial coordinate tangent. With those upstream adjoints held
+fixed, the local pullback is
+
+    grad_C[o,b] += a_o*phi_b + b_o*phi'_b,
+    u_b = sum(o) a_o*C[o,b],
+    v_b = sum(o) b_o*C[o,b],
+    grad_s += sum(b) [u_b*phi_{b,s} + v_b*phi'_{b,s}].
+
+Both slope and shift use this identity. Form `u_b` and `v_b` while updating
+the W coefficient gradient, then contract each shared scaling derivative
+once per input channel, not once per output channel. This retains the mixed
+radial/scaling derivatives required by force and stress training, without
+adding a large derivative cache. Gate/type pullbacks through x are retained
+separately. The summation reassociation can change floating-point roundoff;
+it does not change the model or mathematical gradient. The pure path also
+omits compatibility R/P work whose adjoints are identically zero.
+
+## Rescale and replicated outputs
+
+The inherited automatic Rescale is a fitted-head criterion, not a direct
+normalization of scalar-feature values. At each trial global radial scale it
+refits the linear heads, excludes coefficients of magnitude at most `1e-12`,
+and computes
+
+    m = median(log(abs(c_a))),
+    spread2 = mean((log(abs(c_a)) - m)^2),
+    metric = spread2 + 3*m^2.
+
+Thus it favors both a narrow coefficient distribution and a typical
+coefficient near one. Uniformly tiny coefficients are not its ideal result.
+The finite bracket/fine search does not guarantee that ideal is reached.
+
+It is not invariant under scalar duplication. If `phi[o,a] = phi[a]`, the
+effective coefficient is `c_eff[a] = sum(o) c[o,a]`; a symmetric fit splits
+it as `c[o,a] = c_eff[a]/O`. The median log coefficient then shifts by
+`-log(O)` even though the represented basis/function is unchanged. Also,
+the current mean head penalty is `lambda/(O*S) * sum(o,a) c[o,a]^2`,
+which becomes `lambda/(O^2*S) * sum(a) c_eff[a]^2` on that symmetric
+subspace. Merely multiplying head statistics by O does not remove the
+O-dependent fitted regularization.
+
+For a fixed represented function, unchanged Rescale across duplicate widths
+and order-one *individual* heads are different goals: the latter cannot hold
+for all O when each head is `c_eff/O`. A duplication-invariant calibration
+would fit the unique scalar basis and use its effective coefficients and a
+fixed unique-basis penalty. That changes the warmup convention; it is not an
+exact runtime optimization and is not enabled by this performance change.
+Initialization, Rescale, regularization and existing checkpoints are kept
+unchanged. In particular, deterministic `same` preserves supplied parameters;
+the seed above has equal common columns across different widths but not equal
+columns within a model. Forcing all columns and their heads to be identical
+can leave deterministic training in a permutation-symmetric subspace.
+
 ## Usage and validation
 
 Example of a new model (O can exceed K):

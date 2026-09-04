@@ -47,17 +47,19 @@ def vector(src, key, data):
     return out
 
 
-def model(mapping, width=3):
-    path = TMP / f'{mapping}-o{width}.mtp'
-    run(f'{mapping}-o{width}-init', 'init-sh', path, '--species-count=2',
-        '--l-max=2', '--k-max=2', '--body-order=4', '--body-l-max=2,2,2,2',
-        '--radial-basis-size=3', '--cutoff=5', f'--scaling-map={mapping}',
+def model(mapping, width=3, k_width=2, radial_size=3, decoupled=False):
+    tag = f'{mapping}-k{k_width}-o{width}-r{radial_size}-d{int(decoupled)}'
+    path = TMP / f'{tag}.mtp'
+    run(tag+'-init', 'init-sh', path, '--species-count=2',
+        '--l-max=2', f'--k-max={k_width}', '--body-order=4', '--body-l-max=2,2,2,2',
+        f'--radial-basis-size={radial_size}', '--cutoff=5', f'--scaling-map={mapping}',
         '--radial-basis-type=' + os.environ.get('PURE_W_RADIAL_BASIS', 'RBChebyshev_sss'),
         '--superlinear-mode=pure-w-channelwise', f'--outer-k-rank={width}',
         '--two-layer-gate-mode=mu-scalar-full', '--two-layer-gate-body-order=4',
-        '--two-layer-gate-k-rank=2', '--write-sh-scalar-info')
-    seed = TMP / f'{mapping}-o{width}.seed.mtp'
-    run(f'{mapping}-o{width}-complete', 'roundtrip-model-dev', path, seed)
+        f'--two-layer-gate-k-rank={min(2,k_width)}', '--write-sh-scalar-info',
+        *(['--two-layer-gate-decoupled-scaling'] if decoupled else []))
+    seed = TMP / f'{tag}.seed.mtp'
+    run(tag+'-complete', 'roundtrip-model-dev', path, seed)
     path.write_text(seed.read_text())
     src = path.read_text()
     src = re.sub(r'(?m)^scaling = .*$', 'scaling = 1.0', src)
@@ -75,6 +77,10 @@ def model(mapping, width=3):
     scales = values(src, 'scal_coeffs')
     src = vector(src, 'scal_coeffs', [
         (2.6 if i % 8 < 4 else 1.85) + 0.025 * i for i in range(len(scales))])
+    if decoupled:
+        gate_scales = values(src, 'two_layer_gate_scaling_coeffs')
+        src = vector(src, 'two_layer_gate_scaling_coeffs', [
+            (2.25 if i % 8 < 4 else 1.55) + 0.017*i for i in range(len(gate_scales))])
     src = vector(src, 'species_coeffs', [0.12, -0.07])
     src = vector(src, 'moment_coeffs', [0.001 * math.cos(0.51 * (i + 1))
                                        for i in range(count(src, 'alpha_scalar_moments'))])
@@ -175,6 +181,31 @@ one_ref = predict('o1-pure', one)
 equal(one_ref, predict('o1-legacy', legacy_path), 'O1 pure vs legacy zero-baseline')
 run('o1-efs-gradient', 'check-loss-gradient-dev', one, CFG, *GRAD,
     '--energy-weight=1', '--force-weight=0.3', '--stress-weight=0.1')
+# R > K*O exercises the pure contraction scratch-size boundary. O=3 also
+# separates gate scaling from the W input scaling, while keeping gate, W,
+# type factors and the head nonzero so mixed-force derivatives cannot pass
+# merely because their physical chain is absent.
+for mapping in ('K', 'L', 'LK'):
+    for outer in (1, 3):
+        tag = f'{mapping}-k1-o{outer}-r4'
+        path = model(mapping, width=outer, k_width=1, radial_size=4,
+                     decoupled=(outer == 3))
+        reference = predict(tag+'-cache', path, CACHE_ON)
+        equal(reference, predict(tag+'-off', path, CACHE_OFF), tag+' cache/recompute')
+        assert max(map(abs, reference[1:13])) > 1e-6, 'K1 fixture force is too small'
+        src = path.read_text()
+        ablated = TMP/(tag+'-zero-gate.mtp')
+        ablated.write_text(vector(src, 'two_layer_gate_weights',
+                                  [0.0]*len(values(src, 'two_layer_gate_weights'))))
+        zero_gate = predict(tag+'-zero-gate', ablated, CACHE_ON)
+        gate_effect = max(abs(a-b) for a,b in zip(reference[1:13], zero_gate[1:13]))
+        assert gate_effect > 1e-7, ('K1 gate force signal too small', tag, gate_effect)
+        for mode, env in [('cache', CACHE_ON), ('recompute', CACHE_OFF)]:
+            out = run(tag+'-gradient-'+mode, 'check-loss-gradient-dev', path, CFG, *GRAD,
+                      '--energy-weight=1', '--force-weight=0.3', '--stress-weight=0.1', env=env)
+            print(f'PASS {tag} {mode}: {out.strip().splitlines()[-1]}', flush=True)
+        run(tag+'-efs-fd', 'check-efs-fd-dev', path, CFG, '--max-configs=1',
+            '--displacement=2e-5', '--abs-tolerance=3e-7', '--rel-tolerance=3e-4')
 if os.environ.get('OLD_BIN'):
     BIN = Path(os.environ['OLD_BIN']).resolve()
     equal(one_ref, predict('o1-old-binary', legacy_path), 'O1 pure vs original binary')

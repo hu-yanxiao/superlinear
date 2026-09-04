@@ -76,6 +76,82 @@ inline int GateAdditiveCoeffIndexFast(int offset,
 	return offset + type_outer * radial_func_count + mu;
 }
 
+// Pure W has shared input-channel scaling. Contract its output adjoints into
+// coefficient space before applying the scaling chain rule. This replaces four
+// separate (o,k,b) scaling-kernel dot products by two output contractions plus
+// one (k,b) derivative pass. The scaling sum_o/sum_b and scalar factors are
+// reassociated; each C coefficient retains the original edge accumulation order.
+template <bool Coordinate, bool GateTangent>
+void AccumulatePureWEdgeParameterGrad(
+	int l, int L, int K, int O, int R, int species, int type_pair,
+	const int* mu_to_eval, const int* eval_to_scaling,
+	const double* matrix_coeffs, int matrix_offset,
+	const double* rb_vals, const double* rb_ders,
+	const double* value_weights, const double* coord_weights,
+	const double* tangent_weights, const double* input, const double* input_t,
+	const double* cached_kernel, const double* cached_kernel_der,
+	double* grad, double* gate_value, double* gate_direct,
+	double* scaling_scratch)
+{
+	for (int k = 0; k < K; ++k) {
+		const int mu = k * L + l;
+		const int eval = mu_to_eval[mu];
+		const int rb_base = eval * R;
+		const int der_base = 5 * rb_base;
+		const double* phi = rb_vals + rb_base;
+		const double* dphi = rb_ders + der_base;
+		double* value_coeff_adjoint = scaling_scratch;
+		double* coord_coeff_adjoint = scaling_scratch + R;
+		std::fill(value_coeff_adjoint, value_coeff_adjoint + R, 0.0);
+		if (Coordinate)
+			std::fill(coord_coeff_adjoint, coord_coeff_adjoint + R, 0.0);
+		double gate_value_sum = 0.0;
+		double gate_direct_sum = 0.0;
+		for (int o = 0; o < O; ++o) {
+			const size_t row = (static_cast<size_t>(l) * O + o) * K + k;
+			const double* coeff = matrix_coeffs + row * R;
+			double* coeff_grad = grad + matrix_offset + row * R;
+			const double value_factor = input[k] * value_weights[o]
+				+ (GateTangent ? input_t[k] * tangent_weights[o] : 0.0);
+			const double coord_factor = Coordinate ? input[k] * coord_weights[o] : 0.0;
+			double kernel = cached_kernel == nullptr ? 0.0 : cached_kernel[row];
+			double kernel_der = !Coordinate || cached_kernel_der == nullptr
+				? 0.0 : cached_kernel_der[row];
+			for (int b = 0; b < R; ++b) {
+				const double c = coeff[b];
+				coeff_grad[b] += phi[b] * value_factor
+					+ (Coordinate ? dphi[b] * coord_factor : 0.0);
+				value_coeff_adjoint[b] += c * value_factor;
+				if (Coordinate)
+					coord_coeff_adjoint[b] += c * coord_factor;
+				if (cached_kernel == nullptr)
+					kernel += c * phi[b];
+				if (Coordinate && cached_kernel_der == nullptr)
+					kernel_der += c * dphi[b];
+			}
+			gate_value_sum += kernel * value_weights[o]
+				+ (Coordinate ? kernel_der * coord_weights[o] : 0.0);
+			if (GateTangent)
+				gate_direct_sum += kernel * tangent_weights[o];
+		}
+		double slope_grad = 0.0;
+		double shift_grad = 0.0;
+		for (int b = 0; b < R; ++b) {
+			slope_grad += value_coeff_adjoint[b] * dphi[R + b]
+				+ (Coordinate ? coord_coeff_adjoint[b] * dphi[2 * R + b] : 0.0);
+			shift_grad += value_coeff_adjoint[b] * dphi[3 * R + b]
+				+ (Coordinate ? coord_coeff_adjoint[b] * dphi[4 * R + b] : 0.0);
+		}
+		const int scale_index = species + 2 * species * species * eval_to_scaling[eval]
+			+ type_pair;
+		grad[scale_index] += slope_grad;
+		grad[scale_index + species * species] += shift_grad;
+		gate_value[mu] += gate_value_sum;
+		if (GateTangent)
+			gate_direct[mu] += gate_direct_sum;
+	}
+}
+
 int SHFlatIndex(int l, int m)
 {
 	return l * l + (m + l);
@@ -10362,6 +10438,7 @@ void MLMTPR::CalcSHSiteEnergyDersLegacy(const Neighborhood& nbh)
 
 void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 {
+	const bool pure_matrix = OuterUsesPureRadialMatrix();
 	if (TwoLayerResidualEnabled()) {
 		CalcSHResidualSiteEnergyDers(nbh);
 		return;
@@ -10541,7 +10618,10 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 			radial_derivatives_use =
 				two_layer_edge_mu_ders_cache_.data() + edge * mu_stride;
-			if (radial_mixing_active) {
+			// Pure W forces consume the cached W and W' directly. In the
+			// prediction-only cache there may be no raw parameter derivatives;
+			// rebuilding that unused radial basis would duplicate edge setup.
+			if (radial_mixing_active && (!pure_matrix || !use_radial_mixing_kernel_cache)) {
 				const size_t radial_val_stride =
 					static_cast<size_t>(two_layer_edge_cache_eval_block_count_) * R;
 				const size_t radial_der_stride = 5 * radial_val_stride;
@@ -10690,7 +10770,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 						two_layer_gate_scaled_mu_vals_buffer_.data();
 				double* gate_scaled_der_by_mu =
 					two_layer_gate_scaled_mu_ders_buffer_.data();
-				if (!use_basic_mu_groups) {
+				if (!pure_matrix && !use_basic_mu_groups) {
 					for (int mu = 0; mu < radial_func_count; ++mu) {
 						const double type_scale = gate_type_scale_by_mu[mu];
 						gate_scaled_radial_by_mu[mu] =
@@ -10820,7 +10900,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 						}
 					}
 					if (use_basic_mu_groups) {
-					for (int mu = 0; mu < radial_func_count; ++mu) {
+					for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 						const double radial_value = radial_values_use[mu];
 						const double type_scale = gate_type_scale_by_mu[mu];
 						const double scaled_radial_value =
@@ -10877,7 +10957,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 							center_gate_adjoint_by_mu[mu] += center_gate_adjoint_mu;
 					}
 				} else {
-					for (int i = 0; i < alpha_index_basic_count; ++i) {
+					for (int i = 0; !pure_matrix && i < alpha_index_basic_count; ++i) {
 						const double adj =
 							center_linear * site_energy_ders_wrt_moments_[i];
 							if (adj == 0.0)
@@ -11237,6 +11317,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 	const double* center_gate_tangent,
 	int cache_atom_index)
 {
+	const bool pure_matrix = RadialMixingEnabled && OuterUsesPureRadialMatrix();
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH coefficient gradients require direct radial basis evaluation.");
 	const size_t expected_tangent_size =
@@ -11518,7 +11599,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 					}
 
 						if (use_basic_mu_groups) {
-							for (int mu = 0; mu < radial_func_count; ++mu) {
+							for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 								const double scaled_radial =
 									gate_scaled_radial_by_mu[mu];
 								if (scaled_radial == 0.0)
@@ -11533,7 +11614,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 								}
 							}
 						} else {
-							for (int i = 0; i < alpha_index_basic_count; ++i) {
+							for (int i = 0; !pure_matrix && i < alpha_index_basic_count; ++i) {
 								const int mu = basic_mu_cache_[i];
 								const int sh_index = basic_sh_index_cache_[i];
 								grad_dloss_dsenders_[i] +=
@@ -11739,8 +11820,8 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 				radial_mixing_center_direct_contribution_by_mu.assign(
 					radial_func_count, 0.0);
 				const int ac_count = outer_k_rank_ * sh_k_max_;
-				radial_mixing_param_kernel.resize(ac_count);
-				radial_mixing_param_kernel_s.resize(ac_count);
+				radial_mixing_param_kernel.resize(pure_matrix ? std::max(ac_count, 2 * outer_k_rank_) : ac_count);
+				radial_mixing_param_kernel_s.resize(pure_matrix ? std::max(ac_count, 2 * R) : ac_count);
 				radial_mixing_param_kernel_ss.resize(ac_count);
 			}
 
@@ -11925,6 +12006,41 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 									gate_input_t_storage[k] =
 										center_type_coeff * tangent_gate_derivative;
 								}
+							if (pure_matrix) {
+								double* value_weights = radial_mixing_param_kernel.data();
+								double* tangent_weights = value_weights + outer_k_rank_;
+								for (int o = 0; o < outer_k_rank_; ++o) {
+									double value_sum = 0.0;
+									double tangent_sum = 0.0;
+									for (int m = -l; m <= l; ++m) {
+										const int outer = OuterKRank1OuterBasicIndex(o, l, m);
+										const double y = cached_sh_values[SHFlatIndex(l, m)];
+										value_sum += center_linear * grad_dloss_dmom_[outer] * y;
+										tangent_sum += center_linear * site_energy_ders_wrt_moments_[outer] * y;
+									}
+									value_weights[o] = value_sum;
+									tangent_weights[o] = tangent_sum;
+								}
+								AccumulatePureWEdgeParameterGrad<false, true>(
+									l, sh_l_max_ + 1, sh_k_max_, outer_k_rank_, R, C,
+									type_central * C + type_outer,
+									mu_to_radial_eval_block_.data(), radial_eval_to_scaling_block_.data(),
+									radial_mixing_coeffs, radial_mixing_coeff_offset,
+									cached_rb_vals, cached_rb_ders, value_weights, nullptr,
+									tangent_weights, gate_input, gate_input_t,
+									cached_radial_mixing_kernels, nullptr, out_grad_accumulator.data(),
+									radial_mixing_value_contribution_by_mu.data(),
+									radial_mixing_direct_contribution_by_mu.data(),
+									radial_mixing_param_kernel_s.data());
+								for (int k = 0; k < sh_k_max_; ++k) {
+									const int mu = k * (sh_l_max_ + 1) + l;
+									const double direct = radial_mixing_direct_contribution_by_mu[mu];
+									if (center_gate_enabled && center_gate_tangent != nullptr)
+										radial_mixing_center_direct_contribution_by_mu[mu] = direct * center_gate_tangent[mu];
+									radial_mixing_direct_contribution_by_mu[mu] = direct * tangent_by_mu[mu];
+								}
+								continue;
+							}
 							if (radial_mixing_active) {
 								for (int a = 0; a < outer_k_rank_; ++a) {
 									for (int k = 0; k < sh_k_max_; ++k) {
@@ -12021,7 +12137,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 				}
 
 						if (use_basic_mu_groups) {
-						for (int mu = 0; mu < radial_func_count; ++mu) {
+						for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 						const double neighbor_tangent = tangent_by_mu[mu];
 						const double center_tangent =
 							(center_gate_enabled && center_gate_tangent != nullptr)
@@ -12054,7 +12170,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 						}
 					}
 				} else {
-					for (int i = 0; i < alpha_index_basic_count; ++i) {
+					for (int i = 0; !pure_matrix && i < alpha_index_basic_count; ++i) {
 							const int mu = basic_mu_cache_[i];
 							const int sh_index = basic_sh_index_cache_[i];
 							const double y = cached_sh_values[sh_index];
@@ -12207,6 +12323,10 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 								* center_gate_gate_additive_param_by_mu[mu]
 								* center_direct_contribution;
 					}
+					// Pure W has already propagated shared scaling above; these
+					// remaining terms belong only to the absent legacy radial factor.
+					if (pure_matrix)
+						continue;
 					const double sigma_accum =
 						type_scale * value_accum + center_type_coeff * gate_df * direct_accum
 						+ center_type_coeff * center_gate_df * center_direct_accum;
@@ -12268,6 +12388,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 	const double se_weight,
 	const Vector3* se_ders_weights)
 {
+	const bool pure_matrix = RadialMixingEnabled && OuterUsesPureRadialMatrix();
 	if (SHUsesPrecomputedLmpTable(p_RadialBasis))
 		ERROR("SUS2-SH coefficient gradients require direct radial basis evaluation.");
 
@@ -12543,7 +12664,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 								two_layer_gate_scaled_mu_vals_buffer_.data();
 							double* gate_scaled_der_by_mu =
 								two_layer_gate_scaled_mu_ders_buffer_.data();
-							for (int mu = 0; mu < radial_func_count; ++mu) {
+							for (int mu = 0; !pure_matrix && mu < radial_func_count; ++mu) {
 								const double type_scale = gate_type_scale_by_mu[mu];
 								gate_scaled_radial_by_mu[mu] =
 									type_scale * cached_radial_values[mu];
@@ -12551,7 +12672,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 									type_scale * cached_radial_derivatives[mu];
 							}
 
-							for (int i = 0; i < alpha_index_basic_count; ++i) {
+							for (int i = 0; !pure_matrix && i < alpha_index_basic_count; ++i) {
 								const int mu = basic_mu_cache_[i];
 							const int sh_index = basic_sh_index_cache_[i];
 							const int sh_der_index = basic_sh_der_index_cache_[i];
@@ -12840,9 +12961,9 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 			if (radial_mixing_active) {
 				radial_mixing_contribution_by_mu.assign(radial_func_count, 0.0);
 				const int ac_count = outer_k_rank_ * sh_k_max_;
-				radial_mixing_param_kernel.resize(ac_count);
+				radial_mixing_param_kernel.resize(pure_matrix ? std::max(ac_count, 2 * outer_k_rank_) : ac_count);
 				radial_mixing_param_kernel_t.resize(ac_count);
-				radial_mixing_param_kernel_s.resize(ac_count);
+				radial_mixing_param_kernel_s.resize(pure_matrix ? std::max(ac_count, 2 * R) : ac_count);
 				radial_mixing_param_kernel_coord_s.resize(ac_count);
 				radial_mixing_param_kernel_ss.resize(ac_count);
 				radial_mixing_param_kernel_coord_ss.resize(ac_count);
@@ -13062,6 +13183,46 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 											const int mu = k * (sh_l_max_ + 1) + l;
 										gate_input[k] = gate_type_scale_by_mu[mu];
 										}
+								if (pure_matrix) {
+									double* value_weights = radial_mixing_param_kernel.data();
+									double* coord_weights = value_weights + outer_k_rank_;
+									for (int o = 0; o < outer_k_rank_; ++o) {
+										double value_sum = 0.0;
+										double energy_sum = 0.0;
+										double angular_sum = 0.0;
+										for (int m = -l; m <= l; ++m) {
+											const int sh_index = SHFlatIndex(l, m);
+											const int outer = OuterKRank1OuterBasicIndex(o, l, m);
+											const double y = sh_values_use[sh_index];
+											value_sum += center_linear * grad_dloss_dmom_[outer] * y;
+											if (se_ders_weights != nullptr) {
+												const double energy_adj = center_linear * site_energy_ders_wrt_moments_[outer];
+												energy_sum += energy_adj * y;
+												angular_sum += energy_adj * (wx * sh_ders_use[3 * sh_index]
+													+ wy * sh_ders_use[3 * sh_index + 1] + wz * sh_ders_use[3 * sh_index + 2]);
+											}
+										}
+										value_weights[o] = value_sum + angular_sum;
+										coord_weights[o] = wr * energy_sum;
+									}
+									if (se_ders_weights != nullptr)
+										AccumulatePureWEdgeParameterGrad<true, false>(
+											l, sh_l_max_ + 1, sh_k_max_, outer_k_rank_, R, C,
+											type_central * C + type_outer, mu_to_radial_eval_block_.data(),
+											radial_eval_to_scaling_block_.data(), radial_mixing_coeffs, radial_mixing_coeff_offset,
+											rb_vals_use, rb_ders_use, value_weights, coord_weights, nullptr,
+											gate_input, nullptr, cached_radial_mixing_kernels, cached_radial_mixing_kernel_ders,
+											grad_out, radial_mixing_contribution_by_mu.data(), nullptr, radial_mixing_param_kernel_s.data());
+									else
+										AccumulatePureWEdgeParameterGrad<false, false>(
+											l, sh_l_max_ + 1, sh_k_max_, outer_k_rank_, R, C,
+											type_central * C + type_outer, mu_to_radial_eval_block_.data(),
+											radial_eval_to_scaling_block_.data(), radial_mixing_coeffs, radial_mixing_coeff_offset,
+											rb_vals_use, rb_ders_use, value_weights, nullptr, nullptr,
+											gate_input, nullptr, cached_radial_mixing_kernels, nullptr,
+											grad_out, radial_mixing_contribution_by_mu.data(), nullptr, radial_mixing_param_kernel_s.data());
+									continue;
+								}
 									if (radial_mixing_active) {
 										for (int a = 0; a < outer_k_rank_; ++a) {
 											for (int k = 0; k < sh_k_max_; ++k) {
@@ -13198,7 +13359,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 								}
 								}
 
-						for (int i = 0; i < alpha_index_basic_count; ++i) {
+						for (int i = 0; !pure_matrix && i < alpha_index_basic_count; ++i) {
 						const int mu = basic_mu_cache_[i];
 						const int scaling_block = basic_scaling_block_cache_[i];
 						const int sh_index = basic_sh_index_cache_[i];
@@ -13311,6 +13472,8 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 											gate_outer * mu_contribution;
 										grad_out[outer_type_coeff_index] +=
 											center_type_coeff * mu_contribution;
+								if (pure_matrix)
+									continue;
 								grad_out[sigma_coeff_offset] += type_scale * (
 									radial_s_derivatives_use[mu] * value_accum
 									+ radial_coord_s_derivatives_use[mu] * wr * coord_accum);
