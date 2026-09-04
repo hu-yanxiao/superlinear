@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <ctime>
@@ -1771,6 +1772,20 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	//args[0] - potname
 	//args[1] - ts_name
 	const bool inline_sh_model = PrepareInlineSphericalHarmonicModel(args, opts);
+	const std::string pure_w_initialization = opts["pure-w-initialization"].empty()
+		? "legacy" : opts["pure-w-initialization"];
+	if (pure_w_initialization != "legacy" && pure_w_initialization != "balanced")
+		ERROR("--pure-w-initialization should be legacy or balanced");
+	const bool balanced_pure_w_init = pure_w_initialization == "balanced";
+	double pure_w_init_target_rms = 1.0;
+	if (!opts["pure-w-init-target-rms"].empty()) {
+		if (!balanced_pure_w_init)
+			ERROR("--pure-w-init-target-rms requires --pure-w-initialization=balanced");
+		pure_w_init_target_rms = ParseStrictDoubleOption(
+			opts["pure-w-init-target-rms"], "--pure-w-init-target-rms");
+	}
+	if (pure_w_init_target_rms <= 0.0)
+		ERROR("--pure-w-init-target-rms should be positive");
 
 	double weight_energy = 1.0;
 	if (opts["energy-weight"] != "")
@@ -1887,7 +1902,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		optimizer_kind = opts["optimizer"];
 	if (optimizer_kind != "bfgs" && optimizer_kind != "lbfgs")
 		ERROR("--optimizer should be 'bfgs' or 'lbfgs'");
-	string radial_parameterization = "physical";
+	string radial_parameterization = balanced_pure_w_init ? "weight-norm" : "physical";
 	if (opts["radial-parameterization"] != "")
 		radial_parameterization = opts["radial-parameterization"];
 	if (radial_parameterization != "physical"
@@ -1914,13 +1929,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	const bool allow_physical_radial_sign_repair =
 		opts["allow-physical-radial-sign-repair"] != "";
-	string bfgs_coordinate_normalization = "none";
+	string bfgs_coordinate_normalization = balanced_pure_w_init ? "efs-head" : "none";
 	if (opts["bfgs-coordinate-normalization"] != "")
 		bfgs_coordinate_normalization =
 			opts["bfgs-coordinate-normalization"];
 	if (bfgs_coordinate_normalization != "none"
-	    && bfgs_coordinate_normalization != "efs-gn")
-		ERROR("--bfgs-coordinate-normalization should be 'none' or 'efs-gn'");
+	    && bfgs_coordinate_normalization != "efs-gn"
+	    && bfgs_coordinate_normalization != "efs-head")
+		ERROR("--bfgs-coordinate-normalization should be none, efs-gn, or efs-head");
 	if (optimizer_kind != "bfgs"
 	    && bfgs_coordinate_normalization != "none")
 		ERROR("--bfgs-coordinate-normalization requires --optimizer=bfgs");
@@ -2215,6 +2231,31 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	if (balanced_pure_w_init) {
+		if (maxits < 0)
+			ERROR("Balanced pure-W initialization requires --max-iter >= 0");
+		if (!mtpr.OuterUsesPureRadialMatrix())
+			ERROR("--pure-w-initialization=balanced requires a pure-W channelwise model");
+		if (loaded_complete_parameters)
+			ERROR("Balanced pure-W initialization only accepts an incomplete fresh seed; "
+			      "a complete checkpoint must be resumed with --init-params=same without --pure-w-initialization=balanced");
+		if (opts["init-params"] != "same")
+			ERROR("Balanced pure-W initialization requires --init-params=same; "
+			      "--init-random-seed controls only its new W directions");
+		if (optimizer_kind != "bfgs" || radial_parameterization != "weight-norm")
+			ERROR("Balanced pure-W initialization currently requires BFGS and weight-norm radial coordinates");
+		if (force_loss_kind != ForceLossKind::L2)
+			ERROR("Balanced pure-W initialization requires --force-loss=l2 for its initial linear head solve");
+		if (do_lin_rescale || fine_tune || two_layer_residual_staged
+		    || two_layer_gate_readout_linear_init || mindist_update)
+			ERROR("Balanced pure-W initialization is incompatible with do-lin-rescale, fine-tune, "
+			      "staged/readout-only initialization, and update-mindist");
+		if (mtpr.HasZBL() || mtpr.MultiLayerGateEnabled() || !opts["multi-layer-gate"].empty()
+		    || mtpr.TwoLayerResidualEnabled() || guard_compression_options.enabled)
+			ERROR("Balanced pure-W initialization currently supports one-gate pure models without ZBL, residual stages, or compression guards");
+		if (custom_radial_mixing_init_scale)
+			ERROR("Balanced pure-W initialization uses --pure-w-init-target-rms, not --two-layer-gate-radial-mixing-init-scale");
+	}
 	if (!requested_radial_cutoff_type.empty()
 	    && mtpr.p_RadialBasis->radial_cutoff_type != requested_radial_cutoff_type)
 		ERROR("--radial-cutoff-type must match the loaded model; changing cutoff function requires init-sh/inline initialization");
@@ -3030,7 +3071,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << "Deterministic fresh initialized model saved to "
 			          << trained_fnm << std::endl;
 	}
-	if (maxits == 0 && opts["init-params"] == "same"
+	if (!balanced_pure_w_init && maxits == 0 && opts["init-params"] == "same"
 	    && mtpr.OuterUsesPureRadialMatrix()) {
 		// Initialization-only pure-W runs export the supplied physical seed,
 		// before shift, linear warmup, rescaling or optimizer setup can change it.
@@ -3041,6 +3082,90 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << " (no parameter reset or linear solve)" << std::endl;
 	}
 	trainer.shift(do_shift);
+	if (balanced_pure_w_init) {
+		// A new initialization protocol, never a checkpoint conversion. All
+		// changes are folded into physical W; prediction needs no new metadata.
+		const std::uint64_t seed = init_random_seed.has_value
+			? static_cast<std::uint64_t>(init_random_seed.value) : UINT64_C(1);
+		mtpr.InitializePureWDirections(seed);
+#ifdef MLIP_MPI
+		MPI_Bcast(&mtpr.Coeff()[0], mtpr.CoeffCount(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+#endif
+		mtpr.SyncTwoLayerGateRadialMixingCoeffsFromRegression();
+		std::vector<double> local_second_moments(mtpr.L * mtpr.OuterKRank(), 0.0);
+		std::vector<double> global_second_moments(local_second_moments.size(), 0.0);
+		std::uint64_t local_sites = 0;
+		int statistics_failed = 0;
+		try {
+			for (Configuration& config : training_set)
+				mtpr.AccumulatePureWOuterBlockSecondMoments(
+					config, local_second_moments, local_sites);
+		} catch (const MlipException& exception) {
+			std::cerr << "Pure-W initialization statistics rank=" << prank
+			          << ": " << exception.What() << std::endl;
+			statistics_failed = 1;
+		} catch (const std::exception& exception) {
+			std::cerr << "Pure-W initialization statistics rank=" << prank
+			          << ": " << exception.what() << std::endl;
+			statistics_failed = 1;
+		}
+		unsigned long long global_sites = static_cast<unsigned long long>(local_sites);
+#ifdef MLIP_MPI
+		int any_failed = 0;
+		MPI_Allreduce(&statistics_failed, &any_failed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+		statistics_failed = any_failed;
+		const unsigned long long site_count = static_cast<unsigned long long>(local_sites);
+		MPI_Allreduce(&site_count, &global_sites, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+		MPI_Allreduce(local_second_moments.data(), global_second_moments.data(),
+		              static_cast<int>(local_second_moments.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+#else
+		global_second_moments = local_second_moments;
+#endif
+		if (statistics_failed || global_sites == 0)
+			ERROR("Balanced pure-W initialization needs finite outer moments and a nonempty training set");
+		std::vector<double> factors(global_second_moments.size(), 1.0);
+		if (prank == 0)
+			std::cout << std::setprecision(17)
+			          << "Pure-W balanced initialization seed=" << seed
+			          << " target_rms=" << pure_w_init_target_rms
+			          << " sites=" << global_sites << std::endl;
+		for (std::size_t block = 0; block < factors.size(); ++block) {
+			const double second_moment = global_second_moments[block]
+				/ static_cast<double>(global_sites);
+			if (!std::isfinite(second_moment) || second_moment < 0.0)
+				ERROR("Balanced pure-W initialization encountered non-finite outer moments");
+			const double rms = std::sqrt(second_moment);
+			const char* status = "scaled";
+			if (rms <= 1.0e-12) {
+				status = "near-zero-preserved";
+			} else {
+				const double requested = pure_w_init_target_rms / rms;
+				factors[block] = std::max(1.0e-6, std::min(1.0e6, requested));
+				if (factors[block] != requested)
+					status = "clamped";
+			}
+			if (prank == 0)
+				std::cout << "Pure-W init block l=" << block / mtpr.OuterKRank()
+				          << " o=" << block % mtpr.OuterKRank()
+				          << " rms_before=" << rms << " factor=" << factors[block]
+				          << " rms_after=" << rms * factors[block]
+				          << " status=" << status << std::endl;
+		}
+#ifdef MLIP_MPI
+		MPI_Bcast(factors.data(), static_cast<int>(factors.size()), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+#endif
+		mtpr.ApplyPureWOutputScales(factors);
+		if (trainer.TrainRankActive())
+			trainer.TrainLinear(prank, training_set, linear_training_neighborhoods_ptr,
+			                    "balanced pure-W initial head solve");
+		trainer.BroadcastCoeffsWorld();
+		if (prank == 0)
+			std::cout << "Pure-W balanced initialization complete; physical global scaling="
+			          << mtpr.scaling
+			          << "; no Rescale or 75-step pretraining" << std::endl;
+		save_model_atomically_collective(
+			maxits == 0 ? trained_fnm : "ini.mtp", "balanced pure-W initialized model");
+	}
 	if (two_layer_gate_readout_linear_init) {
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] "
@@ -3073,7 +3198,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		}
 	}
 	const bool run_initial_untrained_linear_warmup =
-		!loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
+		!balanced_pure_w_init && !loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
 	if (run_initial_untrained_linear_warmup) {
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] "
@@ -3096,7 +3221,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << "Initial untrained model warmup rescale+linear solve done"
 			          << std::endl;
 	}
-	if (!mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
+	if (!balanced_pure_w_init && !mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
 		trainer.max_step_count = 75;
 //		trainer.random_sample(prank, training_set);
 //		if (prank == 0){
@@ -3185,9 +3310,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << trainer.radial_parameterization << std::endl;
 			std::cout << "BFGS coordinate normalization: "
 			          << trainer.bfgs_coordinate_normalization;
-			if (trainer.bfgs_coordinate_normalization == "efs-gn") {
-				std::cout << " probes=" << trainer.bfgs_coordinate_probes
-				          << " floor=" << trainer.bfgs_coordinate_floor;
+			if (trainer.bfgs_coordinate_normalization != "none") {
+				if (trainer.bfgs_coordinate_normalization == "efs-gn")
+					std::cout << " probes=" << trainer.bfgs_coordinate_probes;
+				std::cout << " floor=" << trainer.bfgs_coordinate_floor;
 			}
 			std::cout << std::endl;
 			if (trainer.optimizer_kind == "lbfgs") {

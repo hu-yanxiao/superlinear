@@ -37,6 +37,12 @@ This deterministic seed is not an identity/residual initialization. Saved pure-m
 
 ## Optimization and regularization
 
+An explicit new fresh-training protocol, `--pure-w-initialization=balanced`,
+provides data-calibrated W directions and fixed scalar-head optimizer coordinates.
+It does not change the default `same` contract or existing checkpoints. See
+[balanced initialization](PURE_W_BALANCED_INITIALIZATION.md) for the sequence,
+chain rule, command options and compatibility boundaries.
+
 Apply the established signed-pivot radial weight-normalization chart to each W[l,k,o,:] physical coefficient vector. Retain its established zero-row handling and exact physical-value roundtrip. The gate's own independent radial rows still use their existing chart. In pure mode, obsolete outer radial rows are not normalized or trained merely as unused compatibility storage.
 
 Move the outer radial smoothness penalty to the actual W(r) entries, including all first/second chain-rule terms through shared scaling parameters. Regularization is defined in physical coefficient/function space, not on arbitrary weight-normalization coordinates. Do not silently assume the old factorized parameter penalty or optimization trajectory is unchanged. Retain gate-specific regularization. Document any reduction/normalization convention over matrix entries.

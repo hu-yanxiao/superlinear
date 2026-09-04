@@ -8,6 +8,7 @@
 #include "../src/common/multidimensional_arrays.h"
 #include <map>
 #include <random>
+#include <cstdint>
 #ifndef MLIP_MTPR_H
 #define MLIP_MTPR_H
 
@@ -1140,6 +1141,21 @@ public:
 		void RandomizeTwoLayerGateRadialMixingCoeffs(
 			std::mt19937_64& generator, double scale);
 		void SyncTwoLayerGateRadialMixingCoeffsFromRegression();
+	// Explicit initialization-only APIs; never called by same/default/resume.
+	// Indexed, zero-mean random directions have variance 1/(K*B), independent
+	// of the total O. Common (l,o,k,b) entries are identical across O widths.
+	void InitializePureWDirections(std::uint64_t seed);
+	// Accumulate site-weighted sum_m A[o,l,m]^2/(2*l+1), in [l*O+o] order.
+	// Empty sums are initialized; existing sums/count are added transactionally.
+	// Uses physical gate/outer primitives, not product scalars or fitted heads.
+	// Leaves cfg E/F/S and all physical parameters unchanged; invalidates scratch
+	// inference caches. MPI reduction, RMS floor/clamp policy belong to caller.
+	void AccumulatePureWOuterBlockSecondMoments(
+		const Configuration& cfg, std::vector<double>& sums, std::uint64_t& site_count);
+	// Scale every (k,b) coefficient of each [l*O+o] block by its positive finite
+	// factor. All m components share the factor. Invalid/overflowing updates
+	// are rejected before any coefficient is changed.
+	void ApplyPureWOutputScales(const std::vector<double>& factors);
 
 	int CoeffCount() //!< number of coefficients
 	{

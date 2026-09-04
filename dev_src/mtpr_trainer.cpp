@@ -12,6 +12,7 @@
 #include "optimizer_accepted_state.h"
 #include "optimizer_checkpoint.h"
 #include "diagonal_coordinate_scaling.h"
+#include "efs_head_coordinate_scaling.h"
 #include "radial_weight_norm.h"
 
 #ifdef ALGLIB
@@ -1703,8 +1704,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
 	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
+	const bool use_exact_head_coordinates =
+		bfgs_coordinate_normalization == "efs-head";
 	const bool use_bfgs_coordinate_normalization =
-		bfgs_coordinate_normalization == "efs-gn";
+		bfgs_coordinate_normalization == "efs-gn" || use_exact_head_coordinates;
 	const std::string optimizer_log_name = use_lbfgs_optimizer ? "L-BFGS" : "BFGS";
 	if (!use_lbfgs_optimizer && optimizer_kind != "bfgs")
 		ERROR("MTPR_trainer::Train(): unknown optimizer " + optimizer_kind);
@@ -2044,6 +2047,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			block.name = name;
 			for (int local = 0; local < count; ++local) {
 				const int full_idx = begin + local;
+				// efs-head is deliberately a readout-only coordinate chart.
+				// In particular, do not reinterpret any radial weight-norm row.
+				if (use_exact_head_coordinates && name != "scalar-head")
+					continue;
 				if (full_to_active_index[full_idx] < 0
 				    || radial_weight_norm_role[full_idx] >= 0)
 					continue;
@@ -2430,6 +2437,27 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		const std::vector<double> linear_coeffs_reference = p_mlmtpr->linear_coeffs;
 		const std::vector<double> linear_mults_reference = p_mlmtpr->linear_mults;
 		const std::vector<double> max_linear_reference = p_mlmtpr->max_linear;
+		double exact_head_center_factor = 1.0;
+		if (use_exact_head_coordinates) {
+			// The residual model overrides the stored center prefactors inside
+			// its two-layer evaluation, so these component columns do not apply.
+			if (p_mlmtpr->TwoLayerResidualEnabled())
+				ERROR("efs-head does not support residual two-layer heads; use efs-gn for this checkpoint");
+			// CalcEFSComponents supplies the same unscaled columns used by
+			// TrainLinear. A common center prefactor and linear_mults convert
+			// these to derivatives of stored scalar-head coefficients exactly.
+			// Unequal center factors need species-resolved component columns;
+			// refuse that case instead of silently estimating a wrong metric.
+			if (p_mlmtpr->species_count <= 0
+			    || static_cast<int>(linear_coeffs_reference.size())
+			           < p_mlmtpr->species_count)
+				ERROR("efs-head requires initialized center linear prefactors");
+			exact_head_center_factor = linear_coeffs_reference[0];
+			for (int type = 0; type < p_mlmtpr->species_count; ++type)
+				if (!std::isfinite(linear_coeffs_reference[type])
+				    || linear_coeffs_reference[type] != exact_head_center_factor)
+					ERROR("efs-head requires equal center linear prefactors; use efs-gn for a general checkpoint");
+		}
 		std::vector<int> selected_full_indices;
 		for (const CoordinateNormalizationBlock& block :
 		     coordinate_normalization_blocks)
@@ -2493,6 +2521,63 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			} else if (weighting == "molecules") {
 				energy_weight *= original.size();
 				stress_weight *= original.size();
+			}
+
+			if (use_exact_head_coordinates) {
+				const bool need_forces = wgt_eqtn_forces != 0.0 && original.has_forces();
+				const bool need_stress = stress_weight != 0.0 && original.has_stresses();
+				Configuration component_cfg = original;
+				if (cfg_neighborhoods != nullptr)
+					p_mlmtpr->CalcEFSComponents(
+						component_cfg, *cfg_neighborhoods, need_forces, need_stress);
+				else
+					p_mlmtpr->CalcEFSComponents(component_cfg, need_forces, need_stress);
+				const int scalar_begin =
+					p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
+				for (std::size_t selected = 0;
+				     selected < selected_full_indices.size(); ++selected) {
+					const int q = selected_full_indices[selected] - scalar_begin;
+					if (q < 0 || q >= p_mlmtpr->alpha_scalar_moments)
+						ERROR("efs-head selected a non-scalar-head coordinate");
+					const int column = p_mlmtpr->species_count + q;
+					const double mult = exact_head_center_factor
+						* (q < static_cast<int>(linear_mults_reference.size())
+						       ? linear_mults_reference[q] : 1.0);
+					double diagonal_value = 0.0;
+					auto accumulate = [&](double component, double curvature) {
+						const double response = component * mult
+							* sqrt_curvature(curvature, "exact scalar-head");
+						if (!std::isfinite(response))
+							ERROR("efs-head encountered a non-finite component response");
+						diagonal_value += response * response;
+					};
+					if (energy_weight != 0.0 && original.has_energy())
+						accumulate(p_mlmtpr->energy_cmpnts[column],
+							2.0 * energy_weight * force_normalization / original.size());
+					if (need_forces) {
+						for (int atom = 0; atom < original.size(); ++atom) {
+							double force_weight = wgt_rel_forces <= 0.0
+								? wgt_eqtn_forces
+								: wgt_eqtn_forces * wgt_rel_forces
+									/ (original.force(atom).NormSq() + wgt_rel_forces);
+							if (weighting == "structures")
+								force_weight /= original.size();
+							for (int component = 0; component < 3; ++component)
+								accumulate(p_mlmtpr->forces_cmpnts(atom, column, component),
+									force_weight * force_normalization
+									* ForceResidualCurvature(
+										evaluated.force(atom, component) - original.force(atom, component),
+										force_loss_kind, force_log_cosh_scale));
+						}
+					}
+					if (need_stress)
+						for (int a = 0; a < 3; ++a)
+							for (int b = 0; b < 3; ++b)
+								accumulate(p_mlmtpr->stress_cmpnts[column][a][b],
+									2.0 * stress_weight / original.size());
+					selected_diagonal_local[selected] += diagonal_value;
+				}
+				continue;
 			}
 
 			for (int probe = 0; probe < bfgs_coordinate_probes; ++probe) {
@@ -2751,16 +2836,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			int floored_count = 0;
 			int identity_count = 0;
 			const double block_floor = bfgs_coordinate_floor * median;
-			const double reference_curvature =
-				median > 0.0 ? std::min(median, 1.0) : 1.0;
+			const double reference_curvature = use_exact_head_coordinates
+				? 1.0 : (median > 0.0 ? std::min(median, 1.0) : 1.0);
 			for (int full_idx : block.full_indices) {
 				const double raw = diagonal[full_idx];
 				raw_min = std::min(raw_min, raw);
 				raw_max = std::max(raw_max, raw);
 				if (median > 0.0 && raw < block_floor)
 					++floored_count;
-				double scale =
-					sus2::DiagonalCoordinateScaling::ScaleFromCurvature(
+				double scale = use_exact_head_coordinates
+					? sus2::ExactHeadCoordinateScaling::ScaleFromCurvature(
+						raw, median, bfgs_coordinate_floor)
+					: sus2::DiagonalCoordinateScaling::ScaleFromCurvature(
 						raw, median, bfgs_coordinate_floor);
 				if (median == 0.0
 				    || (raw == 0.0 && bfgs_coordinate_floor == 0.0))
@@ -2803,8 +2890,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (prank == 0) {
 			std::cout << "[" << CurrentTimestamp() << "] "
 			          << "BFGS coordinate normalization initialized"
-			          << " mode=efs-gn"
-			          << " probes=" << bfgs_coordinate_probes
+			          << " mode=" << bfgs_coordinate_normalization
+			          << " probes=" << (use_exact_head_coordinates ? 0 : bfgs_coordinate_probes)
 			          << " selected_count=" << selected_full_indices.size()
 			          << " floor=" << bfgs_coordinate_floor
 			          << " seconds=" << build_seconds

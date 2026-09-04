@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "mtpr.h"
@@ -2980,6 +2981,81 @@ void MLMTPR::AccumulateTwoLayerGateRadialMixingForwardEdge(
 					+= outer_rank[a] * y;
 		}
 	}
+}
+
+void MLMTPR::AccumulatePureWOuterBlockSecondMoments(
+	const Configuration& cfg, std::vector<double>& sums, std::uint64_t& site_count)
+{
+	if (!OuterUsesPureRadialMatrix())
+		ERROR("Outer block RMS statistics require a pure distance-matrix model");
+	ValidateOuterModeConfiguration();
+	const size_t blocks = static_cast<size_t>(sh_l_max_ + 1) * outer_k_rank_;
+	if (!sums.empty() && sums.size() != blocks)
+		ERROR("Pure W RMS accumulator must have (l_max+1)*outer_rank entries");
+	for (double value : sums)
+		if (!std::isfinite(value) || value < 0.0)
+			ERROR("Pure W RMS accumulator must be non-negative and finite");
+	if (site_count > std::numeric_limits<std::uint64_t>::max()
+	                   - static_cast<std::uint64_t>(cfg.size()))
+		ERROR("Pure W RMS site count overflow");
+	for (int atom = 0; atom < cfg.size(); ++atom) {
+		if (cfg.type(atom) < 0 || cfg.type(atom) >= species_count)
+			ERROR("Pure W RMS configuration contains an unsupported atom type");
+		for (int axis = 0; axis < 3; ++axis)
+			if (!std::isfinite(cfg.pos(atom)[axis]))
+				ERROR("Pure W RMS configuration contains non-finite coordinates");
+	}
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+			if (!std::isfinite(cfg.lattice[i][j]))
+				ERROR("Pure W RMS configuration contains a non-finite lattice");
+	std::vector<long double> added(blocks, 0.0L);
+	// PrepareTwoLayerGateValues has a mutable legacy signature. A private
+	// copy prevents the initialization diagnostic from changing input E/F/S.
+	Configuration work_cfg(cfg);
+	Neighborhoods neighborhoods(work_cfg, p_RadialBasis->max_dist);
+	const auto clear_transient_state = [this]() {
+		active_two_layer_gate_values_ = nullptr;
+		active_two_layer_gate_adjoints_ = nullptr;
+		active_second_layer_gate_values_ = nullptr;
+		active_second_layer_gate_adjoints_ = nullptr;
+		ClearTwoLayerEdgePrimitiveCache();
+	};
+	try {
+		PrepareEvalCaches();
+		BuildTwoLayerEdgePrimitiveCache(neighborhoods, false, false);
+		PrepareTwoLayerGateValues(work_cfg, neighborhoods);
+		active_two_layer_gate_values_ = &two_layer_gate_values_;
+		active_two_layer_gate_adjoints_ = nullptr;
+		for (int atom = 0; atom < cfg.size(); ++atom) {
+			active_two_layer_edge_cache_atom_index_ = atom;
+			CalcSHMomentValuesOnly(neighborhoods[atom]);
+			for (int l = 0; l <= sh_l_max_; ++l)
+				for (int o = 0; o < outer_k_rank_; ++o) {
+					long double square_norm = 0.0L;
+					for (int m = -l; m <= l; ++m) {
+						const double value = moment_vals[OuterKRank1OuterBasicIndex(o, l, m)];
+						if (!std::isfinite(value))
+							ERROR("Pure W RMS statistics encountered a non-finite outer primitive");
+						square_norm += static_cast<long double>(value) * value;
+					}
+					added[static_cast<size_t>(l) * outer_k_rank_ + o] += square_norm / (2 * l + 1);
+				}
+		}
+		clear_transient_state();
+	} catch (...) {
+		clear_transient_state();
+		throw;
+	}
+	std::vector<double> updated(blocks, 0.0);
+	for (size_t block = 0; block < blocks; ++block) {
+		const long double value = added[block] + (sums.empty() ? 0.0L : sums[block]);
+		if (!std::isfinite(value) || value > std::numeric_limits<double>::max())
+			ERROR("Pure W RMS second-moment accumulation overflow");
+		updated[block] = static_cast<double>(value);
+	}
+	sums.swap(updated);
+	site_count += static_cast<std::uint64_t>(cfg.size());
 }
 
 void MLMTPR::CalcSHMomentValuesOnly(const Neighborhood& nbh)

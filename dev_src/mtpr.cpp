@@ -3434,6 +3434,90 @@ void MLMTPR::SyncTwoLayerGateRadialMixingCoeffsFromRegression()
 		regression_coeffs.begin() + offset + count);
 }
 
+namespace {
+// SplitMix64's fixed integer mixing, not a standard-library distribution:
+// both the coordinate mapping and floating conversion are specified here.
+// No dimension extent (especially O) enters the indexed random stream.
+std::uint64_t PureWDirectionMix(std::uint64_t value)
+{
+	value += UINT64_C(0x9e3779b97f4a7c15);
+	value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+	value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+	return value ^ (value >> 31);
+}
+
+double PureWIndexedDirection(std::uint64_t seed, int l, int o, int k, int b)
+{
+	std::uint64_t value = PureWDirectionMix(seed ^ UINT64_C(0x575f646972656374));
+	value = PureWDirectionMix(value ^ static_cast<std::uint64_t>(l));
+	value = PureWDirectionMix(value ^ static_cast<std::uint64_t>(o));
+	value = PureWDirectionMix(value ^ static_cast<std::uint64_t>(k));
+	value = PureWDirectionMix(value ^ static_cast<std::uint64_t>(b));
+	// Midpoints of a symmetric 52-bit uniform grid in (-1,1): zero mean
+	// over the random distribution, not an artificial per-row centering.
+	const double uniform = (static_cast<double>(value >> 12) + 0.5)
+		/ 4503599627370496.0;
+	return 2.0 * uniform - 1.0;
+}
+} // namespace
+
+void MLMTPR::InitializePureWDirections(std::uint64_t seed)
+{
+	if (!OuterUsesPureRadialMatrix())
+		ERROR("Indexed W directions require a pure distance-matrix model");
+	ValidateOuterModeConfiguration();
+	const int R = p_RadialBasis->rb_size;
+	const int count = TwoLayerGateRadialMixingCoeffCount();
+	const int offset = TwoLayerGateRadialMixingCoeffOffset();
+	if (R <= 0 || sh_k_max_ <= 0 || count <= 0 || offset < 0
+	    || static_cast<size_t>(offset) + count > regression_coeffs.size())
+		ERROR("Pure W direction initialization found inconsistent coefficient storage");
+	const double amplitude = std::sqrt(3.0 / (static_cast<double>(sh_k_max_) * R));
+	std::vector<double> initialized(count);
+	for (int l = 0; l <= sh_l_max_; ++l)
+		for (int o = 0; o < outer_k_rank_; ++o)
+			for (int k = 0; k < sh_k_max_; ++k)
+				for (int b = 0; b < R; ++b) {
+					const int index = TwoLayerGateRadialMixingCoeffIndex(l, o, k, b);
+					initialized[index - offset] = amplitude * PureWIndexedDirection(seed, l, o, k, b);
+				}
+	std::copy(initialized.begin(), initialized.end(), regression_coeffs.begin() + offset);
+	two_layer_gate_radial_mixing_coeffs_.swap(initialized);
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
+void MLMTPR::ApplyPureWOutputScales(const std::vector<double>& factors)
+{
+	if (!OuterUsesPureRadialMatrix())
+		ERROR("W output scaling requires a pure distance-matrix model");
+	ValidateOuterModeConfiguration();
+	const size_t blocks = static_cast<size_t>(sh_l_max_ + 1) * outer_k_rank_;
+	if (factors.size() != blocks)
+		ERROR("Pure W output scale count must equal (l_max+1)*outer_rank");
+	for (double factor : factors)
+		if (!std::isfinite(factor) || factor <= 0.0)
+			ERROR("Pure W output scales must be positive and finite");
+	const int count = TwoLayerGateRadialMixingCoeffCount();
+	const int offset = TwoLayerGateRadialMixingCoeffOffset();
+	if (offset < 0 || count <= 0
+	    || static_cast<size_t>(offset) + count > regression_coeffs.size())
+		ERROR("Pure W output scaling found inconsistent coefficient storage");
+	std::vector<double> scaled(count);
+	for (int l = 0; l <= sh_l_max_; ++l)
+		for (int o = 0; o < outer_k_rank_; ++o)
+			for (int k = 0; k < sh_k_max_; ++k)
+				for (int b = 0; b < p_RadialBasis->rb_size; ++b) {
+					const int index = TwoLayerGateRadialMixingCoeffIndex(l, o, k, b);
+					const double value = regression_coeffs[index] * factors[static_cast<size_t>(l) * outer_k_rank_ + o];
+					if (!std::isfinite(regression_coeffs[index]) || !std::isfinite(value))
+						ERROR("Pure W output scaling would produce a non-finite coefficient");
+					scaled[index - offset] = value;
+				}
+	std::copy(scaled.begin(), scaled.end(), regression_coeffs.begin() + offset);
+	two_layer_gate_radial_mixing_coeffs_.swap(scaled);
+	ClearTwoLayerEdgePrimitiveCache();
+}
+
 void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 {
 	if (OuterKRank1Enabled())
