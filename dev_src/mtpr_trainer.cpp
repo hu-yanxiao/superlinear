@@ -2434,6 +2434,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			ERROR("MTPR_trainer::Train(): BFGS coordinate normalization requires training configurations.");
 		const std::vector<double> physical_coeff_reference(x, x + n);
 		coordinate_physical_reference = physical_coeff_reference;
+		// TrainLinear broadcasts physical coefficients, not this derived cache.
+		// Refresh on every active rank before capturing the center prefactor;
+		// otherwise non-root ranks may still use the incomplete seed's value.
+		if (use_exact_head_coordinates)
+			p_mlmtpr->LinCoeff();
 		const std::vector<double> linear_coeffs_reference = p_mlmtpr->linear_coeffs;
 		const std::vector<double> linear_mults_reference = p_mlmtpr->linear_mults;
 		const std::vector<double> max_linear_reference = p_mlmtpr->max_linear;

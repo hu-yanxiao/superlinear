@@ -56,6 +56,12 @@ An identity BFGS inverse-H in z is an intentional preconditioner, not preservati
 of the previous trajectory. Saved models contain physical coefficients; optimizer
 history is not reused across different coordinate maps.
 
+After a distributed linear fit, physical coefficients are authoritative. Before
+building the head metric, every active rank refreshes its derived linear cache
+from those coefficients. The MPI regression compares one versus two active ranks
+on two distinct configurations, including calibrated W, initial loss, curvature
+diagnostics and the first accepted objective without relaxing tolerances.
+
 `efs-head` currently requires a common species center prefactor, as after
 TrainLinear; it rejects unequal prefactors rather than computing wrong columns.
 Residual two-layer heads are also rejected. Use existing `efs-gn` for general
@@ -96,3 +102,13 @@ No initializer guarantees a global optimum or eliminates feature correlations.
 Validation must cover common prefixes, rotations, physical and coordinate
 derivatives, zero blocks, MPI, reload, unchanged penalties, line-search counts
 and held-out errors before adopting this protocol for formal training.
+
+On an MPI build, the two-active-rank regression is:
+
+```sh
+python3 dev_test/sh_pure_w_mpi_initialization_check.py \
+  bin/mlp-sus2 seed.mtp codex_tests/pure_w_regularization.cfg
+```
+
+Use an incomplete two-species pure-W seed with `Lmax=1`, `K=2`, `O=3`, gate
+rank 2, body order 3 and radial basis size 4. The test launches MPI itself.
