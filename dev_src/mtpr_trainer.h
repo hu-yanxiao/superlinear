@@ -79,6 +79,31 @@ private:
 		                             double predicted_value,
 		                             double& rhs,
 		                             double* active_row) const;
+		struct ScalarHeadQuadratic {
+			std::vector<double> matrix;
+			std::vector<double> rhs;
+			double constant = 0.0;
+			long long global_config_count = 0;
+		};
+		ScalarHeadQuadratic BuildScalarHeadQuadratic(
+			std::vector<Configuration>& training_set,
+			const std::vector<Neighborhoods>* neighborhoods,
+			const std::string& context);
+		void CacheScalarHeadMetric(
+			const ScalarHeadQuadratic& quadratic,
+			const std::vector<Configuration>& training_set);
+		bool LoadCachedScalarHeadMetric(
+			const std::vector<Configuration>& training_set,
+			std::vector<double>& metric);
+		std::vector<double> scalar_head_metric_cache_;
+		std::vector<double> scalar_head_metric_reference_;
+		std::vector<double> scalar_head_metric_linear_mults_;
+		std::vector<double> scalar_head_metric_objective_signature_;
+		std::string scalar_head_metric_weighting_;
+		const std::vector<Configuration>* scalar_head_metric_training_set_ = nullptr;
+		std::size_t scalar_head_metric_local_config_count_ = 0;
+		int scalar_head_metric_force_loss_kind_ = -1;
+		int scalar_head_metric_cache_count_ = 0;
 #ifdef MLIP_MPI
 	MPI_Comm train_comm_ = MPI_COMM_WORLD;
 	bool train_comm_owned_ = false;
@@ -177,6 +202,14 @@ public:
 					const std::vector<Neighborhoods>* neighborhoods = nullptr,
 					const std::string& context = "",
 					bool readout_residual_only = false);
+	// With every nonlinear coefficient and species-center prefactor fixed,
+	// solve the complete scalar-head quadratic used by the Wolfe f/g path:
+	// weighted E/F/stress, std/stdd and physical scalar-head L2.  This is an
+	// explicit initialization operation; it is never called by legacy paths.
+	void TrainScalarHeadFullQuadratic(
+			std::vector<Configuration>& training_set,
+			const std::vector<Neighborhoods>* neighborhoods = nullptr,
+			const std::string& context = "");
         void random_sample(int prank, std::vector<Configuration>& training_set, int max_step, const std::vector<Neighborhoods>* neighborhoods = nullptr);
 	#ifndef ALGLIB
 		void Train(std::vector<Configuration>& training_set) override; //with Shapeev bfgs

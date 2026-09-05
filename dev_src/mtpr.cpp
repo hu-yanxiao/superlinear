@@ -9857,6 +9857,89 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg)
 	CalcEFSComponents(cfg, neighborhoods);
 }
 
+void MLMTPR::CalcScalarHeadSiteComponents(
+	const Configuration& cfg,
+	const Neighborhoods& neighborhoods,
+	std::vector<double>& out)
+{
+	if (neighborhoods.size() != cfg.size())
+		ERROR("CalcScalarHeadSiteComponents: neighborhood count mismatch");
+	if (TwoLayerResidualEnabled())
+		ERROR("CalcScalarHeadSiteComponents does not support residual two-layer heads");
+	if (alpha_scalar_moments < 0)
+		ERROR("CalcScalarHeadSiteComponents: invalid scalar-head count");
+	if (static_cast<int>(linear_mults.size()) != alpha_scalar_moments)
+		ERROR("CalcScalarHeadSiteComponents: linear multiplier count mismatch");
+
+	out.assign(
+		static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
+	if (cfg.size() == 0 || alpha_scalar_moments == 0)
+		return;
+
+	// Gate preparation has a mutable legacy Configuration signature even though
+	// it only needs configuration metadata here.  Keep the caller's E/F/S and
+	// site-energy fields strictly read-only.
+	Configuration work_cfg(cfg);
+	PrepareEvalCaches();
+
+	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
+	const std::vector<double>* const saved_gate_values =
+		active_two_layer_gate_values_;
+	std::vector<double>* const saved_gate_adjoints =
+		active_two_layer_gate_adjoints_;
+	const std::vector<double>* const saved_second_gate_values =
+		active_second_layer_gate_values_;
+	std::vector<double>* const saved_second_gate_adjoints =
+		active_second_layer_gate_adjoints_;
+	const int saved_edge_atom_index = active_two_layer_edge_cache_atom_index_;
+
+	const auto restore_active_context = [this,
+	                                      saved_gate_values,
+	                                      saved_gate_adjoints,
+	                                      saved_second_gate_values,
+	                                      saved_second_gate_adjoints,
+	                                      saved_edge_atom_index]() {
+		active_two_layer_gate_values_ = saved_gate_values;
+		active_two_layer_gate_adjoints_ = saved_gate_adjoints;
+		active_second_layer_gate_values_ = saved_second_gate_values;
+		active_second_layer_gate_adjoints_ = saved_second_gate_adjoints;
+		active_two_layer_edge_cache_atom_index_ = saved_edge_atom_index;
+	};
+
+	try {
+		if (use_two_layer_gate) {
+			BuildTwoLayerEdgePrimitiveCache(neighborhoods, false, false);
+			PrepareTwoLayerGateValues(work_cfg, neighborhoods);
+			active_two_layer_gate_values_ = &two_layer_gate_values_;
+			active_two_layer_gate_adjoints_ = nullptr;
+		} else {
+			active_two_layer_gate_values_ = nullptr;
+			active_two_layer_gate_adjoints_ = nullptr;
+			active_two_layer_edge_cache_atom_index_ = -1;
+		}
+
+		for (int ind = 0; ind < cfg.size(); ++ind) {
+			const Neighborhood& nbh = neighborhoods[ind];
+			if (nbh.my_type < 0 || nbh.my_type >= species_count)
+				throw MlipException("Too few species count in the MTP potential!");
+			if (use_two_layer_gate)
+				active_two_layer_edge_cache_atom_index_ = ind;
+			CalcBasisFuncs(nbh, basis_vals);
+			const double center_linear = linear_coeffs[nbh.my_type];
+			double* const atom_out =
+				out.data() + static_cast<size_t>(ind) * alpha_scalar_moments;
+			for (int q = 0; q < alpha_scalar_moments; ++q)
+				atom_out[q] = center_linear
+				            * linear_mults[q]
+				            * basis_vals[1 + q];
+		}
+		restore_active_context();
+	} catch (...) {
+		restore_active_context();
+		throw;
+	}
+}
+
 void MLMTPR::CalcEFSComponents(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
 	CalcEFSComponents(cfg, neighborhoods, true, true);

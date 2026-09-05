@@ -725,6 +725,13 @@ public:
 	void CalcEComponents(Configuration& cfg,
 	                     const Neighborhoods& neighborhoods,
 	                     bool fixed_center_readout_columns);
+	// Atom-major derivatives of each site's energy with respect to the stored
+	// scalar-head coefficients.  Each entry includes the fixed species-center
+	// factor and linear_mults coordinate factor used by physical evaluation.
+	void CalcScalarHeadSiteComponents(
+		const Configuration& cfg,
+		const Neighborhoods& neighborhoods,
+		std::vector<double>& out);
 		void CalcEFS(Configuration& cfg) override;
 		void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
 		void CalcEnergyAndSiteEnergies(Configuration& cfg) override;

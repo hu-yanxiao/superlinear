@@ -5,6 +5,10 @@ one-gate pure-W seed, not a conversion of a trained model. Defaults and serializ
 physical models remain compatible. Ordinary `--init-params=same` still retains
 supplied parameters; complete checkpoints must not enter the new initializer.
 
+The optional [full-objective head solve and dense fixed coordinates](PURE_W_FULL_HEAD_INITIALIZATION.md)
+extend this protocol with two independent controls. The default remains the
+EFS-only initial head fit plus diagonal `efs-head` coordinates described below.
+
 ## Architecture and sequence
 
 1. Keep the gate, K/L/LK scaling, type factors and global radial scale. Replace only

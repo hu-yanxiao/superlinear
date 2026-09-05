@@ -1777,6 +1777,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (pure_w_initialization != "legacy" && pure_w_initialization != "balanced")
 		ERROR("--pure-w-initialization should be legacy or balanced");
 	const bool balanced_pure_w_init = pure_w_initialization == "balanced";
+	const std::string pure_w_head_solve = opts["pure-w-head-solve"].empty()
+		? "efs" : opts["pure-w-head-solve"];
+	if (pure_w_head_solve != "efs"
+	    && pure_w_head_solve != "full-quadratic")
+		ERROR("--pure-w-head-solve should be efs or full-quadratic");
+	if (pure_w_head_solve != "efs" && !balanced_pure_w_init)
+		ERROR("--pure-w-head-solve=full-quadratic requires --pure-w-initialization=balanced");
 	double pure_w_init_target_rms = 1.0;
 	if (!opts["pure-w-init-target-rms"].empty()) {
 		if (!balanced_pure_w_init)
@@ -1935,8 +1942,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			opts["bfgs-coordinate-normalization"];
 	if (bfgs_coordinate_normalization != "none"
 	    && bfgs_coordinate_normalization != "efs-gn"
-	    && bfgs_coordinate_normalization != "efs-head")
-		ERROR("--bfgs-coordinate-normalization should be none, efs-gn, or efs-head");
+	    && bfgs_coordinate_normalization != "efs-head"
+	    && bfgs_coordinate_normalization != "efs-head-full")
+		ERROR("--bfgs-coordinate-normalization should be none, efs-gn, efs-head, or efs-head-full");
 	if (optimizer_kind != "bfgs"
 	    && bfgs_coordinate_normalization != "none")
 		ERROR("--bfgs-coordinate-normalization requires --optimizer=bfgs");
@@ -2231,6 +2239,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	if (bfgs_coordinate_normalization == "efs-head-full"
+	    && !balanced_pure_w_init)
+		ERROR("--bfgs-coordinate-normalization=efs-head-full requires "
+		      "--pure-w-initialization=balanced");
 	if (balanced_pure_w_init) {
 		if (maxits < 0)
 			ERROR("Balanced pure-W initialization requires --max-iter >= 0");
@@ -2246,6 +2258,17 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("Balanced pure-W initialization currently requires BFGS and weight-norm radial coordinates");
 		if (force_loss_kind != ForceLossKind::L2)
 			ERROR("Balanced pure-W initialization requires --force-loss=l2 for its initial linear head solve");
+		const bool use_full_head_quadratic =
+			pure_w_head_solve == "full-quadratic";
+		const bool use_full_head_chart =
+			bfgs_coordinate_normalization == "efs-head-full";
+		if ((use_full_head_quadratic || use_full_head_chart)
+		    && bfgs_line_search != "wolfe")
+			ERROR("Full scalar-head solve/chart requires Wolfe line search; "
+			      "the historical value-only Armijo path uses a different std denominator");
+		if (use_full_head_quadratic && do_lin)
+			ERROR("--pure-w-head-solve=full-quadratic is incompatible with --do-lin; "
+			      "the periodic legacy solve omits std/stdd and would overwrite the exact head solution");
 		if (do_lin_rescale || fine_tune || two_layer_residual_staged
 		    || two_layer_gate_readout_linear_init || mindist_update)
 			ERROR("Balanced pure-W initialization is incompatible with do-lin-rescale, fine-tune, "
@@ -3159,9 +3182,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			trainer.TrainLinear(prank, training_set, linear_training_neighborhoods_ptr,
 			                    "balanced pure-W initial head solve");
 		trainer.BroadcastCoeffsWorld();
+		if (pure_w_head_solve == "full-quadratic") {
+			if (trainer.TrainRankActive())
+				trainer.TrainScalarHeadFullQuadratic(
+					training_set,
+					linear_training_neighborhoods_ptr,
+					"balanced pure-W full conditional head solve");
+			trainer.BroadcastCoeffsWorld();
+		}
 		if (prank == 0)
 			std::cout << "Pure-W balanced initialization complete; physical global scaling="
 			          << mtpr.scaling
+			          << "; head_solve=" << pure_w_head_solve
 			          << "; no Rescale or 75-step pretraining" << std::endl;
 		save_model_atomically_collective(
 			maxits == 0 ? trained_fnm : "ini.mtp", "balanced pure-W initialized model");

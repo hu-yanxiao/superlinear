@@ -298,6 +298,37 @@ void SolveSLAEGaussian(int n, double* matrix, double* rhs)
 	}
 }
 
+double DenseDot(const std::vector<double>& left,
+	            const std::vector<double>& right)
+{
+	if (left.size() != right.size())
+		ERROR("DenseDot size mismatch");
+	double value = 0.0;
+	for (std::size_t i = 0; i < left.size(); ++i)
+		value += left[i] * right[i];
+	return value;
+}
+
+double ScalarHeadQuadraticValue(const std::vector<double>& matrix,
+	                            const std::vector<double>& rhs,
+	                            double constant,
+	                            const std::vector<double>& head)
+{
+	const int size = static_cast<int>(head.size());
+	if (rhs.size() != head.size()
+	    || matrix.size() != static_cast<std::size_t>(size) * size)
+		ERROR("Scalar-head quadratic size mismatch");
+	double value = constant - 2.0 * DenseDot(rhs, head);
+	for (int row = 0; row < size; ++row) {
+		double matrix_head = 0.0;
+		for (int col = 0; col < size; ++col)
+			matrix_head += matrix[static_cast<std::size_t>(row) * size + col]
+			             * head[col];
+		value += head[row] * matrix_head;
+	}
+	return value;
+}
+
 }
 
 
@@ -1599,6 +1630,508 @@ void MTPR_trainer::TrainLinear(int prank,
 
 }
 
+MTPR_trainer::ScalarHeadQuadratic MTPR_trainer::BuildScalarHeadQuadratic(
+	std::vector<Configuration>& training_set,
+	const std::vector<Neighborhoods>* neighborhoods,
+	const std::string& context)
+{
+	if (p_mlmtpr == nullptr || !p_mlmtpr->OuterUsesPureRadialMatrix())
+		ERROR("Full scalar-head quadratic requires a pure-W channelwise model");
+	if (p_mlmtpr->TwoLayerResidualEnabled())
+		ERROR("Full scalar-head quadratic does not support residual two-layer heads");
+	if (GuardCompressionEnabled())
+		ERROR("Full scalar-head quadratic does not include compression-guard rows");
+	if (force_loss_kind != ForceLossKind::L2)
+		ERROR("Full scalar-head quadratic requires L2 force loss");
+	if (!std::isfinite(std_scaling) || std_scaling < 0.0
+	    || !std::isfinite(stdd_scaling) || stdd_scaling < 0.0)
+		ERROR("Full scalar-head quadratic requires finite non-negative std/stdd weights");
+	if (!std::isfinite(scalar_head_l2_regularization)
+	    || scalar_head_l2_regularization < 0.0)
+		ERROR("Full scalar-head quadratic requires finite non-negative physical head L2");
+	if (neighborhoods != nullptr && neighborhoods->size() != training_set.size())
+		ERROR("Full scalar-head quadratic neighborhood count mismatch");
+
+	const int head_count = p_mlmtpr->alpha_scalar_moments;
+	if (head_count <= 0)
+		ERROR("Full scalar-head quadratic found no scalar heads");
+	const int linear_begin = p_mlmtpr->LinearCoeffOffset();
+	const int head_begin = linear_begin + p_mlmtpr->species_count;
+	if (head_begin < 0 || head_begin + head_count > p_mlmtpr->CoeffCount())
+		ERROR("Full scalar-head quadratic coefficient layout is invalid");
+
+#ifdef MLIP_MPI
+	if (!train_rank_active_)
+		ERROR("Full scalar-head quadratic called on an inactive training rank");
+	MPI_Bcast(
+		p_mlmtpr->Coeff(), p_mlmtpr->CoeffCount(), MPI_DOUBLE, 0, train_comm_);
+#endif
+	p_mlmtpr->LinCoeff();
+	if (static_cast<int>(p_mlmtpr->linear_coeffs.size())
+	    < p_mlmtpr->species_count + head_count
+	    || static_cast<int>(p_mlmtpr->linear_mults.size()) < head_count)
+		ERROR("Full scalar-head quadratic linear coefficient cache is incomplete");
+	const double common_center = p_mlmtpr->linear_coeffs[0];
+	if (!std::isfinite(common_center))
+		ERROR("Full scalar-head quadratic encountered a non-finite center prefactor");
+	for (int type = 1; type < p_mlmtpr->species_count; ++type)
+		if (p_mlmtpr->linear_coeffs[type] != common_center)
+			ERROR("Full scalar-head quadratic currently requires equal species-center prefactors; "
+			      "unequal centers need species-resolved E/F/stress component columns");
+
+	std::vector<double> current_head(head_count, 0.0);
+	std::vector<double> head_column_scale(head_count, 0.0);
+	for (int q = 0; q < head_count; ++q) {
+		current_head[q] = p_mlmtpr->Coeff()[head_begin + q];
+		head_column_scale[q] = common_center * p_mlmtpr->linear_mults[q];
+		if (!std::isfinite(current_head[q])
+		    || !std::isfinite(head_column_scale[q])
+		    || head_column_scale[q] == 0.0)
+			ERROR("Full scalar-head quadratic encountered an invalid physical head scale");
+	}
+
+	ScalarHeadQuadratic result;
+	result.matrix.assign(
+		static_cast<std::size_t>(head_count) * head_count, 0.0);
+	result.rhs.assign(head_count, 0.0);
+	std::vector<double> row(head_count, 0.0);
+	auto add_absolute_row = [&](const std::vector<double>& physical_row,
+	                            double reference,
+	                            double prediction,
+	                            double weight) {
+		if (weight == 0.0)
+			return;
+		if (!(weight > 0.0) || !std::isfinite(weight)
+		    || !std::isfinite(reference) || !std::isfinite(prediction))
+			ERROR("Full scalar-head quadratic encountered an invalid weighted row");
+		const double fixed_prediction = prediction
+			- DenseDot(physical_row, current_head);
+		const double adjusted_target = reference - fixed_prediction;
+		if (!std::isfinite(adjusted_target))
+			ERROR("Full scalar-head quadratic encountered a non-finite adjusted target");
+		cblas_dsyr(CBLAS_ORDER::CblasRowMajor,
+		           CBLAS_UPLO::CblasUpper,
+		           head_count,
+		           weight,
+		           physical_row.data(),
+		           1,
+		           result.matrix.data(),
+		           head_count);
+		cblas_daxpy(head_count,
+		             weight * adjusted_target,
+		             physical_row.data(),
+		             1,
+		             result.rhs.data(),
+		             1);
+		result.constant += weight * adjusted_target * adjusted_target;
+	};
+
+	// AddRegularization() applies scalar-head L2 once per configuration in the
+	// training partition, including a (pathological but supported) empty one.
+	// Match that normalization even though empty configurations add no data row.
+	long long local_config_count =
+		static_cast<long long>(training_set.size());
+	for (std::size_t cfg_index = 0; cfg_index < training_set.size(); ++cfg_index) {
+		const Configuration& original = training_set[cfg_index];
+		if (original.size() == 0)
+			continue;
+		const Neighborhoods* cfg_neighborhoods = neighborhoods == nullptr
+			? nullptr : &(*neighborhoods)[cfg_index];
+		Configuration evaluated = original;
+		EvaluateTrainingConfiguration(
+			original, evaluated, cfg_neighborhoods, true);
+
+		const bool need_forces =
+			wgt_eqtn_forces != 0.0 && original.has_forces();
+		const bool need_stress =
+			wgt_eqtn_stress != 0.0 && original.has_stresses();
+		Configuration component_cfg = original;
+		if (cfg_neighborhoods != nullptr)
+			p_mlmtpr->CalcEFSComponents(
+				component_cfg, *cfg_neighborhoods, need_forces, need_stress);
+		else
+			p_mlmtpr->CalcEFSComponents(
+				component_cfg, need_forces, need_stress);
+
+		double average_force_sq = 0.0;
+		if (original.has_forces())
+			for (int atom = 0; atom < original.size(); ++atom)
+				average_force_sq += original.force(atom).NormSq()
+					/ static_cast<double>(original.size());
+		const double force_normalization =
+			0.1 / (0.1 + norm_by_forces * average_force_sq);
+		double energy_weight = wgt_eqtn_energy;
+		double stress_weight = wgt_eqtn_stress;
+		if (weighting == "structures") {
+			energy_weight /= original.size();
+			stress_weight /= original.size();
+		} else if (weighting == "molecules") {
+			energy_weight *= original.size();
+			stress_weight *= original.size();
+		}
+
+		if (energy_weight != 0.0 && original.has_energy()) {
+			for (int q = 0; q < head_count; ++q)
+				row[q] = p_mlmtpr->energy_cmpnts[p_mlmtpr->species_count + q]
+				       * head_column_scale[q];
+			add_absolute_row(
+				row,
+				original.energy,
+				evaluated.energy,
+				energy_weight * force_normalization / original.size());
+		}
+		if (need_forces) {
+			for (int atom = 0; atom < original.size(); ++atom) {
+				double force_weight = wgt_rel_forces <= 0.0
+					? wgt_eqtn_forces
+					: wgt_eqtn_forces * wgt_rel_forces
+						/ (original.force(atom).NormSq() + wgt_rel_forces);
+				if (weighting == "structures")
+					force_weight /= original.size();
+				force_weight *= force_normalization;
+				for (int component = 0; component < 3; ++component) {
+					for (int q = 0; q < head_count; ++q)
+						row[q] = p_mlmtpr->forces_cmpnts(
+							atom, p_mlmtpr->species_count + q, component)
+							* head_column_scale[q];
+					add_absolute_row(
+						row,
+						original.force(atom, component),
+						evaluated.force(atom, component),
+						force_weight);
+				}
+			}
+		}
+		if (need_stress) {
+			for (int a = 0; a < 3; ++a)
+				for (int b = 0; b < 3; ++b) {
+					for (int q = 0; q < head_count; ++q)
+						row[q] = p_mlmtpr->stress_cmpnts[
+							p_mlmtpr->species_count + q][a][b]
+							* head_column_scale[q];
+					add_absolute_row(
+						row,
+						original.stresses[a][b],
+						evaluated.stresses[a][b],
+						stress_weight / original.size());
+				}
+		}
+
+		if (std_scaling != 0.0 || stdd_scaling != 0.0) {
+			if (!original.has_energy())
+				ERROR("Full scalar-head std/stdd quadratic requires reference energies");
+			if (!original.has_forces())
+				ERROR("Full scalar-head std/stdd quadratic requires reference forces; "
+				      "the existing Wolfe objective reads them whenever either term is enabled");
+			std::vector<double> site_components;
+			if (cfg_neighborhoods != nullptr)
+				p_mlmtpr->CalcScalarHeadSiteComponents(
+					original, *cfg_neighborhoods, site_components);
+			else {
+				Neighborhoods local_neighborhoods(original, p_mlmtpr->CutOff());
+				p_mlmtpr->CalcScalarHeadSiteComponents(
+					original, local_neighborhoods, site_components);
+			}
+			if (site_components.size()
+			    != static_cast<std::size_t>(original.size()) * head_count)
+				ERROR("Full scalar-head site-component layout is inconsistent");
+			if (evaluated.cal_se.size() != static_cast<std::size_t>(original.size()))
+				ERROR("Full scalar-head prediction has no site energies");
+
+			const int type_count = p_mlmtpr->species_count;
+			std::vector<int> atoms_by_type(type_count, 0);
+			std::vector<double> mean_prediction(type_count, 0.0);
+			std::vector<double> mean_columns(
+				static_cast<std::size_t>(type_count) * head_count, 0.0);
+			for (int atom = 0; atom < original.size(); ++atom) {
+				const int type = original.type(atom);
+				if (type < 0 || type >= type_count)
+					ERROR("Full scalar-head std quadratic encountered an invalid atom type");
+				++atoms_by_type[type];
+				mean_prediction[type] += evaluated.cal_se[atom];
+				const double* site_row = site_components.data()
+					+ static_cast<std::size_t>(atom) * head_count;
+				for (int q = 0; q < head_count; ++q)
+					mean_columns[static_cast<std::size_t>(type) * head_count + q]
+						+= site_row[q];
+			}
+			for (int type = 0; type < type_count; ++type) {
+				if (atoms_by_type[type] == 0)
+					continue;
+				const double inverse_count = 1.0 / atoms_by_type[type];
+				mean_prediction[type] *= inverse_count;
+				for (int q = 0; q < head_count; ++q)
+					mean_columns[static_cast<std::size_t>(type) * head_count + q]
+						*= inverse_count;
+			}
+
+			if (std_scaling != 0.0) {
+				for (int atom = 0; atom < original.size(); ++atom) {
+					const int type = original.type(atom);
+					const double* site_row = site_components.data()
+						+ static_cast<std::size_t>(atom) * head_count;
+					const double* mean_row = mean_columns.data()
+						+ static_cast<std::size_t>(type) * head_count;
+					for (int q = 0; q < head_count; ++q)
+						row[q] = site_row[q] - mean_row[q];
+					const double prediction =
+						evaluated.cal_se[atom] - mean_prediction[type];
+					const double weight = std_scaling * 200.0
+						/ (static_cast<double>(original.size())
+						   * (200.0 + original.force(atom).NormSq()));
+					add_absolute_row(row, 0.0, prediction, weight);
+				}
+			}
+			if (stdd_scaling != 0.0) {
+				const double reference_mean = original.energy / original.size();
+				for (int type = 0; type < type_count; ++type) {
+					if (atoms_by_type[type] == 0)
+						continue;
+					const double* mean_row = mean_columns.data()
+						+ static_cast<std::size_t>(type) * head_count;
+					std::copy(mean_row, mean_row + head_count, row.begin());
+					add_absolute_row(
+						row, reference_mean, mean_prediction[type], stdd_scaling);
+				}
+			}
+		}
+	}
+
+	std::vector<double> packed_matrix;
+	PackUpperTriangle(result.matrix.data(), head_count, packed_matrix);
+	long long global_config_count = local_config_count;
+#ifdef MLIP_MPI
+	MPI_Allreduce(MPI_IN_PLACE,
+	              packed_matrix.data(),
+	              static_cast<int>(packed_matrix.size()),
+	              MPI_DOUBLE,
+	              MPI_SUM,
+	              train_comm_);
+	MPI_Allreduce(MPI_IN_PLACE,
+	              result.rhs.data(),
+	              head_count,
+	              MPI_DOUBLE,
+	              MPI_SUM,
+	              train_comm_);
+	MPI_Allreduce(MPI_IN_PLACE,
+	              &result.constant,
+	              1,
+	              MPI_DOUBLE,
+	              MPI_SUM,
+	              train_comm_);
+	MPI_Allreduce(MPI_IN_PLACE,
+	              &global_config_count,
+	              1,
+	              MPI_LONG_LONG_INT,
+	              MPI_SUM,
+	              train_comm_);
+#endif
+	if (global_config_count <= 0)
+		ERROR("Full scalar-head quadratic requires a nonempty global training set");
+	UnpackUpperTriangle(packed_matrix, head_count, result.matrix.data());
+	// cblas_dsyr and the packed reduction deliberately accumulate only the
+	// upper triangle.  The dense solver/chart below require an explicitly
+	// symmetric matrix; leaving the lower triangle zero would halve every
+	// off-diagonal in Cholesky and in the conditional-objective check.
+	for (int row_index = 1; row_index < head_count; ++row_index)
+		for (int col_index = 0; col_index < row_index; ++col_index)
+			result.matrix[static_cast<std::size_t>(row_index) * head_count
+			              + col_index] =
+				result.matrix[static_cast<std::size_t>(col_index) * head_count
+				              + row_index];
+	for (int q = 0; q < head_count; ++q) {
+		const double mult = p_mlmtpr->linear_mults[q];
+		const double ridge = static_cast<double>(global_config_count)
+			* scalar_head_l2_regularization
+			* mult * mult / static_cast<double>(head_count);
+		result.matrix[static_cast<std::size_t>(q) * head_count + q] += ridge;
+	}
+	result.global_config_count = global_config_count;
+	for (double value : result.matrix)
+		if (!std::isfinite(value))
+			ERROR("Full scalar-head quadratic matrix contains a non-finite value");
+	for (double value : result.rhs)
+		if (!std::isfinite(value))
+			ERROR("Full scalar-head quadratic rhs contains a non-finite value");
+	if (!std::isfinite(result.constant))
+		ERROR("Full scalar-head quadratic constant is non-finite");
+
+	if (
+#ifdef MLIP_MPI
+		train_rank_ == 0
+#else
+		true
+#endif
+	) {
+		std::cout << "[" << CurrentTimestamp() << "] scalar-head physical quadratic built"
+		          << " ctx=" << (context.empty() ? "full" : context)
+		          << " heads=" << head_count
+		          << " cfg_global=" << global_config_count
+		          << " std_weight=" << std_scaling
+		          << " stdd_weight=" << stdd_scaling
+		          << " head_l2=" << scalar_head_l2_regularization
+		          << " std_denominator=200"
+		          << std::endl;
+	}
+	return result;
+}
+
+void MTPR_trainer::CacheScalarHeadMetric(
+	const ScalarHeadQuadratic& quadratic,
+	const std::vector<Configuration>& training_set)
+{
+	const int head_count = p_mlmtpr->alpha_scalar_moments;
+	if (quadratic.global_config_count <= 0
+	    || quadratic.matrix.size()
+	       != static_cast<std::size_t>(head_count) * head_count)
+		ERROR("Cannot cache an invalid scalar-head metric");
+	const double scale = 2.0 / static_cast<double>(quadratic.global_config_count);
+	scalar_head_metric_cache_.resize(quadratic.matrix.size());
+	for (std::size_t i = 0; i < quadratic.matrix.size(); ++i)
+		scalar_head_metric_cache_[i] = scale * quadratic.matrix[i];
+	scalar_head_metric_reference_.assign(
+		p_mlmtpr->Coeff(), p_mlmtpr->Coeff() + p_mlmtpr->CoeffCount());
+	scalar_head_metric_linear_mults_ = p_mlmtpr->linear_mults;
+	scalar_head_metric_objective_signature_.clear();
+	scalar_head_metric_objective_signature_.push_back(wgt_eqtn_energy);
+	scalar_head_metric_objective_signature_.push_back(wgt_eqtn_forces);
+	scalar_head_metric_objective_signature_.push_back(wgt_eqtn_stress);
+	scalar_head_metric_objective_signature_.push_back(wgt_rel_forces);
+	scalar_head_metric_objective_signature_.push_back(
+		static_cast<double>(norm_by_forces));
+	scalar_head_metric_objective_signature_.push_back(std_scaling);
+	scalar_head_metric_objective_signature_.push_back(stdd_scaling);
+	scalar_head_metric_objective_signature_.push_back(
+		scalar_head_l2_regularization);
+	scalar_head_metric_objective_signature_.push_back(force_log_cosh_scale);
+	scalar_head_metric_weighting_ = weighting;
+	scalar_head_metric_training_set_ = &training_set;
+	scalar_head_metric_local_config_count_ = training_set.size();
+	scalar_head_metric_force_loss_kind_ = static_cast<int>(force_loss_kind);
+	scalar_head_metric_cache_count_ = head_count;
+}
+
+bool MTPR_trainer::LoadCachedScalarHeadMetric(
+	const std::vector<Configuration>& training_set,
+	std::vector<double>& metric)
+{
+	const int head_count = p_mlmtpr->alpha_scalar_moments;
+	std::vector<double> objective_signature;
+	objective_signature.push_back(wgt_eqtn_energy);
+	objective_signature.push_back(wgt_eqtn_forces);
+	objective_signature.push_back(wgt_eqtn_stress);
+	objective_signature.push_back(wgt_rel_forces);
+	objective_signature.push_back(static_cast<double>(norm_by_forces));
+	objective_signature.push_back(std_scaling);
+	objective_signature.push_back(stdd_scaling);
+	objective_signature.push_back(scalar_head_l2_regularization);
+	objective_signature.push_back(force_log_cosh_scale);
+	bool valid = true;
+	// The cache is deliberately a one-shot startup handoff from the exact
+	// conditional solve to the immediately following fixed coordinate chart.
+	// It must never be silently reused for another data set or objective.
+	valid = valid
+	    && scalar_head_metric_cache_count_ == head_count
+	    && scalar_head_metric_cache_.size()
+	       == static_cast<std::size_t>(head_count) * head_count
+	    && scalar_head_metric_reference_.size()
+	       == static_cast<std::size_t>(p_mlmtpr->CoeffCount())
+	    && scalar_head_metric_linear_mults_ == p_mlmtpr->linear_mults
+	    && scalar_head_metric_objective_signature_ == objective_signature
+	    && scalar_head_metric_weighting_ == weighting
+	    && scalar_head_metric_training_set_ == &training_set
+	    && scalar_head_metric_local_config_count_ == training_set.size()
+	    && scalar_head_metric_force_loss_kind_
+	       == static_cast<int>(force_loss_kind);
+	const int head_begin =
+		p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
+	for (int i = 0; valid && i < p_mlmtpr->CoeffCount(); ++i) {
+		if (i >= head_begin && i < head_begin + head_count)
+			continue;
+		if (std::memcmp(
+		        &scalar_head_metric_reference_[i],
+		        &p_mlmtpr->Coeff()[i],
+		        sizeof(double)) != 0)
+			valid = false;
+	}
+	if (valid)
+		metric = scalar_head_metric_cache_;
+	// Consume even a mismatched entry so a later call cannot accidentally match
+	// stale state after an intervening objective/data mutation.
+	scalar_head_metric_cache_.clear();
+	scalar_head_metric_reference_.clear();
+	scalar_head_metric_linear_mults_.clear();
+	scalar_head_metric_objective_signature_.clear();
+	scalar_head_metric_weighting_.clear();
+	scalar_head_metric_training_set_ = nullptr;
+	scalar_head_metric_local_config_count_ = 0;
+	scalar_head_metric_force_loss_kind_ = -1;
+	scalar_head_metric_cache_count_ = 0;
+	return valid;
+}
+
+void MTPR_trainer::TrainScalarHeadFullQuadratic(
+	std::vector<Configuration>& training_set,
+	const std::vector<Neighborhoods>* neighborhoods,
+	const std::string& context)
+{
+	ScalarHeadQuadratic quadratic = BuildScalarHeadQuadratic(
+		training_set, neighborhoods, context);
+	const int head_count = p_mlmtpr->alpha_scalar_moments;
+	const int head_begin =
+		p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
+	std::vector<double> before(head_count, 0.0);
+	for (int q = 0; q < head_count; ++q)
+		before[q] = p_mlmtpr->Coeff()[head_begin + q];
+	std::vector<double> solved;
+	int solve_failed = 0;
+#ifdef MLIP_MPI
+	if (train_rank_ == 0) {
+#endif
+		if (!sus2::FullHeadCoordinateScaling::SolvePhysicalPositiveDefinite(
+		        quadratic.matrix, quadratic.rhs, head_count, solved))
+			solve_failed = 1;
+#ifdef MLIP_MPI
+	}
+	MPI_Bcast(&solve_failed, 1, MPI_INT, 0, train_comm_);
+#endif
+	if (solve_failed != 0)
+		ERROR("Full scalar-head physical quadratic is not positive definite; "
+		      "use a positive physical --scalar-head-l2 or inspect rank deficiency");
+#ifdef MLIP_MPI
+	if (train_rank_ != 0)
+		solved.resize(head_count);
+	MPI_Bcast(solved.data(), head_count, MPI_DOUBLE, 0, train_comm_);
+#endif
+	const double before_value = ScalarHeadQuadraticValue(
+		quadratic.matrix, quadratic.rhs, quadratic.constant, before);
+	const double after_value = ScalarHeadQuadraticValue(
+		quadratic.matrix, quadratic.rhs, quadratic.constant, solved);
+	const double tolerance = 1.0e-10 * std::max(1.0, std::abs(before_value));
+	if (!std::isfinite(before_value) || !std::isfinite(after_value)
+	    || after_value > before_value + tolerance)
+		ERROR("Full scalar-head physical solve increased its exact conditional objective");
+	for (int q = 0; q < head_count; ++q)
+		p_mlmtpr->Coeff()[head_begin + q] = solved[q];
+	p_mlmtpr->LinCoeff();
+	CacheScalarHeadMetric(quadratic, training_set);
+	if (
+#ifdef MLIP_MPI
+		train_rank_ == 0
+#else
+		true
+#endif
+	) {
+		std::cout << "[" << CurrentTimestamp() << "] scalar-head full quadratic solve done"
+		          << " ctx=" << (context.empty() ? "full" : context)
+		          << " before=" << std::setprecision(17) << before_value
+		          << " after=" << after_value
+		          << " decrease=" << (before_value - after_value)
+		          << " physical_objective=true"
+		          << std::endl;
+	}
+}
+
 void MTPR_trainer::random_sample(int prank, std::vector<Configuration>& training_set, int max_step, const std::vector<Neighborhoods>* neighborhoods) {
 //	int n_coeffe= p_mlip->CoeffCount();
 //	double* x = p_mlip->Coeff();
@@ -1704,8 +2237,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
 	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
+	const bool use_full_head_coordinates =
+		bfgs_coordinate_normalization == "efs-head-full";
 	const bool use_exact_head_coordinates =
-		bfgs_coordinate_normalization == "efs-head";
+		bfgs_coordinate_normalization == "efs-head"
+		|| use_full_head_coordinates;
 	const bool use_bfgs_coordinate_normalization =
 		bfgs_coordinate_normalization == "efs-gn" || use_exact_head_coordinates;
 	const std::string optimizer_log_name = use_lbfgs_optimizer ? "L-BFGS" : "BFGS";
@@ -1720,6 +2256,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		      + bfgs_coordinate_normalization);
 	if (use_bfgs_coordinate_normalization && use_lbfgs_optimizer)
 		ERROR("MTPR_trainer::Train(): --bfgs-coordinate-normalization requires --optimizer=bfgs");
+	if (use_full_head_coordinates
+	    && (p_mlmtpr == nullptr || !p_mlmtpr->OuterUsesPureRadialMatrix()))
+		ERROR("MTPR_trainer::Train(): efs-head-full requires a pure-W channelwise model");
 	if (bfgs_coordinate_probes <= 0)
 		ERROR("MTPR_trainer::Train(): BFGS coordinate probe count should be positive");
 	if (!std::isfinite(bfgs_coordinate_floor)
@@ -2035,6 +2574,12 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	std::vector<double> coordinate_scale_by_full(n, 1.0);
 	std::vector<double> coordinate_reference_by_full(n, 0.0);
 	std::vector<double> coordinate_physical_reference;
+	std::vector<int> full_head_full_indices;
+	std::vector<int> full_head_active_indices;
+	std::vector<unsigned char> full_head_coordinate_by_full(n, 0);
+	std::vector<double> full_head_reference;
+	std::vector<double> full_head_lower;
+	double full_head_diagonal_shift = 0.0;
 	bool coordinate_normalization_initialized =
 		!use_bfgs_coordinate_normalization;
 	auto add_coordinate_normalization_block =
@@ -2125,6 +2670,26 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		if (coordinate_normalization_blocks.empty())
 			ERROR("MTPR_trainer::Train(): no active parameter block supports BFGS coordinate normalization.");
 	}
+	if (use_full_head_coordinates) {
+		for (const CoordinateNormalizationBlock& block :
+		     coordinate_normalization_blocks) {
+			if (block.name != "scalar-head")
+				continue;
+			full_head_full_indices = block.full_indices;
+			break;
+		}
+		if (static_cast<int>(full_head_full_indices.size())
+		    != p_mlmtpr->alpha_scalar_moments)
+			ERROR("MTPR_trainer::Train(): efs-head-full requires every scalar head to be active");
+		full_head_active_indices.reserve(full_head_full_indices.size());
+		for (int full_idx : full_head_full_indices) {
+			const int active_idx = full_to_active_index[full_idx];
+			if (active_idx < 0 || radial_weight_norm_role[full_idx] >= 0)
+				ERROR("MTPR_trainer::Train(): invalid efs-head-full active-coordinate layout");
+			full_head_active_indices.push_back(active_idx);
+			full_head_coordinate_by_full[full_idx] = 1;
+		}
+	}
 
 	std::vector<double> active_coeffs(opt_n, 0.0);
 	auto full_to_optimizer_value = [&](int full_idx) {
@@ -2164,8 +2729,24 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	auto pack_active_coeffs = [&]() {
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
 			const int full_idx = active_coeff_indices[active_idx];
-			if (radial_weight_norm_role[full_idx] < 0)
+			if (radial_weight_norm_role[full_idx] < 0
+			    && full_head_coordinate_by_full[full_idx] == 0)
 				active_coeffs[active_idx] = full_to_optimizer_value(full_idx);
+		}
+		if (use_full_head_coordinates) {
+			std::vector<double> physical(full_head_full_indices.size(), 0.0);
+			std::vector<double> packed;
+			for (std::size_t q = 0; q < full_head_full_indices.size(); ++q)
+				physical[q] = x[full_head_full_indices[q]];
+			if (!sus2::FullHeadCoordinateScaling::PackCentered(
+			        physical,
+			        full_head_reference,
+			        full_head_lower,
+			        static_cast<int>(physical.size()),
+			        packed))
+				ERROR("MTPR_trainer::Train(): cannot pack efs-head-full coordinates");
+			for (std::size_t q = 0; q < packed.size(); ++q)
+				active_coeffs[full_head_active_indices[q]] = packed[q];
 		}
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
 			if (!sus2::RadialWeightNormChart::PackWithPivot(
@@ -2329,8 +2910,24 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		const double* opt_x = optimizer_data();
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
 			const int full_idx = active_coeff_indices[active_idx];
-			if (radial_weight_norm_role[full_idx] < 0)
+			if (radial_weight_norm_role[full_idx] < 0
+			    && full_head_coordinate_by_full[full_idx] == 0)
 				x[full_idx] = optimizer_to_full_value(full_idx, opt_x[active_idx]);
+		}
+		if (use_full_head_coordinates) {
+			std::vector<double> packed(full_head_active_indices.size(), 0.0);
+			std::vector<double> physical;
+			for (std::size_t q = 0; q < packed.size(); ++q)
+				packed[q] = opt_x[full_head_active_indices[q]];
+			if (!sus2::FullHeadCoordinateScaling::UnpackCentered(
+			        packed,
+			        full_head_reference,
+			        full_head_lower,
+			        static_cast<int>(packed.size()),
+			        physical))
+				ERROR("MTPR_trainer::Train(): cannot unpack efs-head-full coordinates");
+			for (std::size_t q = 0; q < physical.size(); ++q)
+				x[full_head_full_indices[q]] = physical[q];
 		}
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
 			if (!sus2::RadialWeightNormChart::UnpackWithPivot(
@@ -2410,9 +3007,26 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	auto pack_optimizer_gradient = [&]() {
 		for (int active_idx = 0; active_idx < opt_n; ++active_idx) {
 			const int full_idx = active_coeff_indices[active_idx];
-			if (radial_weight_norm_role[full_idx] < 0)
+			if (radial_weight_norm_role[full_idx] < 0
+			    && full_head_coordinate_by_full[full_idx] == 0)
 				optimizer_gradient_cache[active_idx] =
 					physical_coordinate_gradient_value(full_idx);
+		}
+		if (use_full_head_coordinates) {
+			std::vector<double> physical_gradient(
+				full_head_full_indices.size(), 0.0);
+			std::vector<double> packed_gradient;
+			for (std::size_t q = 0; q < full_head_full_indices.size(); ++q)
+				physical_gradient[q] = loss_grad_[full_head_full_indices[q]];
+			if (!sus2::FullHeadCoordinateScaling::PullbackGradient(
+			        physical_gradient,
+			        full_head_lower,
+			        static_cast<int>(physical_gradient.size()),
+			        packed_gradient))
+				ERROR("MTPR_trainer::Train(): cannot pull back efs-head-full gradient");
+			for (std::size_t q = 0; q < packed_gradient.size(); ++q)
+				optimizer_gradient_cache[full_head_active_indices[q]] =
+					packed_gradient[q];
 		}
 		const double* opt_x = optimizer_data();
 		for (const RadialWeightNormRow& row : radial_weight_norm_rows) {
@@ -2479,6 +3093,146 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 #else
 		build_start = static_cast<double>(std::clock()) / CLOCKS_PER_SEC;
 #endif
+		if (use_full_head_coordinates) {
+			std::vector<double> metric;
+			const bool local_cache_hit = LoadCachedScalarHeadMetric(
+				training_set, metric);
+			bool cache_hit = local_cache_hit;
+#ifdef MLIP_MPI
+			int cache_hit_flag = local_cache_hit ? 1 : 0;
+			MPI_Allreduce(
+				MPI_IN_PLACE,
+				&cache_hit_flag,
+				1,
+				MPI_INT,
+				MPI_MIN,
+				train_comm);
+			cache_hit = cache_hit_flag != 0;
+#endif
+			if (!cache_hit) {
+				const std::vector<Neighborhoods>* metric_neighborhoods =
+					cache_training_neighborhoods ? &training_neighborhoods : nullptr;
+				ScalarHeadQuadratic quadratic = BuildScalarHeadQuadratic(
+					training_set,
+					metric_neighborhoods,
+					"efs-head-full metric");
+				CacheScalarHeadMetric(quadratic, training_set);
+				bool rebuilt_cache_loaded = LoadCachedScalarHeadMetric(
+					training_set, metric);
+#ifdef MLIP_MPI
+				int rebuilt_cache_flag = rebuilt_cache_loaded ? 1 : 0;
+				MPI_Allreduce(
+					MPI_IN_PLACE,
+					&rebuilt_cache_flag,
+					1,
+					MPI_INT,
+					MPI_MIN,
+					train_comm);
+				rebuilt_cache_loaded = rebuilt_cache_flag != 0;
+#endif
+				if (!rebuilt_cache_loaded)
+					ERROR("MTPR_trainer::Train(): cannot recover the freshly built efs-head-full metric");
+			}
+
+			const int head_count =
+				static_cast<int>(full_head_full_indices.size());
+			full_head_reference.assign(head_count, 0.0);
+			for (int q = 0; q < head_count; ++q)
+				full_head_reference[q] = x[full_head_full_indices[q]];
+			int factor_failed = 0;
+#ifdef MLIP_MPI
+			if (prank == 0) {
+#endif
+				if (!sus2::FullHeadCoordinateScaling::FactorMetric(
+				        metric,
+				        head_count,
+				        bfgs_coordinate_floor,
+				        full_head_lower,
+				        full_head_diagonal_shift))
+					factor_failed = 1;
+#ifdef MLIP_MPI
+			}
+			MPI_Bcast(&factor_failed, 1, MPI_INT, 0, train_comm);
+			if (factor_failed == 0) {
+				if (prank != 0)
+					full_head_lower.resize(
+						static_cast<std::size_t>(head_count) * head_count);
+				MPI_Bcast(
+					full_head_lower.data(),
+					head_count * head_count,
+					MPI_DOUBLE,
+					0,
+					train_comm);
+				MPI_Bcast(
+					&full_head_diagonal_shift,
+					1,
+					MPI_DOUBLE,
+					0,
+					train_comm);
+				MPI_Bcast(
+					full_head_reference.data(),
+					head_count,
+					MPI_DOUBLE,
+					0,
+					train_comm);
+			}
+#endif
+			if (factor_failed != 0)
+				ERROR("MTPR_trainer::Train(): efs-head-full metric factorization failed");
+
+			// Metric construction may refresh derived model scratch, but it must
+			// not alter either the physical model or its persistent scaling state.
+			if (p_mlmtpr->linear_mults != linear_mults_reference)
+				ERROR("MTPR_trainer::Train(): efs-head-full metric changed linear multipliers");
+			p_mlmtpr->max_linear = max_linear_reference;
+			p_mlmtpr->linear_coeffs = linear_coeffs_reference;
+			for (int full_idx = 0; full_idx < n; ++full_idx) {
+				if (std::memcmp(
+				        &x[full_idx],
+				        &physical_coeff_reference[full_idx],
+				        sizeof(double)) != 0)
+					ERROR("MTPR_trainer::Train(): efs-head-full metric changed physical coefficient "
+					      + std::to_string(full_idx));
+			}
+			for (int q = 0; q < head_count; ++q)
+				coordinate_reference_by_full[full_head_full_indices[q]] =
+					full_head_reference[q];
+			coordinate_normalization_initialized = true;
+
+			double build_seconds = 0.0;
+#ifdef MLIP_MPI
+			build_seconds = MPI_Wtime() - build_start;
+#else
+			build_seconds =
+				static_cast<double>(std::clock()) / CLOCKS_PER_SEC - build_start;
+#endif
+			if (prank == 0) {
+				double metric_diag_min = std::numeric_limits<double>::infinity();
+				double metric_diag_max = 0.0;
+				for (int q = 0; q < head_count; ++q) {
+					const double value =
+						metric[static_cast<std::size_t>(q) * head_count + q];
+					metric_diag_min = std::min(metric_diag_min, value);
+					metric_diag_max = std::max(metric_diag_max, value);
+				}
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "BFGS coordinate normalization initialized"
+				          << " mode=efs-head-full"
+				          << " selected_count=" << head_count
+				          << " metric_diag_min=" << metric_diag_min
+				          << " metric_diag_max=" << metric_diag_max
+				          << " chart_shift=" << full_head_diagonal_shift
+				          << " floor=" << bfgs_coordinate_floor
+				          << " metric_cache=" << (cache_hit ? "hit" : "built")
+				          << " seconds=" << build_seconds
+				          << " stage=fixed"
+				          << " physical_reference=exact"
+				          << " coordinate_chart=full-cholesky-centered"
+				          << " model_format=physical"
+				          << std::endl;
+			}
+			return;
+		}
 
 		Array1D probe_gradient(n);
 		std::vector<double> selected_diagonal_local(
