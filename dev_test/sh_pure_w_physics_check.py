@@ -19,6 +19,7 @@ TMP = Path(tempfile.mkdtemp(prefix='pure-w-physics-', dir=ROOT / '.codex_tmp'))
 CFG = ROOT / 'codex_tests/pure_w_regularization.cfg'
 ENV = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
 NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
+DEFAULT_OUTER_RANK = int(os.environ.get('PURE_W_TEST_OUTER_RANK', '3'))
 
 
 def run(label, *args, env=None):
@@ -47,7 +48,7 @@ def vector(src, key, data):
     return out
 
 
-def model(mapping, width=3, k_width=2, radial_size=3, decoupled=False):
+def model(mapping, width=DEFAULT_OUTER_RANK, k_width=2, radial_size=3, decoupled=False):
     tag = f'{mapping}-k{k_width}-o{width}-r{radial_size}-d{int(decoupled)}'
     path = TMP / f'{tag}.mtp'
     run(tag+'-init', 'init-sh', path, '--species-count=2',

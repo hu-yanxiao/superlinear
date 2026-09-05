@@ -11,6 +11,7 @@
 #include <cstdint>
 #ifndef MLIP_MTPR_H
 #define MLIP_MTPR_H
+#include "pure_w_execution.h"
 
 struct BasicIndices {
         std::vector<int> comp0, comp1, comp2, comp3;
@@ -233,6 +234,11 @@ protected:
 				std::vector<double> sh_combination_radial_mixing_param_kernel_ss_scratch_;
 				std::vector<double> sh_combination_radial_mixing_param_kernel_coord_ss_scratch_;
 				bool two_layer_gate_radial_mixing_active_eval_ = false;
+	void CalcPureWBasisFirstMoments(const Neighborhood& nbh);
+	void CalcPureWBasisFirstForce(const Neighborhood& nbh, double center_linear);
+	void PreparePureWGraph();
+	bool ApplyPureWGraph(bool reverse);
+	void ReportPureWExecution() const;
 			std::vector<double> two_layer_gate_tanh_mu_cache_;
 			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
@@ -461,7 +467,8 @@ protected:
 		void ClearTwoLayerEdgePrimitiveCache();
 	void BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 										bool need_derivatives,
-										bool need_param_derivatives = true);
+										bool need_param_derivatives = true,
+										bool inference_only = false);
 	bool HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 										bool need_derivatives,
 										bool need_param_derivatives = true) const;
@@ -1734,6 +1741,10 @@ public:
 		double scaling_shift_range_end = 0.0;
 
 		void Orthogonalize();						//!<Orthogonalize the basic functions
+protected:
+	// Append execution-only storage so pre-existing hot member offsets stay
+	// unchanged. This is not part of the physical model or serialization.
+	PureWExecution pure_w_execution_;
 };
 
 

@@ -5,6 +5,8 @@ complete distance matrix `W_l(r): K -> O` with independent outer channels.
 Use `--superlinear-mode=pure-w-channelwise` explicitly; legacy models keep
 their existing interpretation. Training defaults to `--init-params=same`.
 See [the mathematical contract and validation commands](docs/PURE_W_CHANNELWISE_DESIGN.md).
+See also [exact pure-W inference execution](docs/PURE_W_INFERENCE_EXECUTION.md)
+for kernel selection, force-chain equations and cache regression tests.
 The new format is implemented in this CPU/reference branch; compatibility
 with separate GPU/GPUMD/LAMMPS backends is not claimed.
 

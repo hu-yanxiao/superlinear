@@ -22,6 +22,22 @@ using namespace std;
 
 namespace {
 
+// Keep the reference executable path available in the same binary. Auto uses
+// a conservative measured EFS crossover, never a new mixed-gradient backend.
+int PureWKernelMode()
+{
+    static const int mode = []() {
+        const char* value = std::getenv("SUS2_SH_PURE_W_KERNEL");
+        if (value == nullptr || std::strcmp(value, "auto") == 0) return -1;
+        if (std::strcmp(value, "legacy") == 0) return 0;
+        if (std::strcmp(value, "packed") == 0) return 1;
+        if (std::strcmp(value, "basis") == 0) return 2;
+        ERROR("SUS2_SH_PURE_W_KERNEL must be auto, legacy, packed or basis");
+        return 0;
+    }();
+    return mode;
+}
+
 const double kPi = std::acos(-1.0);
 const double kSqrt2 = std::sqrt(2.0);
 const int kMaxSHL = 6;
@@ -2016,6 +2032,10 @@ void MLMTPR::BackpropSHProductRows(std::vector<double>& adjoints) const
 
 void MLMTPR::ClearTwoLayerEdgePrimitiveCache()
 {
+	pure_w_execution_.basis = false;
+	pure_w_execution_.packed = false;
+	pure_w_execution_.graph = false;
+	pure_w_execution_.profile = false;
 	two_layer_edge_cache_ready_ = false;
 	two_layer_edge_cache_has_derivatives_ = false;
 	two_layer_edge_cache_has_param_derivatives_ = false;
@@ -2093,12 +2113,15 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 			edge_count * static_cast<size_t>(sh_l_max_ + 1)
 			* static_cast<size_t>(outer_k_rank_)
 			* static_cast<size_t>(sh_k_max_);
-		if (two_layer_edge_radial_mixing_kernel_cache_.size()
+		if (!pure_w_execution_.basis && two_layer_edge_radial_mixing_kernel_cache_.size()
 		    < expected_kernel_size)
 			return false;
-		if (need_derivatives
+		if (need_derivatives && !pure_w_execution_.basis
 		    && two_layer_edge_radial_mixing_kernel_der_cache_.size()
 		        < expected_kernel_size)
+			return false;
+		if (need_derivatives && pure_w_execution_.basis
+		    && pure_w_execution_.raw_dr.size() < expected_radial_val_size)
 			return false;
 	}
 	if (need_derivatives && need_param_derivatives) {
@@ -2171,7 +2194,8 @@ int MLMTPR::TwoLayerGateMuDenseIndex(int mu) const
 
 void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
                                              bool need_derivatives,
-                                             bool need_param_derivatives)
+                                             bool need_param_derivatives,
+                                             bool inference_only)
 {
 	ClearTwoLayerEdgePrimitiveCache();
 	if (DisableTwoLayerEdgePrimitiveCache())
@@ -2217,29 +2241,58 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		? static_cast<int>(two_layer_gate_required_mu_indices_.size())
 		: 0;
 	const int atom_count = neighborhoods.size();
-	// M_l(r) needs the raw radial basis even for value-only line-search
-	// evaluations. Cache it with the other edge primitives so every trial does
-	// not repeat RB_CalcValsOnly for unchanged geometry.
-	const bool cache_radial_mixing_kernels =
-		TwoLayerGateRadialMixingEnabled()
-		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
-	const bool need_raw_radial_cache =
-		(need_derivatives && need_param_derivatives)
-		|| cache_radial_mixing_kernels;
-	const bool need_gate_raw_radial_cache =
-		need_raw_radial_cache && decoupled_gate_scaling;
-	const size_t radial_mixing_kernel_stride =
-		static_cast<size_t>(sh_l_max_ + 1)
-		* static_cast<size_t>(outer_k_rank_)
-		* static_cast<size_t>(sh_k_max_);
 	size_t edge_count = 0;
-
 	two_layer_edge_offsets_cache_.assign(static_cast<size_t>(atom_count) + 1, 0);
 	for (int ind = 0; ind < atom_count; ++ind) {
 		two_layer_edge_offsets_cache_[ind] = edge_count;
 		edge_count += static_cast<size_t>(neighborhoods[ind].count);
 	}
 	two_layer_edge_offsets_cache_[atom_count] = edge_count;
+	pure_w_execution_.profile = OuterUsesPureRadialMatrix()
+		&& EnvFlagEnabled("SUS2_SH_PURE_W_PROFILE") && RuntimeRankIsZero();
+	pure_w_execution_.pack_seconds = pure_w_execution_.kernel_seconds = 0.0;
+	pure_w_execution_.aggregate_seconds = pure_w_execution_.mix_seconds = 0.0;
+	pure_w_execution_.force_seconds = pure_w_execution_.graph_seconds = 0.0;
+	// The basis cache is deliberately not a full derivative cache. Other
+	// consumers (linear components, mixed gradients, residuals and edge-L1)
+	// continue to receive the original W/W' layout and full derivative data.
+	const int pure_w_mode = OuterUsesPureRadialMatrix() ? PureWKernelMode() : 0;
+	const bool prefer_basis = pure_w_mode == 2 || (pure_w_mode == -1
+		&& PureWExecution::PreferBasis(outer_k_rank_, R, edge_count, atom_count));
+	pure_w_execution_.basis = prefer_basis
+		&& inference_only && !need_param_derivatives && !multi_layer_gate_enabled_
+		&& !TwoLayerResidualEnabled() && !TwoLayerGateUsesCenterGate()
+		&& !HasNonzeroTwoLayerGateEdgeL1Weights() && !use_lmp_table;
+	// Auto leaves full mixed-gradient consumers entirely on the legacy path.
+	pure_w_execution_.packed = pure_w_mode > 0 || pure_w_execution_.basis;
+	// M_l(r) needs the raw radial basis even for value-only line-search
+	// evaluations. Cache it with the other edge primitives so every trial does
+	// not repeat RB_CalcValsOnly for unchanged geometry.
+	const bool has_radial_mixing =
+		TwoLayerGateRadialMixingEnabled()
+		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
+	const bool cache_radial_mixing_kernels = has_radial_mixing && !pure_w_execution_.basis;
+	const bool need_raw_radial_cache =
+		(need_derivatives && need_param_derivatives)
+		|| has_radial_mixing;
+	const bool need_gate_raw_radial_cache =
+		need_raw_radial_cache && decoupled_gate_scaling;
+	const size_t radial_mixing_kernel_stride =
+		static_cast<size_t>(sh_l_max_ + 1)
+		* static_cast<size_t>(outer_k_rank_)
+		* static_cast<size_t>(sh_k_max_);
+	if (pure_w_execution_.basis && need_derivatives)
+		pure_w_execution_.raw_dr.resize(edge_count * radial_val_stride);
+	// Keep inactive scratch sizes as well as capacity. The execution flags,
+	// not stale buffer contents, determine validity. Clearing here forces a
+	// redundant zero-fill when an inference/full-gradient call alternates.
+	const double pack_start = pure_w_execution_.profile ? SHAccumProfileNow() : 0.0;
+	if (pure_w_execution_.packed)
+		pure_w_execution_.Pack(sh_l_max_+1, outer_k_rank_, sh_k_max_, R,
+			regression_coeffs.data() + TwoLayerGateRadialMixingCoeffOffset());
+	PreparePureWGraph();
+	if (pure_w_execution_.profile)
+		pure_w_execution_.pack_seconds = SHAccumProfileNow()-pack_start;
 
 	two_layer_edge_sh_values_cache_.resize(edge_count * sh_count);
 	two_layer_edge_mu_vals_cache_.resize(edge_count * mu_stride);
@@ -2256,7 +2309,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 				edge_count * radial_mixing_kernel_stride);
 		else
 			two_layer_edge_radial_mixing_kernel_der_cache_.clear();
-	} else {
+	} else if (!pure_w_execution_.basis) {
 		two_layer_edge_radial_mixing_kernel_cache_.clear();
 		two_layer_edge_radial_mixing_kernel_der_cache_.clear();
 	}
@@ -2635,7 +2688,17 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					}
 					}
 					}
-					if (cache_radial_mixing_kernels) {
+					const double kernel_start = pure_w_execution_.profile ? SHAccumProfileNow() : 0.0;
+					if (pure_w_execution_.basis && need_derivatives) {
+						double* dr = pure_w_execution_.raw_dr.data() + edge * radial_val_stride;
+						for (int eval = 0; eval < eval_block_count; ++eval)
+							std::copy(rb_ders + eval*R*5, rb_ders + eval*R*5 + R, dr + eval*R);
+					}
+					if (cache_radial_mixing_kernels && pure_w_execution_.packed) {
+						pure_w_execution_.Kernels(mu_to_radial_eval_block_.data(), rb_vals,
+							rb_ders, radial_mixing_kernels,
+							need_derivatives ? radial_mixing_kernel_ders : nullptr);
+					} else if (cache_radial_mixing_kernels) {
 							for (int l = 0; l <= sh_l_max_; ++l) {
 							for (int a = 0; a < outer_k_rank_; ++a) {
 								for (int k = 0; k < sh_k_max_; ++k) {
@@ -2663,6 +2726,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 							}
 						}
 					}
+					if (pure_w_execution_.profile)
+						pure_w_execution_.kernel_seconds += SHAccumProfileNow()-kernel_start;
 							if (prepare_moment_values_from_cache) {
 						const double* gate_mu_values = use_gate_radial ? gate_mu_vals : mu_vals;
 							for (int bi = 0;
@@ -3256,6 +3321,10 @@ void MLMTPR::CalcSHMomentValuesOnlyLegacy(const Neighborhood& nbh)
 
 void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 {
+	if (pure_w_execution_.basis && HasTwoLayerEdgePrimitiveCache(-1, false, false)) {
+		CalcPureWBasisFirstMoments(nbh);
+		return;
+	}
 	two_layer_gate_radial_mixing_active_eval_ =
 		TwoLayerGateRadialMixingEnabled()
 		&& (OuterUsesPureRadialMatrix() || HasNonzeroTwoLayerGateRadialMixingCoeffs());
@@ -3495,7 +3564,9 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 						radial_mixing_outer_delta[
 							static_cast<size_t>(a) * sh_count
 							+ SHFlatIndex(l, m)];
-	if (UseSHProductRows()) {
+	if (ApplyPureWGraph(false)) {
+		// One angular instruction stream, O independent value lanes.
+	} else if (UseSHProductRows()) {
 		ApplySHProductRowsForward();
 	} else {
 		for (size_t p = static_cast<size_t>(OuterKRank1ProductStart());
@@ -10569,7 +10640,9 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 		site_energy_ders_wrt_moments_[alpha_moment_mapping[i]] += moment_coeff;
 	}
 
-	if (UseSHProductRows()) {
+	if (ApplyPureWGraph(true)) {
+		// Adjoint operations retain their order within every output lane.
+	} else if (UseSHProductRows()) {
 		BackpropSHProductRows(site_energy_ders_wrt_moments_);
 	} else {
 		for (int p = static_cast<int>(sh_products_.size()) - 1;
@@ -10585,6 +10658,10 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 		}
 	}
 	BackpropOuterKRank1Adjoints(site_energy_ders_wrt_moments_);
+	if (pure_w_execution_.basis && HasTwoLayerEdgePrimitiveCache(-1, true, false)) {
+		CalcPureWBasisFirstForce(nbh, center_linear);
+		return;
+	}
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];

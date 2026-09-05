@@ -7590,7 +7590,7 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 		two_layer_forward_final_moment_cache_ready_ = false;
 			const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
 			const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
-			BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, build_full_edge_cache);
+			BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, build_full_edge_cache, true);
 			PrepareTwoLayerGateValues(cfg, neighborhoods);
 			const bool has_nonzero_edge_l1_weights =
 				HasNonzeroTwoLayerGateEdgeL1Weights();
@@ -7677,6 +7677,7 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 		active_two_layer_gate_adjoints_ = nullptr;
 		AccumulateTwoLayerGateForceChain(cfg, neighborhoods);
 		AccumulateTwoLayerGateEdgeL1ForceChain(cfg, neighborhoods);
+		ReportPureWExecution();
 	if (profile_two_layer) {
 		const double profile_end = TwoLayerProfileNow();
 		RecordTwoLayerForwardProfile(
