@@ -2033,6 +2033,7 @@ void MLMTPR::BackpropSHProductRows(std::vector<double>& adjoints) const
 void MLMTPR::ClearTwoLayerEdgePrimitiveCache()
 {
 	pure_w_execution_.basis = false;
+	pure_w_execution_.edge_force = false;
 	pure_w_execution_.packed = false;
 	pure_w_execution_.graph = false;
 	pure_w_execution_.profile = false;
@@ -2236,6 +2237,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int radial_val_stride = eval_block_count * R;
 	const int radial_der_stride = radial_val_stride * 5;
+	// Keep the established block stride for shared W/gate consumers. EFS only
+	// initializes the first R entries of each block; no mixed consumer may
+	// reuse this cache (CanUseTwoLayerEdgePrimitiveCache checks that contract).
+	const bool coordinate_only = inference_only && need_derivatives
+		&& !need_param_derivatives && !EnvFlagEnabled("SUS2_SH_EFS_RADIAL_FULL");
+	const int radial_der_copy_count = coordinate_only ? R : 5*R;
 	const int mu_stride = radial_func_count;
 	const int gate_mu_stride = use_gate_radial
 		? static_cast<int>(two_layer_gate_required_mu_indices_.size())
@@ -2263,6 +2270,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		&& inference_only && !need_param_derivatives && !multi_layer_gate_enabled_
 		&& !TwoLayerResidualEnabled() && !TwoLayerGateUsesCenterGate()
 		&& !HasNonzeroTwoLayerGateEdgeL1Weights() && !use_lmp_table;
+	pure_w_execution_.edge_force = OuterUsesPureRadialMatrix()
+		&& inference_only && need_derivatives && !need_param_derivatives
+		&& !pure_w_execution_.basis && !multi_layer_gate_enabled_
+		&& !TwoLayerResidualEnabled() && !TwoLayerGateUsesCenterGate()
+		&& !HasNonzeroTwoLayerGateEdgeL1Weights() && !use_lmp_table
+		&& !EnvFlagEnabled("SUS2_SH_PURE_W_EDGE_REFERENCE");
 	// Auto leaves full mixed-gradient consumers entirely on the legacy path.
 	pure_w_execution_.packed = pure_w_mode > 0 || pure_w_execution_.basis;
 	// M_l(r) needs the raw radial basis even for value-only line-search
@@ -2548,7 +2561,9 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						regression_coeffs[
 							C + 2 * scaling_block * C * C + C * C
 							+ C * type_central + type_outer];
-					if (need_derivatives)
+					if (coordinate_only)
+						p_RadialBasis->RB_CalcRDerOnly(r, sigma, shift, basis_k);
+					else if (need_derivatives)
 						p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
 					else
 						p_RadialBasis->RB_CalcValsOnly(r, sigma, shift, basis_k);
@@ -2556,7 +2571,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						rb_vals[eval_block * R + xi] =
 							p_RadialBasis->rb_vals[xi] * scaling;
 					if (need_derivatives)
-						for (int xi = 0; xi < R * 5; ++xi)
+						for (int xi = 0; xi < radial_der_copy_count; ++xi)
 							rb_ders[eval_block * R * 5 + xi] =
 								p_RadialBasis->rb_ders[xi] * scaling;
 				}
@@ -2622,7 +2637,9 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 										scaling_block,
 										type_central,
 										type_outer);
-								if (need_derivatives)
+								if (coordinate_only)
+									p_RadialBasis->RB_CalcRDerOnly(r, sigma, shift, basis_k);
+								else if (need_derivatives)
 									p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
 								else
 									p_RadialBasis->RB_CalcValsOnly(
@@ -2632,7 +2649,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 										eval_block * R + xi] =
 										p_RadialBasis->rb_vals[xi] * scaling;
 								if (need_derivatives) {
-									for (int xi = 0; xi < R * 5; ++xi)
+									for (int xi = 0; xi < radial_der_copy_count; ++xi)
 										gate_radial_ders_scratch[
 											eval_block * R * 5 + xi] =
 											p_RadialBasis->rb_ders[xi] * scaling;
@@ -10660,6 +10677,10 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 	BackpropOuterKRank1Adjoints(site_energy_ders_wrt_moments_);
 	if (pure_w_execution_.basis && HasTwoLayerEdgePrimitiveCache(-1, true, false)) {
 		CalcPureWBasisFirstForce(nbh, center_linear);
+		return;
+	}
+	if (pure_w_execution_.edge_force && HasTwoLayerEdgePrimitiveCache(-1, true, false)) {
+		CalcPureWEdgeFirstForce(nbh, center_linear);
 		return;
 	}
 

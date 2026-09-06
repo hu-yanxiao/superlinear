@@ -236,6 +236,7 @@ protected:
 				bool two_layer_gate_radial_mixing_active_eval_ = false;
 	void CalcPureWBasisFirstMoments(const Neighborhood& nbh);
 	void CalcPureWBasisFirstForce(const Neighborhood& nbh, double center_linear);
+	void CalcPureWEdgeFirstForce(const Neighborhood& nbh, double center_linear);
 	void PreparePureWGraph();
 	bool ApplyPureWGraph(bool reverse);
 	void ReportPureWExecution() const;

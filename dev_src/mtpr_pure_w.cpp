@@ -1,11 +1,22 @@
 /* Exact basis-first pure-W EFS execution. No model or optimizer coordinates. */
 #include "mtpr.h"
+#include "pure_w_basis_kernels.h"
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
 #include <iostream>
 
 namespace {
+bool ReferenceBasisLoops() {
+    static const bool reference=[]() {
+        const char* s=std::getenv("SUS2_SH_PURE_W_BASIS_REFERENCE");
+        if (s==nullptr || std::strcmp(s,"0")==0) return false;
+        if (std::strcmp(s,"1")==0) return true;
+        ERROR("SUS2_SH_PURE_W_BASIS_REFERENCE must be 0 or 1");
+        return false;
+    }();
+    return reference;
+}
 double PureWNow() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -17,13 +28,15 @@ void MLMTPR::ReportPureWExecution() const
     if (!ex.profile) return;
     std::cout << "[PURE_W_EXECUTION] O=" << outer_k_rank_
         << " packed=" << ex.packed << " basis=" << ex.basis << " graph=" << ex.graph
+        << " edge_force=" << ex.edge_force
         << " full_derivative_cache=" << two_layer_edge_cache_has_param_derivatives_
         << " W_entries=" << (ex.basis ? 0 : two_layer_edge_radial_mixing_kernel_cache_.size())
         << " W_storage_entries=" << two_layer_edge_radial_mixing_kernel_cache_.size()
         << " raw_dr_entries=" << (ex.basis ? ex.raw_dr.size() : 0)
         << " pack_s=" << ex.pack_seconds << " W_build_s=" << ex.kernel_seconds
         << " aggregate_s=" << ex.aggregate_seconds << " mix_s=" << ex.mix_seconds
-        << " graph_s=" << ex.graph_seconds << " basis_force_s=" << ex.force_seconds
+        << " graph_s=" << ex.graph_seconds << " basis_force_s=" << (ex.basis ? ex.force_seconds : 0.0)
+        << " edge_force_s=" << (ex.edge_force ? ex.force_seconds : 0.0)
         << std::endl;
 }
 #ifdef MLIP_INTEL_MKL
@@ -139,6 +152,7 @@ void MLMTPR::CalcPureWBasisFirstMoments(const Neighborhood& nbh)
     const int L = sh_l_max_+1, K = sh_k_max_, O = outer_k_rank_;
     const int R = p_RadialBasis->rb_size, H = L*L, KR = K*R;
     const size_t rb_stride = static_cast<size_t>(two_layer_edge_cache_eval_block_count_)*R;
+    const bool reference=ReferenceBasisLoops();
     // Per-center scratch, not per-configuration-by-neighbor-by-output storage.
     ex.q.assign(static_cast<size_t>(KR)*H, 0.0);
     ex.outer.resize(static_cast<size_t>(O)*H);
@@ -162,7 +176,7 @@ void MLMTPR::CalcPureWBasisFirstMoments(const Neighborhood& nbh)
             const int type_index = RadialCoeffOffset()+mu*RadialCoeffBlockSize()+R+nbh.my_type;
             gate_factor[mu] = regression_coeffs[type_index]*two_layer_gate_additive_mu_buffer_[mu];
         }
-        for (int l = 0; l < L; ++l) {
+        for (int l = 0; reference && l < L; ++l) {
             const int M = 2*l+1;
             double* ql = ex.q.data()+static_cast<size_t>(KR)*l*l;
             for (int k = 0; k < K; ++k) {
@@ -176,6 +190,18 @@ void MLMTPR::CalcPureWBasisFirstMoments(const Neighborhood& nbh)
                 }
             }
         }
+    }
+    if (!reference && nbh.count>0) {
+        const size_t first=TwoLayerEdgePrimitiveOffset(-1,0);
+        PureWBasisKernels::Block block;
+        block.count=nbh.count; block.L=L; block.K=K; block.R=R;
+        block.radial_stride=rb_stride;
+        block.mu_to_eval=mu_to_radial_eval_block_.data();
+        block.radial=two_layer_edge_radial_vals_cache_.data()+first*rb_stride;
+        block.sh=two_layer_edge_sh_values_cache_.data()+first*H;
+        block.input=ex.input.data();
+        for (int l=0;l<L;++l)
+            PureWBasisKernels::Aggregate(l,block,ex.q.data()+static_cast<size_t>(KR)*l*l);
     }
     const double after_aggregate = ex.profile ? PureWNow() : 0.0;
     if (ex.profile) ex.aggregate_seconds += after_aggregate-started;
@@ -228,6 +254,34 @@ void MLMTPR::CalcPureWBasisFirstForce(const Neighborhood& nbh, double center_lin
             1.0, c+static_cast<size_t>(l)*O*KR, KR, ex.outer.data(), M,
             0.0, ex.q_adjoint.data()+static_cast<size_t>(KR)*l*l, M);
     }
+    if (!ReferenceBasisLoops() && nbh.count>0) {
+        const size_t first=TwoLayerEdgePrimitiveOffset(-1,0);
+        PureWBasisKernels::Block block;
+        block.count=nbh.count; block.L=L; block.K=K; block.R=R;
+        block.radial_stride=rb_stride;
+        block.mu_to_eval=mu_to_radial_eval_block_.data();
+        block.neighbors=nbh.inds.data();
+        block.radial=two_layer_edge_radial_vals_cache_.data()+first*rb_stride;
+        block.radial_dr=ex.raw_dr.data()+first*rb_stride;
+        block.sh=two_layer_edge_sh_values_cache_.data()+first*H;
+        block.sh_dr=two_layer_edge_sh_ders_cache_.data()+first*3*H;
+        block.input=ex.input.data(); block.gate_factor=ex.gate_factor.data();
+        block.gate_adjoint=active_two_layer_gate_adjoints_==nullptr ? nullptr
+            : active_two_layer_gate_adjoints_->data();
+        ex.force_scratch.assign(static_cast<size_t>(nbh.count)*4,0.0);
+        for (int l=0;l<L;++l)
+            PureWBasisKernels::Force(l,block,ex.q_adjoint.data()+static_cast<size_t>(KR)*l*l,
+                ex.force_scratch.data());
+        for (int j=0;j<nbh.count;++j) {
+            const double inv_r=1.0/nbh.dists[j];
+            const double* f=ex.force_scratch.data()+4*j;
+            for (int a=0;a<3;++a)
+                buff_site_energy_ders_[j][a]+=f[0]*nbh.vecs[j][a]*inv_r+f[1+a];
+        }
+        // The caller still propagates the accumulated global gate adjoints.
+        if (ex.profile) ex.force_seconds+=PureWNow()-started;
+        return;
+    }
     for (int j = 0; j < nbh.count; ++j) {
         const size_t edge = TwoLayerEdgePrimitiveOffset(-1, j);
         const double* rb = two_layer_edge_radial_vals_cache_.data()+edge*rb_stride;
@@ -276,4 +330,55 @@ void MLMTPR::CalcPureWBasisFirstForce(const Neighborhood& nbh, double center_lin
     // The caller's existing global gate-force chain propagates the accumulated
     // neighbor gate adjoints. Omitting it would silently lose three-body forces.
     if (ex.profile) ex.force_seconds += PureWNow()-started;
+}
+
+void MLMTPR::CalcPureWEdgeFirstForce(const Neighborhood& nbh, double center_linear)
+{
+    if (nbh.count==0) return;
+    PureWExecution& ex=pure_w_execution_;
+    const double started=ex.profile ? PureWNow() : 0.0;
+    const int L=sh_l_max_+1, K=sh_k_max_, O=outer_k_rank_, H=L*L;
+    const int R=p_RadialBasis->rb_size;
+    ex.outer.resize(static_cast<size_t>(O)*H);
+    for (int o=0;o<O;++o) for (int l=0;l<L;++l) for (int m=-l;m<=l;++m)
+        ex.outer[o*H+l*l+l+m]=center_linear
+            * site_energy_ders_wrt_moments_[OuterKRank1OuterBasicIndex(o,l,m)];
+    ex.input.resize(static_cast<size_t>(nbh.count)*radial_func_count);
+    ex.gate_factor.resize(ex.input.size());
+    const double* signals=active_two_layer_gate_values_==nullptr ? nullptr
+        : active_two_layer_gate_values_->data();
+    for (int j=0;j<nbh.count;++j) {
+        const int neighbor=nbh.inds[j];
+        PrepareTwoLayerGatePairMuBuffers(nbh.my_type,nbh.types[j],nullptr,-1,
+            signals==nullptr ? nullptr : signals+static_cast<size_t>(neighbor)*radial_func_count,
+            neighbor,kGateMuBufferTypeScale | kGateMuBufferAdditive);
+        for (int mu=0;mu<radial_func_count;++mu) {
+            const size_t at=static_cast<size_t>(j)*radial_func_count+mu;
+            ex.input[at]=two_layer_gate_type_scale_mu_buffer_[mu];
+            const int type_index=RadialCoeffOffset()+mu*RadialCoeffBlockSize()+R+nbh.my_type;
+            ex.gate_factor[at]=regression_coeffs[type_index]*two_layer_gate_additive_mu_buffer_[mu];
+        }
+    }
+    const size_t first=TwoLayerEdgePrimitiveOffset(-1,0);
+    PureWBasisKernels::Block block;
+    block.count=nbh.count; block.L=L; block.K=K; block.R=R;
+    block.neighbors=nbh.inds.data();
+    block.sh=two_layer_edge_sh_values_cache_.data()+first*H;
+    block.sh_dr=two_layer_edge_sh_ders_cache_.data()+first*3*H;
+    block.input=ex.input.data(); block.gate_factor=ex.gate_factor.data();
+    block.gate_adjoint=active_two_layer_gate_adjoints_==nullptr ? nullptr
+        : active_two_layer_gate_adjoints_->data();
+    ex.force_scratch.assign(static_cast<size_t>(nbh.count)*4,0.0);
+    const size_t stride=static_cast<size_t>(L)*O*K;
+    PureWBasisKernels::EdgeForce(O,block,ex.outer.data(),
+        two_layer_edge_radial_mixing_kernel_cache_.data()+first*stride,
+        two_layer_edge_radial_mixing_kernel_der_cache_.data()+first*stride,ex.force_scratch.data());
+    for (int j=0;j<nbh.count;++j) {
+        const double inv_r=1.0/nbh.dists[j];
+        const double* f=ex.force_scratch.data()+4*j;
+        for (int a=0;a<3;++a)
+            buff_site_energy_ders_[j][a]+=f[0]*nbh.vecs[j][a]*inv_r+f[1+a];
+    }
+    // Global gate-force propagation is performed by the unchanged caller.
+    if (ex.profile) ex.force_seconds+=PureWNow()-started;
 }

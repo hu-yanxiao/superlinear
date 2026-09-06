@@ -42,6 +42,10 @@ public:
 	
 	virtual void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) = 0;	// calculates values and derivatives
 	virtual void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0); // calculates values only when available
+	// Only rb_vals and rb_ders[0:rb_size] are valid after this call. Parameter
+	// and mixed derivatives are unspecified; their consumers must use RB_Calc.
+	// Un-specialized bases safely fall back to the full evaluator.
+	virtual void RB_CalcRDerOnly(double r,double scal=0.1, double s=0.1,int k=0);
 };
 
 
@@ -153,6 +157,7 @@ public:
 
         void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;
         void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0) override;
+        void RB_CalcRDerOnly(double r,double scal=0.1, double s=0.1,int k=0) override;
 };
 
 class RadialBasis_Chebyshev_sss_rational : public AnyRadialBasis
@@ -170,6 +175,7 @@ public:
 
         void RB_Calc(double r,double scal=0.1, double s= 0.1,int k=0) override;
         void RB_CalcValsOnly(double r,double scal=0.1, double s= 0.1,int k=0) override;
+        void RB_CalcRDerOnly(double r,double scal=0.1, double s=0.1,int k=0) override;
 };
 
 

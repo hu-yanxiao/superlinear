@@ -180,6 +180,61 @@ void AnyRadialBasis::RB_CalcValsOnly(double r, double scal, double s, int k)
 	RB_Calc(r, scal, s, k);
 }
 
+void AnyRadialBasis::RB_CalcRDerOnly(double r, double scal, double s, int k)
+{
+	RB_Calc(r, scal, s, k);
+}
+
+namespace {
+// Preserve the full evaluator's value/r-derivative arithmetic, but do not
+// calculate scaling/shift or mixed derivatives. This is not a radial table.
+template<bool Rational>
+void ChebyshevCoordinateOnly(AnyRadialBasis& basis, double r, double scal, double s)
+{
+#ifdef MLIP_DEBUG
+    if (r < basis.min_dist)
+        Warning("RadialBasis: r<min_dist. r = " + std::to_string(r));
+    if (r > basis.max_dist)
+        ERROR("RadialBasis: r>MaxDist !!!. r = " + std::to_string(r));
+#endif
+    const double x = scal*(r-s)/2;
+    double ksi, der;
+    if (Rational) {
+        const double inv = 1.0/std::sqrt(1.0+x*x);
+        ksi = x*inv;
+        der = inv*inv*inv;
+    } else {
+        ksi = std::tanh(x);
+        der = 1-ksi*ksi;
+    }
+    const double mult = der*scal/2;
+    double cutoff_f = 0.0, cutoff_der = 0.0;
+    basis.CalcRadialCutoff(r, cutoff_f, cutoff_der);
+    double* v = basis.rb_vals.data();
+    double* d = basis.rb_ders.data();
+    if (basis.rb_size == 0) return;
+    v[0] = basis.scaling*cutoff_f;
+    d[0] = cutoff_der*basis.scaling;
+    if (basis.rb_size == 1) return;
+    v[1] = basis.scaling*(ksi*cutoff_f);
+    d[1] = basis.scaling*(mult*cutoff_f+ksi*cutoff_der);
+    for (int b = 2; b < basis.rb_size; ++b) {
+        v[b] = 2*ksi*v[b-1]-v[b-2];
+        d[b] = 2*(mult*v[b-1]+ksi*d[b-1])-d[b-2];
+    }
+}
+}
+
+void RadialBasis_Chebyshev_sss::RB_CalcRDerOnly(double r, double scal, double s, int k)
+{
+    ChebyshevCoordinateOnly<false>(*this, r, scal, s);
+}
+
+void RadialBasis_Chebyshev_sss_rational::RB_CalcRDerOnly(double r, double scal, double s, int k)
+{
+    ChebyshevCoordinateOnly<true>(*this, r, scal, s);
+}
+
 namespace {
 
 constexpr double kLaguerreMinRho = 1.0e-8;

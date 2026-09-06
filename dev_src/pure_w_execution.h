@@ -12,6 +12,7 @@ struct PureWExecution {
     int L = 0, O = 0, K = 0, R = 0;
     bool packed = false;
     bool basis = false;
+    bool edge_force = false; // EFS-only fused pullback of cached W/Wprime
     bool graph = false;
     bool profile = false;
     double pack_seconds = 0.0, kernel_seconds = 0.0;
@@ -26,6 +27,7 @@ struct PureWExecution {
     std::vector<double> raw_dr; // inference-only [edge,eval,b], no mixed derivatives
     std::vector<double> q, q_adjoint; // [l,k,b,m], all k/b/m retained
     std::vector<double> input, gate_factor; // one center's [neighbor,mu]
+    std::vector<double> force_scratch; // one center's [neighbor,radial/x/y/z]
     std::vector<double> outer;
 
     // Conservative crossover measured on the VO2 CPU EFS workload. Small O,

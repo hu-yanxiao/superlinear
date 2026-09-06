@@ -6,6 +6,120 @@ and single-channel angular product topology are unchanged. Outputs do not acquir
 cross-O products. Floating-point summation order may change; bitwise equality is
 not promised for the new paths.
 
+## Coordinate-only and fused EFS kernels (2026-09-06)
+
+EFS-only cache builds now request radial values and their first coordinate
+derivatives through `RB_CalcRDerOnly`. Chebyshev_sss and its rational variant
+omit scaling/shift and mixed-derivative recurrences; other radial bases safely
+call the original full evaluator. The first R derivative entries remain in the
+established five-block-stride scratch layout, but unused entries are not copied.
+They are unspecified, not zeros. Full parameter/mixed-derivative consumers must
+still request a full cache; the existing cache-validity guards prevent reuse of
+an inference-only cache for training. Decoupled gate scaling uses the same
+explicit derivative contract. Model files and physical coefficients do not
+change. Adding a radial virtual method requires a clean rebuild of all objects.
+
+For basis-first execution, dispatch the angular width M=2l+1 once per center/l,
+then execute neighbor/k/b loops with fixed-width M accumulators. Each Q element
+retains its edge accumulation order, and each reverse B/D element retains its
+radial-basis order. Only four doubles per neighbor are added as force scratch;
+there is no configuration-wide edge-by-basis-by-angular tensor. Repeated
+periodic images still accumulate into the same neighbor's gate adjoints.
+
+The EFS edge-first pullback consumes W and W-prime directly from their cache,
+without copying each l block into temporary W arrays. With a including the
+center head multiplier, define for one edge/l/o
+
+\[
+v_o=\sum_k W_{lok}x_{kl},\quad d_o=\sum_k W'_{lok}x_{kl},\quad
+u_o=\sum_m a_{olm}Y_{lm},\quad
+\mathbf t_o=\sum_m a_{olm}\nabla Y_{lm}.
+\]
+
+The direct coordinate derivative is
+`sum(l,o) [d_o u_o r_hat + v_o t_o]`, and the input adjoint is
+`bar-x_kl = sum(o) W_lok u_o`. Its gate Jacobian and the existing global gate
+force pass are retained. Contracting k before rotating into Cartesian axes
+avoids doing the same three-direction radial work for every k. This reorders
+floating-point sums, not the mathematical derivative. The fused path is EFS
+only and has the same exclusions as basis-first (multilayer/center/residual/
+active edge-L1 gates and radial tables keep their previous paths). Full mixed
+gradients keep the original implementation, including every parameter chain.
+
+Diagnostic controls, independent of the W construction dispatch:
+
+- `SUS2_SH_EFS_RADIAL_FULL=1`: use the full radial evaluator/copies in EFS.
+- `SUS2_SH_PURE_W_BASIS_REFERENCE=1`: use the previous dynamic-width basis loops.
+- `SUS2_SH_PURE_W_EDGE_REFERENCE=1`: use the previous edge-first force path.
+
+Set all three to 1 to compare against the previous algorithms within the same
+new executable. `SUS2_SH_PURE_W_KERNEL=legacy` still selects edge-first W
+construction; it does not itself disable the independent radial/force changes.
+Profiles report `edge_force`, `edge_force_s` and `basis_force_s` separately.
+
+Standalone verification:
+
+```bash
+bash dev_test/sh_pure_w_inference_kernels_check.sh
+# Linux sanitizer build (no MPI/BLAS needed):
+SUS2_TEST_SANITIZE=1 bash dev_test/sh_pure_w_inference_kernels_check.sh
+```
+
+The checks cover all supported angular widths, nonuniform and shared scaling
+block maps, empty neighborhoods, repeated neighbor indices, nonzero output
+accumulators, gate/no-gate adjoints, multiple K/R/O values, full-cache re-entry,
+legacy/polynomial cutoffs, and finite differences for the new radial recurrences.
+The existing model-level execution/physics and mutable-state suites remain
+required; isolated arithmetic checks are not substitutes for the gate force
+chain or mixed-derivative regressions.
+
+### Frozen candidate measurements (2026-09-06)
+
+Job `4251101`, queue `1t75c`, one Xeon Platinum 8375C host `b03u30a`,
+32 MPI ranks, five interleaved old/new rounds, three complete dataset passes
+per timing run. All 2062 VO2 9.1 configurations / 194472 atoms are distributed
+across ranks, not replicated per rank. Each production `CalcEFS` call rebuilds
+its neighborhood and evaluates energy, force and virial; model/data I/O,
+warmup and output writing are excluded. Values below are summed rank call
+times per atom, median +/- median absolute deviation, **not** isolated-core
+latency or an end-to-end LAMMPS MD benchmark. The host need not be exclusive.
+
+| Same model | b84b87c us/atom | New auto us/atom | Time reduction |
+|---|---:|---:|---:|
+| O2 | 818.31 +/- 0.86 | 782.51 +/- 0.66 | 4.37% |
+| O4 | 943.98 +/- 0.26 | 876.81 +/- 1.04 | 7.12% |
+| O8 | 1052.24 +/- 0.47 | 870.26 +/- 3.34 | 17.29% |
+| O16 | 1063.77 +/- 1.45 | 889.19 +/- 0.45 | 16.41% |
+
+The unchanged official release3 O2 driver measured 739.38 +/- 0.55 us/atom;
+same O2 remains 5.83% more expensive. The new binary's release3 compatibility
+reader is not substituted for that baseline. Its separate 790.81 us/atom
+measurement does not establish the cost of this change against a same-branch
+old release3 reader. O1 has correctness coverage but no trained-model timing
+in this five-round workload. These are inference improvements, not measured
+training-backward improvements.
+
+The conservative O>=8 auto switch is retained: the preliminary forced-basis
+O2 run was slower, while the O4 crossover differed by less than 1%. Formal
+timing finished with 50 runs, 10 output comparisons, and unchanged model/data/
+executable hashes. Same-model maximum scaled E/F/virial difference was
+1.85e-13; coordinate-only versus full radial evaluation was identical in this
+check. Model-level finite differences, variable-coordinate/coefficient/cache
+state checks, and Linux kernel ASan/UBSan checks also passed.
+
+Job `4251112` additionally compared the old/new executables on frozen trained
+same O2/O4/O8/O16 models, one host and two MPI ranks, 12 accepted steps each.
+It reused the earlier real-VO2 full-objective protocol including nonzero STD
+and radial smoothness. All four final model files and all four accepted-step
+CSV traces were byte-identical. This short same-model check complements,
+rather than replaces, the separately run model-adapted historical gate
+500-configuration / 75-pretraining-plus-55-formal-step regression.
+
+Evidence: server checkout `.codex_tmp/pure_w_efs_optimization_20260906/r3/`,
+especially `formal_4251101/comparison.json` and the validation logs. Candidate
+native binary SHA256:
+`71272cdfd3a9f6049747cab192d0510e72d09708456db3d0b1f7fcd48df71198`.
+
 ## Execution backends
 
 `SUS2_SH_PURE_W_KERNEL` selects `auto`, `legacy`, `packed`, or `basis`.
