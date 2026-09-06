@@ -2328,6 +2328,25 @@ double MLMTPR::TwoLayerGateTypeCoeff(int type_outer, int mu) const
 	return 1.0;
 }
 
+const double* MLMTPR::TwoLayerGateTypeCoeffMatrixData() const
+{
+	// Resolve the mode-dependent parameter layout once, outside edge/basic
+	// loops. Never retain this pointer across parameter updates or vector resize.
+	const char* reference = std::getenv("SUS2_SH_GATE_TYPE_REFERENCE");
+	if (!two_layer_gate_enabled_ || species_count <= 0 || radial_func_count <= 0
+	    || (reference != nullptr && reference[0] != '\0'
+	        && std::string(reference) != "0"))
+		return nullptr;
+	const int offset = TwoLayerGateTypeCoeffOffset();
+	const size_t count = static_cast<size_t>(species_count) * radial_func_count;
+	if (offset >= 0 && static_cast<size_t>(offset) <= regression_coeffs.size()
+	    && count <= regression_coeffs.size() - static_cast<size_t>(offset))
+		return regression_coeffs.data() + offset;
+	// A partial block can mix regression and legacy values. Let the existing
+	// getter resolve every entry instead of selecting one backing store here.
+	return nullptr;
+}
+
 int MLMTPR::TwoLayerGateWeightIndex(int scalar_weight_index) const
 {
 	if (!two_layer_gate_enabled_)

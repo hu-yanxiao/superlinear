@@ -41,6 +41,24 @@ void EdgeDirections(const Neighborhood& nbh, int atom,
             for (int b=0; b<3; ++b) directions[j][a] += stress[a][b]*nbh.vecs[j][b];
     }
 }
+int AdaptiveRadialDerStride(size_t cache_size, size_t edge_count,
+                            int radial_stride) {
+    if (edge_count==0 || radial_stride<=0) return radial_stride*5;
+    const size_t compact=static_cast<size_t>(radial_stride)*edge_count;
+    const size_t full=compact*5;
+    if (cache_size==compact) return radial_stride;
+    if (cache_size==full) return radial_stride*5;
+    ERROR("adaptive radial derivative cache has inconsistent stride");
+    return radial_stride*5;
+}
+bool AdaptiveRadialDersAreCompact(size_t cache_size, size_t edge_count,
+                                  int radial_stride) {
+    return edge_count>0 && radial_stride>0
+        && cache_size==static_cast<size_t>(radial_stride)*edge_count;
+}
+int AdaptiveRadialCoordDerOffset(int rb_start, int n, bool compact) {
+    return compact ? rb_start+n : 5*rb_start+n;
+}
 }
 
 void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
@@ -134,6 +152,14 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
     const int H=ex.harmonics,D=ex.rows,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
     const bool tangent=direction!=nullptr;
+    const size_t edge_count=two_layer_edge_offsets_cache_.empty()
+        ? 0 : two_layer_edge_offsets_cache_.back();
+    const int radial_der_stride=ex.derivatives
+        ? AdaptiveRadialDerStride(two_layer_edge_radial_ders_cache_.size(),
+                                  edge_count, ex.radial_stride)
+        : 0;
+    const bool compact_radial_ders=ex.derivatives
+        && radial_der_stride==ex.radial_stride;
     std::fill(ex.values.begin(),ex.values.end(),0.0);
     if (tangent) std::fill(ex.tangents.begin(),ex.tangents.end(),0.0);
     for (int j=0; j<nbh.count; ++j) {
@@ -141,7 +167,7 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
         const double* y=two_layer_edge_sh_values_cache_.data()+edge*H;
         const double* dy=ex.derivatives ? two_layer_edge_sh_ders_cache_.data()+edge*3*H : nullptr;
         const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
-        const double* dr=ex.derivatives ? two_layer_edge_radial_ders_cache_.data()+edge*ex.radial_stride*5 : nullptr;
+        const double* dr=ex.derivatives ? two_layer_edge_radial_ders_cache_.data()+edge*radial_der_stride : nullptr;
         const double* c=ex.coefficients.data()+static_cast<size_t>(nbh.inds[j])*D;
         const double* ct=tangent ? ex.coefficient_tangents.data()+static_cast<size_t>(nbh.inds[j])*D : nullptr;
         const double wr=tangent ? ((*direction)[j][0]*nbh.vecs[j][0]+(*direction)[j][1]*nbh.vecs[j][1]+(*direction)[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
@@ -152,7 +178,8 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                 double value=0,radial_der=0,value_t=0;
                 for (int n=0; n<R; ++n) {
                     value+=c[row+n]*rb[rb_start+n];
-                    if (ex.derivatives) radial_der+=c[row+n]*dr[5*rb_start+n];
+                    if (ex.derivatives)
+                        radial_der+=c[row+n]*dr[AdaptiveRadialCoordDerOffset(rb_start,n,compact_radial_ders)];
                     if (tangent) value_t+=ct[row+n]*rb[rb_start+n];
                 }
                 if (tangent) value_t+=radial_der*wr;
@@ -464,6 +491,13 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int atoms=cfg.size(),D=ex.rows,Q=ex.scalars,H=ex.harmonics,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
+    const size_t edge_count=two_layer_edge_offsets_cache_.empty()
+        ? 0 : two_layer_edge_offsets_cache_.back();
+    const int radial_der_stride=AdaptiveRadialDerStride(
+        two_layer_edge_radial_ders_cache_.size(), edge_count, ex.radial_stride);
+    if (AdaptiveRadialDersAreCompact(two_layer_edge_radial_ders_cache_.size(),
+                                     edge_count, ex.radial_stride))
+        ERROR("adaptive radial mixed parameter gradient requires full radial derivative cache");
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     const double* weights=regression_coeffs.data()+AdaptiveRadialWeightOffset();
     std::vector<Vector3> direction;
@@ -509,7 +543,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             const double* y=two_layer_edge_sh_values_cache_.data()+edge*H;
             const double* dy=two_layer_edge_sh_ders_cache_.data()+edge*3*H;
             const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
-            const double* dr=two_layer_edge_radial_ders_cache_.data()+edge*5*ex.radial_stride;
+            const double* dr=two_layer_edge_radial_ders_cache_.data()+edge*radial_der_stride;
             const size_t start=static_cast<size_t>(nbh.inds[j])*D;
             const double* c=ex.coefficients.data()+start;
             const double* ct=tangent ? ex.coefficient_tangents.data()+start : nullptr;

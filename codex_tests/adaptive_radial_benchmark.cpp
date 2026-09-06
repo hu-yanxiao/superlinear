@@ -40,6 +40,21 @@ struct GradientReuseResult {
 	double min_abs_checksum = HUGE_DOUBLE;
 };
 
+struct ToggleRegressionResult {
+	double max_scaled_error = 0.0;
+	double max_gradient_scaled_error = 0.0;
+	double max_component_scaled_error = 0.0;
+	double min_abs_force = HUGE_DOUBLE;
+	double min_abs_gradient_checksum = HUGE_DOUBLE;
+	double min_abs_component_checksum = HUGE_DOUBLE;
+};
+
+struct ComponentSnapshot {
+	std::vector<double> energy;
+	std::vector<double> forces;
+	std::vector<double> stress;
+};
+
 double Now()
 {
 	using clock = std::chrono::steady_clock;
@@ -117,6 +132,24 @@ double AccumulateComponentChecksum(MLMTPR& model,
 				     * std::sin(0.05 * (1 + 3 * a + b + 7 * c));
 	}
 	return sum;
+}
+
+ComponentSnapshot CaptureComponents(MLMTPR& model, const Configuration& cfg)
+{
+	const int columns = model.LinearEquationCount();
+	ComponentSnapshot out;
+	out.energy.assign(model.energy_cmpnts, model.energy_cmpnts + columns);
+	out.forces.reserve(static_cast<size_t>(cfg.size()) * columns * 3);
+	for (int i = 0; i < cfg.size(); ++i)
+		for (int c = 0; c < columns; ++c)
+			for (int a = 0; a < 3; ++a)
+				out.forces.push_back(model.forces_cmpnts(i, c, a));
+	out.stress.reserve(static_cast<size_t>(columns) * 9);
+	for (int c = 0; c < columns; ++c)
+		for (int a = 0; a < 3; ++a)
+			for (int b = 0; b < 3; ++b)
+				out.stress.push_back(model.stress_cmpnts[c][a][b]);
+	return out;
 }
 
 std::vector<double> EnergyWeights(const Configuration& cfg)
@@ -329,6 +362,42 @@ double CompareGradients(const Array1D& lhs, const Array1D& rhs)
 	return max_error;
 }
 
+double CompareVectors(const std::vector<double>& lhs,
+                      const std::vector<double>& rhs)
+{
+	if (lhs.size() != rhs.size())
+		return 1.0;
+	double max_error = 0.0;
+	for (size_t i = 0; i < lhs.size(); ++i) {
+		if (!std::isfinite(lhs[i]) || !std::isfinite(rhs[i]))
+			return 1.0;
+		max_error = std::max(max_error,
+			std::abs(lhs[i] - rhs[i])
+			/ std::max(1.0, std::max(std::abs(lhs[i]), std::abs(rhs[i]))));
+	}
+	return max_error;
+}
+
+double CompareComponents(const ComponentSnapshot& lhs,
+                         const ComponentSnapshot& rhs)
+{
+	return std::max(CompareVectors(lhs.energy, rhs.energy),
+		std::max(CompareVectors(lhs.forces, rhs.forces),
+		         CompareVectors(lhs.stress, rhs.stress)));
+}
+
+double ComponentAbsMax(const ComponentSnapshot& snapshot)
+{
+	double out = 0.0;
+	for (double x : snapshot.energy)
+		out = std::max(out, std::abs(x));
+	for (double x : snapshot.forces)
+		out = std::max(out, std::abs(x));
+	for (double x : snapshot.stress)
+		out = std::max(out, std::abs(x));
+	return out;
+}
+
 GradientReuseResult FullCacheGradientReuseCheck(const std::string& model_path,
                                                 const Configuration& seed)
 {
@@ -437,6 +506,153 @@ void Barrier()
 #endif
 }
 
+void SetGateTypeReference(bool enabled)
+{
+#if defined(_WIN32)
+	_putenv_s("SUS2_SH_GATE_TYPE_REFERENCE", enabled ? "1" : "0");
+#else
+	if (enabled)
+		setenv("SUS2_SH_GATE_TYPE_REFERENCE", "1", 1);
+	else
+		setenv("SUS2_SH_GATE_TYPE_REFERENCE", "0", 1);
+#endif
+}
+
+void SetAdaptiveEFSReference(bool enabled)
+{
+#if defined(_WIN32)
+	_putenv_s("SUS2_SH_ADAPTIVE_EFS_REFERENCE", enabled ? "1" : "0");
+#else
+	if (enabled)
+		setenv("SUS2_SH_ADAPTIVE_EFS_REFERENCE", "1", 1);
+	else
+		setenv("SUS2_SH_ADAPTIVE_EFS_REFERENCE", "0", 1);
+#endif
+}
+
+void SetReferenceMode(bool enabled)
+{
+	SetGateTypeReference(enabled);
+	SetAdaptiveEFSReference(enabled);
+}
+
+double MaxForceAbs(const Configuration& cfg)
+{
+	double out = 0.0;
+	for (int i = 0; i < cfg.size(); ++i)
+		for (int a = 0; a < 3; ++a)
+			out = std::max(out, std::abs(cfg.force(i, a)));
+	return out;
+}
+
+ToggleRegressionResult GateTypeReferenceToggleRegression(
+	const std::string& model_path,
+	const Configuration& seed)
+{
+	ToggleRegressionResult result;
+
+	MLMTPR model(model_path);
+	SetReferenceMode(false);
+	Configuration baseline = seed;
+	model.CalcEFS(baseline);
+	result.min_abs_force = std::min(result.min_abs_force, MaxForceAbs(baseline));
+
+	SetReferenceMode(true);
+	Configuration reference_efs = seed;
+	model.CalcEFS(reference_efs);
+	result.min_abs_force = std::min(result.min_abs_force, MaxForceAbs(reference_efs));
+	result.max_scaled_error = std::max(
+		result.max_scaled_error,
+		CompareEFS(baseline, reference_efs));
+
+	SetReferenceMode(false);
+	Configuration energy_only = seed;
+	model.CalcEnergyAndSiteEnergies(energy_only);
+
+	SetReferenceMode(true);
+	Configuration components = seed;
+	model.CalcEFSComponents(components, true, true);
+	const ComponentSnapshot reference_components =
+		CaptureComponents(model, components);
+	const double component_checksum =
+		std::abs(AccumulateComponentChecksum(model, components));
+	result.min_abs_component_checksum =
+		std::min(result.min_abs_component_checksum, component_checksum);
+
+	SetReferenceMode(false);
+	Configuration optimized_components = seed;
+	model.CalcEFSComponents(optimized_components, true, true);
+	const ComponentSnapshot compact_components =
+		CaptureComponents(model, optimized_components);
+	result.max_component_scaled_error = std::max(
+		result.max_component_scaled_error,
+		CompareComponents(reference_components, compact_components));
+	result.min_abs_component_checksum = std::min(
+		result.min_abs_component_checksum,
+		ComponentAbsMax(compact_components));
+
+	SetReferenceMode(false);
+	Configuration gradient_cfg = seed;
+	std::vector<double> energy_weights = EnergyWeights(gradient_cfg);
+	const std::vector<Vector3> force_weights = ForceWeights(gradient_cfg);
+	const Matrix3 stress_weights = StressWeights();
+	Array1D gradient(model.CoeffCount());
+	std::fill(gradient.begin(), gradient.end(), 0.0);
+	model.RequestTwoLayerFullEdgeCacheForNextCalcEFS();
+	model.CalcEFS(gradient_cfg);
+
+	SetReferenceMode(true);
+	model.AccumulateEFSCombinationGrad(
+		gradient_cfg, energy_weights, force_weights, stress_weights, gradient);
+	const double gradient_checksum =
+		std::abs(AccumulateGradientChecksum(gradient));
+	result.min_abs_gradient_checksum =
+		std::min(result.min_abs_gradient_checksum, gradient_checksum);
+
+	SetReferenceMode(false);
+	Configuration optimized_gradient_cfg = seed;
+	Array1D optimized_gradient =
+		ComputeCombinationGradient(model, optimized_gradient_cfg);
+	result.max_gradient_scaled_error = std::max(
+		result.max_gradient_scaled_error,
+		CompareGradients(gradient, optimized_gradient));
+	result.min_abs_gradient_checksum = std::min(
+		result.min_abs_gradient_checksum,
+		std::abs(AccumulateGradientChecksum(optimized_gradient)));
+
+	SetReferenceMode(false);
+	Configuration after_toggle = seed;
+	model.CalcEFS(after_toggle);
+	result.min_abs_force = std::min(result.min_abs_force, MaxForceAbs(after_toggle));
+	result.max_scaled_error = std::max(
+		result.max_scaled_error,
+		CompareEFS(baseline, after_toggle));
+
+	for (int kind = 1; kind <= 4; ++kind) {
+		MLMTPR toggled(model_path);
+		Configuration toggled_cfg = seed;
+		SetReferenceMode(true);
+		toggled.CalcEFS(toggled_cfg);
+		ApplyGradientReuseMutation(kind, toggled, toggled_cfg);
+		SetReferenceMode(false);
+		toggled.CalcEFS(toggled_cfg);
+
+		MLMTPR fresh(model_path);
+		Configuration fresh_cfg = seed;
+		ApplyGradientReuseMutation(kind, fresh, fresh_cfg);
+		SetReferenceMode(false);
+		fresh.CalcEFS(fresh_cfg);
+		result.min_abs_force =
+			std::min(result.min_abs_force, MaxForceAbs(toggled_cfg));
+		result.max_scaled_error = std::max(
+			result.max_scaled_error,
+			CompareEFS(toggled_cfg, fresh_cfg));
+	}
+
+	SetReferenceMode(false);
+	return result;
+}
+
 int Run(int argc, char** argv)
 {
 	if (argc < 3 || argc > 5) {
@@ -490,6 +706,8 @@ int Run(int argc, char** argv)
 	const double state_error = MutableStateError(model_path, configs.front());
 	const GradientReuseResult reuse_result =
 		FullCacheGradientReuseCheck(model_path, configs.front());
+	const ToggleRegressionResult toggle_result =
+		GateTypeReferenceToggleRegression(model_path, configs.front());
 
 	const Summary efs_s = ReduceSummary(calc_efs.seconds);
 	const Summary grad_s = ReduceSummary(full_grad.seconds);
@@ -497,6 +715,14 @@ int Run(int argc, char** argv)
 	const Summary state_s = ReduceSummary(state_error);
 	const Summary reuse_error_s = ReduceSummary(reuse_result.max_scaled_error);
 	const Summary reuse_checksum_s = ReduceSummary(reuse_result.min_abs_checksum);
+	const Summary toggle_error_s = ReduceSummary(toggle_result.max_scaled_error);
+	const Summary toggle_grad_error_s =
+		ReduceSummary(toggle_result.max_gradient_scaled_error);
+	const Summary toggle_comp_error_s =
+		ReduceSummary(toggle_result.max_component_scaled_error);
+	const Summary toggle_force_s = ReduceSummary(toggle_result.min_abs_force);
+	const Summary toggle_grad_s = ReduceSummary(toggle_result.min_abs_gradient_checksum);
+	const Summary toggle_comp_s = ReduceSummary(toggle_result.min_abs_component_checksum);
 	const Summary checksum_s = ReduceSummary(
 		calc_efs.checksum + full_grad.checksum + components.checksum);
 	if (rank == 0) {
@@ -517,12 +743,30 @@ int Run(int argc, char** argv)
 		          << " full_cache_gradient_scaled_error_max=" << reuse_error_s.max_value
 		          << " full_cache_gradient_min_abs_checksum="
 		          << reuse_checksum_s.min_value
+		          << " adaptive_reference_toggle_scaled_error_max="
+		          << toggle_error_s.max_value
+		          << " adaptive_reference_toggle_gradient_scaled_error_max="
+		          << toggle_grad_error_s.max_value
+		          << " adaptive_reference_toggle_component_scaled_error_max="
+		          << toggle_comp_error_s.max_value
+		          << " adaptive_reference_toggle_min_abs_force="
+		          << toggle_force_s.min_value
+		          << " adaptive_reference_toggle_min_abs_gradient_checksum="
+		          << toggle_grad_s.min_value
+		          << " adaptive_reference_toggle_min_abs_component_checksum="
+		          << toggle_comp_s.min_value
 		          << " combined_checksum_avg=" << checksum_s.sum_value / ranks
 		          << '\n';
 	}
 	return state_s.max_value < 2.0e-10
 	    && reuse_error_s.max_value < 2.0e-10
 	    && reuse_checksum_s.min_value > 1.0e-14
+	    && toggle_error_s.max_value < 2.0e-10
+	    && toggle_grad_error_s.max_value < 2.0e-10
+	    && toggle_comp_error_s.max_value < 2.0e-10
+	    && toggle_force_s.min_value > 1.0e-14
+	    && toggle_grad_s.min_value > 1.0e-14
+	    && toggle_comp_s.min_value > 1.0e-14
 		? 0 : 1;
 }
 

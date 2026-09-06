@@ -1122,6 +1122,8 @@ public:
 		double TwoLayerGateAdditiveCoeff(int type_outer, int mu) const;
 		int TwoLayerGateTypeCoeffIndex(int type_outer, int mu) const;
 		double TwoLayerGateTypeCoeff(int type_outer, int mu) const;
+		// Borrowed for one evaluation only; nullptr preserves per-entry fallbacks.
+		const double* TwoLayerGateTypeCoeffMatrixData() const;
 			int TwoLayerGateWeightIndex(int scalar_weight_index) const;
 			int TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const;
 			int TwoLayerGateBodyMixWeightIndex(int mu, int body_order) const;

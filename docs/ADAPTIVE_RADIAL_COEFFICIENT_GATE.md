@@ -111,6 +111,41 @@ second stress minus sign here would be incorrect. Stored EFS virial remains
 - The exact primitive cache is currently mandatory for this mode. Disabling it
   is explicitly rejected; it must not silently select the old model's math.
 
+### Exact EFS cache and gate access optimization
+
+Gate type coefficients are resolved once at the cache/force routine boundary,
+not through the mode-dependent offset helpers for every edge/basic node. The
+borrowed matrix pointer is local to that evaluation; parameter vector updates
+or resizes cannot leave a persistent stale pointer. Incomplete parameter blocks
+retain the existing per-entry getter fallback and species bounds checks.
+
+Ordinary adaptive EFS (shared-radial gate, no radial mixing) stores only the
+coordinate derivative in an `edges * eval_blocks * N` array. The adaptive
+consumer identifies compact versus full layout by the actual array size, not
+the current environment setting. Shared-scaling gate contraction still receives
+its established full-stride scratch, with the coordinate entries populated.
+No gate basis channels are removed: for shared scaling all K basis groups can
+still be needed even when O is smaller than K.
+
+The unused environment-independent outer-mu value/derivative arrays are omitted
+only on this EFS-only path. Requested full parameter/mixed derivative caches
+retain the original arrays and five derivative blocks. Cache validation rejects
+a compact buffer when parameter derivatives are required. Switching between
+energy, EFS, linear components and full gradients preserves this distinction.
+
+Diagnostic switches (not model-file fields):
+
+- `SUS2_SH_GATE_TYPE_REFERENCE=1`: use the original per-entry gate type getter.
+- `SUS2_SH_ADAPTIVE_EFS_REFERENCE=1`: retain full-stride radial coordinate
+  storage and the old outer-mu arrays; mathematical outputs are unchanged.
+- `SUS2_SH_ADAPTIVE_RADIAL_DR_FULL_CACHE=1`: disable just radial derivative
+  compaction, for separate memory/performance diagnosis.
+
+`codex_tests/adaptive_radial_benchmark.cpp` includes same-instance reference
+switching and energy/EFS/components/full-gradient interleaving, plus mutation
+checks. These switches are distinct from `SUS2_SH_ADAPTIVE_COMPONENTS`, which
+selects only the linear-component evaluation algorithm, not ordinary EFS.
+
 Initialization, regression evidence and measured performance are recorded after
 their corresponding checks complete; the existence of this contract is not a
 claim that a training run or benchmark has passed.
