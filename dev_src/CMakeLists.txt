@@ -2,6 +2,8 @@ set(SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/eam.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/matvec_oper.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/mtpr.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mtpr_adaptive_initialization.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mtpr_adaptive_radial.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/mtpr_sh.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/mtpr_trainer.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/non_linear_regression.cpp

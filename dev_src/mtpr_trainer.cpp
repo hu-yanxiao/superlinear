@@ -3057,9 +3057,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		const std::vector<double> linear_mults_reference = p_mlmtpr->linear_mults;
 		const std::vector<double> max_linear_reference = p_mlmtpr->max_linear;
 		double exact_head_center_factor = 1.0;
-		if (use_exact_head_coordinates) {
-			// The residual model overrides the stored center prefactors inside
-			// its two-layer evaluation, so these component columns do not apply.
+			if (use_exact_head_coordinates) {
+				// The residual model overrides the stored center prefactors inside
+				// its two-layer evaluation, so these component columns do not apply.
 			if (p_mlmtpr->TwoLayerResidualEnabled())
 				ERROR("efs-head does not support residual two-layer heads; use efs-gn for this checkpoint");
 			// CalcEFSComponents supplies the same unscaled columns used by
@@ -3073,11 +3073,51 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				ERROR("efs-head requires initialized center linear prefactors");
 			exact_head_center_factor = linear_coeffs_reference[0];
 			for (int type = 0; type < p_mlmtpr->species_count; ++type)
-				if (!std::isfinite(linear_coeffs_reference[type])
-				    || linear_coeffs_reference[type] != exact_head_center_factor)
-					ERROR("efs-head requires equal center linear prefactors; use efs-gn for a general checkpoint");
-		}
-		std::vector<int> selected_full_indices;
+					if (!std::isfinite(linear_coeffs_reference[type])
+					    || linear_coeffs_reference[type] != exact_head_center_factor)
+						ERROR("efs-head requires equal center linear prefactors; use efs-gn for a general checkpoint");
+			}
+			if (p_mlmtpr->OuterUsesAdaptiveRadialCoefficients()) {
+				const int amp_begin = p_mlmtpr->AdaptiveRadialAmplitudeOffset();
+				const int row_count = p_mlmtpr->AdaptiveRadialRowCount();
+				const int weight_begin = p_mlmtpr->AdaptiveRadialWeightOffset();
+				const int scalar_count = p_mlmtpr->TwoLayerGateScalarCount();
+				for (int row = 0; row < row_count; ++row) {
+					const int full_idx = amp_begin + row;
+					if (full_idx < 0 || full_idx >= n
+					    || full_to_active_index[full_idx] < 0)
+						continue;
+					const double physical_scale =
+						p_mlmtpr->AdaptiveRadialAmplitudeOptimizerScale(row);
+					if (!std::isfinite(physical_scale) || physical_scale <= 0.0)
+						ERROR("MTPR_trainer::Train(): invalid adaptive radial amplitude optimizer scale");
+					coordinate_scale_by_full[full_idx] = 1.0 / physical_scale;
+					coordinate_reference_by_full[full_idx] = x[full_idx];
+				}
+				for (int row = 0; row < row_count; ++row) {
+					for (int q = 0; q < scalar_count; ++q) {
+						const int full_idx = weight_begin + row * scalar_count + q;
+						if (full_idx < 0 || full_idx >= n
+						    || full_to_active_index[full_idx] < 0)
+							continue;
+						const double physical_scale =
+							p_mlmtpr->AdaptiveRadialWeightOptimizerScale(q);
+						if (!std::isfinite(physical_scale) || physical_scale <= 0.0)
+							ERROR("MTPR_trainer::Train(): invalid adaptive radial weight optimizer scale");
+						coordinate_scale_by_full[full_idx] = 1.0 / physical_scale;
+						coordinate_reference_by_full[full_idx] = x[full_idx];
+					}
+				}
+				if (prank == 0)
+					std::cout << "[" << CurrentTimestamp() << "] "
+					          << "BFGS fixed adaptive radial coordinate scales"
+					          << " rows=" << row_count
+					          << " scalars=" << scalar_count
+					          << " coordinate_chart=centered-diagonal"
+					          << " model_format=physical"
+					          << std::endl;
+			}
+			std::vector<int> selected_full_indices;
 		for (const CoordinateNormalizationBlock& block :
 		     coordinate_normalization_blocks)
 			selected_full_indices.insert(

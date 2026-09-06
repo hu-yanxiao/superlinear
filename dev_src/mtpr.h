@@ -9,9 +9,11 @@
 #include <map>
 #include <random>
 #include <cstdint>
+#include <limits>
 #ifndef MLIP_MTPR_H
 #define MLIP_MTPR_H
 #include "pure_w_execution.h"
+#include "adaptive_radial_execution.h"
 
 struct BasicIndices {
         std::vector<int> comp0, comp1, comp2, comp3;
@@ -200,8 +202,12 @@ protected:
 				std::vector<double> two_layer_gate_scaled_mu_vals_buffer_;
 				std::vector<double> two_layer_gate_scaled_mu_ders_buffer_;
 				std::vector<double> two_layer_gate_radial_mixing_outer_delta_buffer_;
-				std::vector<double> two_layer_gate_radial_mixing_outer_rank_buffer_;
-				std::vector<double> sh_site_energy_radial_mixing_input_scratch_;
+					std::vector<double> two_layer_gate_radial_mixing_outer_rank_buffer_;
+					std::vector<double> adaptive_radial_amplitudes_;
+					std::vector<double> adaptive_radial_weights_;
+					std::vector<double> adaptive_radial_amplitude_optimizer_scales_;
+					std::vector<double> adaptive_radial_weight_optimizer_scales_;
+					std::vector<double> sh_site_energy_radial_mixing_input_scratch_;
 				std::vector<double> sh_site_energy_radial_mixing_kernel_scratch_;
 				std::vector<double> sh_site_energy_radial_mixing_kernel_der_scratch_;
 				std::vector<double> sh_site_energy_radial_mixing_outer_scratch_;
@@ -240,6 +246,28 @@ protected:
 	void PreparePureWGraph();
 	bool ApplyPureWGraph(bool reverse);
 	void ReportPureWExecution() const;
+	void PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
+	                           bool derivatives,
+	                           bool parameters);
+	void ForwardAdaptiveRadialSite(const Neighborhood& nbh,
+	                               int atom,
+	                               const std::vector<Vector3>* direction = nullptr);
+	void ReverseAdaptiveRadialGraph(bool tangent);
+	void AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
+	                                        const Neighborhood& nbh,
+	                                        int atom,
+	                                        int component = -1,
+	                                        bool need_forces = true,
+	                                        bool need_stress = true);
+	void FinishAdaptiveRadialGateForces(Configuration& cfg,
+	                                    const Neighborhoods& neighborhoods,
+	                                    int component = -1,
+	                                    bool need_forces = true,
+	                                    bool need_stress = true);
+	void FinishAdaptiveRadialGateComponents(Configuration& cfg,
+	                                        const Neighborhoods& neighborhoods,
+	                                        bool need_forces,
+	                                        bool need_stress);
 			std::vector<double> two_layer_gate_tanh_mu_cache_;
 			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;
@@ -748,6 +776,20 @@ public:
 			Configuration& cfg,
 			const Neighborhoods& neighborhoods,
 			std::vector<double>& out_energy_by_body_order);
+		void CalcAdaptiveRadialEFS(Configuration& cfg,
+		                           const Neighborhoods& neighborhoods,
+		                           bool need_derivatives);
+		void AccumulateAdaptiveRadialCombinationGrad(
+			Configuration& cfg,
+			const Neighborhoods& neighborhoods,
+			const std::vector<double>& ene_weight,
+			const std::vector<Vector3>& frc_weights,
+			const Matrix3& str_weights,
+			Array1D& out_grads_accumulator);
+		void CalcAdaptiveRadialComponents(Configuration& cfg,
+		                                  const Neighborhoods& neighborhoods,
+		                                  bool need_forces,
+		                                  bool need_stress);
 		void AccumulateEFSCombinationGrad(Configuration& cfg,
 	                                  std::vector<double>& ene_weight,
 	                                  const std::vector<Vector3>& frc_weights,
@@ -785,6 +827,10 @@ public:
 		                              double coeff,
 		                              double& out_penalty_accumulator,
 		                              Array1D* out_penalty_grad_accumulator);
+		void AddAdaptiveRadialSmoothnessPenalty(double coeff,
+		                                        int grid_size,
+		                                        double& out_penalty_accumulator,
+		                                        Array1D* out_penalty_grad_accumulator);
 		void PrepareTwoLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
 		void PrepareSecondLayerGateValues(Configuration& cfg, const Neighborhoods& neighborhoods);
 		void AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighborhoods& neighborhoods);
@@ -948,6 +994,10 @@ public:
 						bool OuterUsesPureRadialMatrix() const {
 							return OuterKRankEnabled() && outer_radial_mode_ == "pure-matrix";
 						}
+						bool OuterUsesAdaptiveRadialCoefficients() const {
+							return OuterKRankEnabled()
+								&& outer_radial_mode_ == "adaptive-coefficients";
+						}
 						bool OuterUsesSameChannelGraph() const {
 							return OuterKRankEnabled() && outer_channel_mode_ == "same-channel";
 						}
@@ -956,7 +1006,8 @@ public:
 						}
 						bool OuterKRankHasTrainableWeights() const {
 							return OuterKRankEnabled() && !OuterKRankUsesDirectRadial()
-								&& !OuterUsesPureRadialMatrix();
+								&& !OuterUsesPureRadialMatrix()
+								&& !OuterUsesAdaptiveRadialCoefficients();
 						}
 					int OuterKRank1BasicBegin() const { return outer_k_rank1_basic_begin_; }
 					int OuterKRank1BasicCount() const { return outer_k_rank1_basic_count_; }
@@ -1031,7 +1082,22 @@ public:
 			int TwoLayerGateRadialMixingCoeffOffset() const;
 			int TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel, int k_channel, int xi) const;
 			double TwoLayerGateRadialMixingCoeff(int l, int outer_channel, int k_channel, int xi) const;
-				bool TwoLayerGateEdgeL1Enabled() const;
+			int AdaptiveRadialRowCount() const;
+			int AdaptiveRadialAmplitudeOffset() const;
+			int AdaptiveRadialWeightOffset() const;
+			int AdaptiveRadialRowIndex(int l, int o, int n) const;
+			int AdaptiveRadialAmplitudeIndex(int l, int o, int n) const;
+			int AdaptiveRadialWeightIndex(int l, int o, int n, int q) const;
+				double AdaptiveRadialAmplitude(int l, int o, int n) const;
+				double AdaptiveRadialWeight(int l, int o, int n, int q) const;
+				double AdaptiveRadialAmplitudeOptimizerScale(int row) const;
+				double AdaptiveRadialWeightOptimizerScale(int q) const;
+				void InitializeAdaptiveRadialFromData(
+					std::vector<Configuration>& training_set,
+					const std::vector<Neighborhoods>* training_neighborhoods = nullptr,
+					double relative_rms = 0.03,
+					unsigned seed = 1);
+					bool TwoLayerGateEdgeL1Enabled() const;
 				int TwoLayerGateEdgeL1SourceCount() const;
 				int TwoLayerGateEdgeL1WeightCount() const;
 				int TwoLayerGateEdgeL1WeightOffset() const;
@@ -1192,7 +1258,7 @@ public:
 	}
 		void DistributeCoeffs()									//Combine radial and linear coefficients in one array
 		{
-				if (OuterUsesPureRadialMatrix())
+				if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients())
 					ValidateOuterModeConfiguration();
 				const int base_nonlinear_size = BaseNonlinearCoeffCount();
 						const int gate_radial_count = TwoLayerGateRadialCoeffCount();
@@ -1203,6 +1269,16 @@ public:
 							const int gate_body_mix_weight_count = TwoLayerGateBodyMixWeightCount();
 							const int gate_radial_mixing_count =
 								TwoLayerGateRadialMixingCoeffCount();
+							const int adaptive_radial_row_count =
+								AdaptiveRadialRowCount();
+							const size_t adaptive_radial_weight_count_size =
+								static_cast<size_t>(adaptive_radial_row_count)
+								* static_cast<size_t>(TwoLayerGateScalarCount());
+							if (adaptive_radial_weight_count_size
+							    > static_cast<size_t>(std::numeric_limits<int>::max()))
+								ERROR("SUS2-SH adaptive radial weight count exceeds supported index range");
+							const int adaptive_radial_weight_count =
+								static_cast<int>(adaptive_radial_weight_count_size);
 							const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
 						const int second_gate_radial_count = SecondLayerGateRadialCoeffCount();
 						const int second_gate_additive_count = SecondLayerGateAdditiveCoeffCount();
@@ -1225,11 +1301,13 @@ public:
 							const int new_gate_type_offset = new_gate_additive_offset + gate_additive_count;
 						const int new_gate_offset = new_gate_type_offset + gate_type_count;
 							const int new_gate_body_mix_offset = new_gate_offset + gate_weight_count;
-								const int new_gate_edge_l1_offset =
+							const int new_gate_edge_l1_offset =
 									new_gate_body_mix_offset + gate_body_mix_weight_count
 									+ gate_radial_mixing_count;
 							const int new_second_gate_radial_offset =
-								new_gate_edge_l1_offset + gate_edge_l1_weight_count;
+								new_gate_edge_l1_offset + adaptive_radial_row_count
+									+ adaptive_radial_weight_count
+									+ gate_edge_l1_weight_count;
 							const int new_second_gate_additive_offset =
 								new_second_gate_radial_offset + second_gate_radial_count;
 							const int new_second_gate_type_offset =
@@ -1375,6 +1453,42 @@ public:
 						       != gate_radial_mixing_count) {
 							two_layer_gate_radial_mixing_coeffs_.assign(
 								gate_radial_mixing_count, 0.0);
+						}
+						if (adaptive_radial_row_count > 0) {
+							if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+								adaptive_radial_amplitudes_.assign(
+									old_coeffs.begin() + new_gate_edge_l1_offset,
+									old_coeffs.begin() + new_gate_edge_l1_offset
+										+ adaptive_radial_row_count);
+								adaptive_radial_weights_.assign(
+									old_coeffs.begin() + new_gate_edge_l1_offset
+										+ adaptive_radial_row_count,
+									old_coeffs.begin() + new_gate_edge_l1_offset
+										+ adaptive_radial_row_count
+										+ adaptive_radial_weight_count);
+							} else {
+								if (static_cast<int>(adaptive_radial_amplitudes_.size())
+								    != adaptive_radial_row_count)
+									adaptive_radial_amplitudes_.assign(
+										adaptive_radial_row_count, 1.0e-2);
+								if (static_cast<int>(adaptive_radial_weights_.size())
+								    != adaptive_radial_weight_count)
+									adaptive_radial_weights_.assign(
+										adaptive_radial_weight_count, 0.0);
+								if (static_cast<int>(adaptive_radial_amplitude_optimizer_scales_.size())
+								    != adaptive_radial_row_count)
+									adaptive_radial_amplitude_optimizer_scales_.assign(
+										adaptive_radial_row_count, 1.0);
+								if (static_cast<int>(adaptive_radial_weight_optimizer_scales_.size())
+								    != TwoLayerGateScalarCount())
+									adaptive_radial_weight_optimizer_scales_.assign(
+										TwoLayerGateScalarCount(), 1.0);
+							}
+						} else {
+							adaptive_radial_amplitudes_.clear();
+							adaptive_radial_weights_.clear();
+							adaptive_radial_amplitude_optimizer_scales_.clear();
+							adaptive_radial_weight_optimizer_scales_.clear();
 						}
 							if (gate_edge_l1_weight_count > 0) {
 								if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
@@ -1534,6 +1648,8 @@ public:
 								+ gate_type_count + gate_weight_count
 								+ gate_body_mix_weight_count
 								+ gate_radial_mixing_count
+								+ adaptive_radial_row_count
+								+ adaptive_radial_weight_count
 								+ gate_edge_l1_weight_count
 								+ second_gate_radial_count + second_gate_additive_count
 								+ second_gate_type_count + second_gate_weight_count
@@ -1596,6 +1712,30 @@ public:
 						for (int i = 0; i < gate_radial_mixing_count; ++i)
 							regression_coeffs[TwoLayerGateRadialMixingCoeffOffset() + i] =
 								two_layer_gate_radial_mixing_coeffs_[i];
+					}
+					if (adaptive_radial_row_count > 0) {
+						if (static_cast<int>(adaptive_radial_amplitudes_.size())
+						    != adaptive_radial_row_count)
+							adaptive_radial_amplitudes_.assign(
+								adaptive_radial_row_count, 1.0e-2);
+						if (static_cast<int>(adaptive_radial_weights_.size())
+						    != adaptive_radial_weight_count)
+							adaptive_radial_weights_.assign(
+								adaptive_radial_weight_count, 0.0);
+						if (static_cast<int>(adaptive_radial_amplitude_optimizer_scales_.size())
+						    != adaptive_radial_row_count)
+							adaptive_radial_amplitude_optimizer_scales_.assign(
+								adaptive_radial_row_count, 1.0);
+						if (static_cast<int>(adaptive_radial_weight_optimizer_scales_.size())
+						    != TwoLayerGateScalarCount())
+							adaptive_radial_weight_optimizer_scales_.assign(
+								TwoLayerGateScalarCount(), 1.0);
+						for (int i = 0; i < adaptive_radial_row_count; ++i)
+							regression_coeffs[AdaptiveRadialAmplitudeOffset() + i] =
+								adaptive_radial_amplitudes_[i];
+						for (int i = 0; i < adaptive_radial_weight_count; ++i)
+							regression_coeffs[AdaptiveRadialWeightOffset() + i] =
+								adaptive_radial_weights_[i];
 					}
 							if (gate_edge_l1_weight_count > 0) {
 						if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
@@ -1746,6 +1886,7 @@ protected:
 	// Append execution-only storage so pre-existing hot member offsets stay
 	// unchanged. This is not part of the physical model or serialization.
 	PureWExecution pure_w_execution_;
+	AdaptiveRadialExecution adaptive_radial_execution_;
 };
 
 

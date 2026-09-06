@@ -191,6 +191,17 @@ public:
 			const int gate_radial_mixing_end =
 				gate_radial_mixing_begin
 				+ mtpr->TwoLayerGateRadialMixingCoeffCount();
+			const int adaptive_radial_amplitude_begin =
+				mtpr->AdaptiveRadialAmplitudeOffset();
+			const int adaptive_radial_amplitude_end =
+				adaptive_radial_amplitude_begin
+				+ mtpr->AdaptiveRadialRowCount();
+			const int adaptive_radial_weight_begin =
+				mtpr->AdaptiveRadialWeightOffset();
+			const int adaptive_radial_weight_end =
+				adaptive_radial_weight_begin
+				+ mtpr->AdaptiveRadialRowCount()
+				* mtpr->TwoLayerGateScalarCount();
 				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
 				const int gate_edge_l1_end =
 					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
@@ -222,6 +233,10 @@ public:
 				    || (coeff_index >= gate_body_mix_begin && coeff_index < gate_body_mix_end)
 				    || (coeff_index >= gate_radial_mixing_begin
 				        && coeff_index < gate_radial_mixing_end)
+				    || (coeff_index >= adaptive_radial_amplitude_begin
+				        && coeff_index < adaptive_radial_amplitude_end)
+				    || (coeff_index >= adaptive_radial_weight_begin
+				        && coeff_index < adaptive_radial_weight_end)
 				    || (coeff_index >= gate_edge_l1_begin && coeff_index < gate_edge_l1_end)
 				    || (coeff_index >= second_gate_radial_begin
 				        && coeff_index < second_gate_radial_end)
@@ -1476,6 +1491,14 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	    && index < mtpr.TwoLayerGateRadialMixingCoeffOffset()
 	        + mtpr.TwoLayerGateRadialMixingCoeffCount())
 		return "two_layer_gate_radial_mixing_coeff";
+	if (index >= mtpr.AdaptiveRadialAmplitudeOffset()
+	    && index < mtpr.AdaptiveRadialAmplitudeOffset()
+	        + mtpr.AdaptiveRadialRowCount())
+		return "adaptive_radial_amplitude";
+	if (index >= mtpr.AdaptiveRadialWeightOffset()
+	    && index < mtpr.AdaptiveRadialWeightOffset()
+	        + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount())
+		return "adaptive_radial_weight";
 	if (index >= mtpr.TwoLayerGateEdgeL1WeightOffset()
 	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
 	        + mtpr.TwoLayerGateEdgeL1WeightCount())
@@ -1610,7 +1633,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -1636,6 +1659,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
 		const double radial_smooth = ParseDevDoubleOption(opts, "radial-smooth", 0.0);
 		const int radial_smooth_grid = ParseDevIntOption(opts, "radial-smooth-grid", 128);
+		const double std_weight = ParseDevDoubleOption(opts, "std-weight", 0.0);
+		const double stdd_weight = ParseDevDoubleOption(opts, "stdd-weight", 0.0);
 		const double scalar_head_l2 = ParseDevDoubleOption(opts, "scalar-head-l2", 0.0);
 		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
 		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
@@ -1652,6 +1677,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			ERROR("--displacement should be positive.");
 
 		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		probe.std_scaling = std_weight;
+		probe.stdd_scaling = stdd_weight;
 		probe.radial_smooth_regularization = radial_smooth;
 		probe.radial_smooth_grid = radial_smooth_grid;
 		probe.scalar_head_l2_regularization = scalar_head_l2;
@@ -1686,6 +1713,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
 				          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
 				          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
+				          << " adaptive_radial_amplitude_begin=" << mtpr.AdaptiveRadialAmplitudeOffset()
+				          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
+				          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
+				          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
 					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 					          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 					          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -1721,7 +1752,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-direction-dev",
 		"checks a directional MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-direction-dev: model and cfg arguments are required\n";
@@ -1747,6 +1778,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const double stress_weight = ParseDevDoubleOption(opts, "stress-weight", 0.0);
 		const double radial_smooth = ParseDevDoubleOption(opts, "radial-smooth", 0.0);
 		const int radial_smooth_grid = ParseDevIntOption(opts, "radial-smooth-grid", 128);
+		const double std_weight = ParseDevDoubleOption(opts, "std-weight", 0.0);
+		const double stdd_weight = ParseDevDoubleOption(opts, "stdd-weight", 0.0);
 		const double scalar_head_l2 = ParseDevDoubleOption(opts, "scalar-head-l2", 0.0);
 		const double gate_scalar_l2 = ParseDevDoubleOption(opts, "gate-scalar-l2", 0.0);
 		const double gate_mix_l2 = ParseDevDoubleOption(opts, "gate-mix-l2", 0.0);
@@ -1763,6 +1796,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			ERROR("--displacement should be positive.");
 
 		DevLossGradientProbe probe(&mtpr, energy_weight, force_weight, stress_weight);
+		probe.std_scaling = std_weight;
+		probe.stdd_scaling = stdd_weight;
 		probe.radial_smooth_regularization = radial_smooth;
 		probe.radial_smooth_grid = radial_smooth_grid;
 		probe.scalar_head_l2_regularization = scalar_head_l2;
@@ -1785,6 +1820,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " gate_body_mix_end=" << mtpr.TwoLayerGateBodyMixWeightOffset() + mtpr.TwoLayerGateBodyMixWeightCount()
 			          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
 			          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
+			          << " adaptive_radial_amplitude_begin=" << mtpr.AdaptiveRadialAmplitudeOffset()
+			          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
+			          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
+			          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -2474,12 +2513,14 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --scaling-map=K|L|LK (default=LK),\n"
-				"         --superlinear-mode=legacy|pure-w-channelwise (default=legacy),\n"
+				"         --superlinear-mode=legacy|pure-w-channelwise|radial-coefficient-gate (default=legacy),\n"
 				"           pure-w-channelwise: complete distance matrix W_l(K x O), no P*R residual, O may exceed K;\n"
 				"           one K=1 angular graph is bound to O independent channels; requires --outer-k-rank=O;\n"
 				"           enables full mixer/two-layer gate, gate rank defaults to K, gate pruning=q-total;\n"
 				"           outer pruning=same-k; input k (or lk) scaling is shared over all output o;\n"
 				"           deterministic nonzero W initialization; train defaults to --init-params=same (retain parameters).\n"
+				"           radial-coefficient-gate: adaptive c_l,o,n + a_l,o,n*w_j,l,o,n coefficients,\n"
+				"           requires O<=raw K, same-channel outer graph, ranked neighbor gate, and no legacy mixer/readout.\n"
 				"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"

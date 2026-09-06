@@ -2287,7 +2287,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	const bool cache_radial_mixing_kernels = has_radial_mixing && !pure_w_execution_.basis;
 	const bool need_raw_radial_cache =
 		(need_derivatives && need_param_derivatives)
-		|| has_radial_mixing;
+		|| has_radial_mixing || OuterUsesAdaptiveRadialCoefficients();
 	const bool need_gate_raw_radial_cache =
 		need_raw_radial_cache && decoupled_gate_scaling;
 	const size_t radial_mixing_kernel_stride =
@@ -2338,6 +2338,11 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 	if (need_derivatives) {
 		two_layer_edge_sh_ders_cache_.resize(edge_count * 3 * sh_count);
 		two_layer_edge_mu_ders_cache_.resize(edge_count * mu_stride);
+		// Adaptive coefficients contract the raw radial derivative, not the
+		// obsolete environment-independent K-channel radial functions. Only
+		// the first R entries of each block are valid in the EFS-only cache.
+		if (OuterUsesAdaptiveRadialCoefficients())
+			two_layer_edge_radial_ders_cache_.resize(edge_count * radial_der_stride);
 		if (need_param_derivatives) {
 			two_layer_edge_radial_ders_cache_.resize(edge_count * radial_der_stride);
 			two_layer_edge_mu_ders_s_cache_.resize(edge_count * mu_stride);
@@ -2345,7 +2350,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 			two_layer_edge_mu_coord_ders_s_cache_.resize(edge_count * mu_stride);
 			two_layer_edge_mu_coord_ders_ss_cache_.resize(edge_count * mu_stride);
 		} else {
-			two_layer_edge_radial_ders_cache_.clear();
+			if (!OuterUsesAdaptiveRadialCoefficients())
+				two_layer_edge_radial_ders_cache_.clear();
 			two_layer_edge_mu_ders_s_cache_.clear();
 			two_layer_edge_mu_ders_ss_cache_.clear();
 			two_layer_edge_mu_coord_ders_s_cache_.clear();
@@ -2451,7 +2457,7 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					+ edge * radial_val_stride
 				: radial_vals_scratch.data();
 			double* rb_ders = need_derivatives
-				? (need_param_derivatives
+				? (need_param_derivatives || OuterUsesAdaptiveRadialCoefficients()
 					? two_layer_edge_radial_ders_cache_.data()
 						+ edge * radial_der_stride
 					: radial_ders_scratch.data())
@@ -2588,7 +2594,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					double dot_coord_ss = 0.0;
 					// W contracts the raw basis directly. Keep the legacy cache
 					// slots zero, but do not contract unused outer R coefficients.
-					const int outer_basis_count = OuterUsesPureRadialMatrix() ? 0 : R;
+					const int outer_basis_count =
+						(OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) ? 0 : R;
 					for (int xi = 0; xi < outer_basis_count; ++xi) {
 						const double coeff = regression_coeffs[radial_offset + xi];
 						dot_val += coeff * rb_vals[radial_base + xi];
@@ -2809,7 +2816,8 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 				}
 			}
 		}
-		if (prepare_gate_values_from_cache && TwoLayerGateUsesFullScalarWeights())
+		if (prepare_gate_values_from_cache && TwoLayerGateUsesFullScalarWeights()
+		    && !OuterUsesAdaptiveRadialCoefficients())
 			ComputeTwoLayerGateFullMuSignalsForAtoms(atom_count);
 		if (prepare_edge_l1_values_from_cache)
 			PrepareTwoLayerGateEdgeL1WeightedValues(atom_count, edge_count);
@@ -5671,6 +5679,8 @@ void MLMTPR::AddTwoLayerGateX2Penalty(
 		return;
 	if (!std::isfinite(coeff) || coeff < 0.0)
 		ERROR("--gate-x-l2 should be a finite non-negative value");
+	if (OuterUsesAdaptiveRadialCoefficients())
+		ERROR("--gate-x-l2 is not supported for radial-coefficient-gate models; use the adaptive radial regularization path instead");
 	if (radial_func_count <= 0)
 		return;
 

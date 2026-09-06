@@ -1772,6 +1772,25 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	//args[0] - potname
 	//args[1] - ts_name
 	const bool inline_sh_model = PrepareInlineSphericalHarmonicModel(args, opts);
+	const std::string adaptive_radial_initialization =
+		opts["adaptive-radial-initialization"].empty()
+			? "legacy" : opts["adaptive-radial-initialization"];
+	if (adaptive_radial_initialization != "legacy"
+	    && adaptive_radial_initialization != "balanced")
+		ERROR("--adaptive-radial-initialization should be legacy or balanced");
+	const bool balanced_adaptive_radial_init =
+		adaptive_radial_initialization == "balanced";
+	double adaptive_radial_init_relative_rms = 0.03;
+	if (!opts["adaptive-radial-init-relative-rms"].empty()) {
+		if (!balanced_adaptive_radial_init)
+			ERROR("--adaptive-radial-init-relative-rms requires --adaptive-radial-initialization=balanced");
+		adaptive_radial_init_relative_rms = ParseStrictDoubleOption(
+			opts["adaptive-radial-init-relative-rms"],
+			"--adaptive-radial-init-relative-rms");
+	}
+	if (!std::isfinite(adaptive_radial_init_relative_rms)
+	    || adaptive_radial_init_relative_rms <= 0.0)
+		ERROR("--adaptive-radial-init-relative-rms should be finite and positive");
 	const std::string pure_w_initialization = opts["pure-w-initialization"].empty()
 		? "legacy" : opts["pure-w-initialization"];
 	if (pure_w_initialization != "legacy" && pure_w_initialization != "balanced")
@@ -1936,7 +1955,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	const bool allow_physical_radial_sign_repair =
 		opts["allow-physical-radial-sign-repair"] != "";
-	string bfgs_coordinate_normalization = balanced_pure_w_init ? "efs-head" : "none";
+	string bfgs_coordinate_normalization =
+		(balanced_pure_w_init || balanced_adaptive_radial_init)
+			? "efs-head" : "none";
 	if (opts["bfgs-coordinate-normalization"] != "")
 		bfgs_coordinate_normalization =
 			opts["bfgs-coordinate-normalization"];
@@ -2086,6 +2107,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		double gate_mix_l2 = 0.0;
 		double gate_full_l2 = 0.0;
 		double gate_x_l2 = 1.0e-4;
+		const bool explicit_gate_x_l2 = opts["gate-x-l2"] != "";
 		if (scalar_weight_l2_preset == "recommended") {
 			scalar_head_l2 = 1.0e-5;
 			gate_scalar_l2 = 1.0e-4;
@@ -2100,7 +2122,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			gate_mix_l2 = stod(opts["gate-mix-l2"]);
 		if (opts["gate-full-l2"] != "")
 			gate_full_l2 = stod(opts["gate-full-l2"]);
-		if (opts["gate-x-l2"] != "")
+		if (explicit_gate_x_l2)
 			gate_x_l2 = stod(opts["gate-x-l2"]);
 		if (!std::isfinite(scalar_head_l2) || scalar_head_l2 < 0.0)
 			ERROR("--scalar-head-l2 should be a finite non-negative value");
@@ -2239,6 +2261,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	if (mtpr.OuterUsesAdaptiveRadialCoefficients()) {
+		if (!explicit_gate_x_l2) {
+			gate_x_l2 = 0.0;
+		} else if (gate_x_l2 != 0.0) {
+			ERROR("--gate-x-l2 is not valid for adaptive radial coefficient models; "
+			      "use --gate-x-l2=0 and the folded adaptive gate regularization instead");
+		}
+	}
 	if (bfgs_coordinate_normalization == "efs-head-full"
 	    && !balanced_pure_w_init)
 		ERROR("--bfgs-coordinate-normalization=efs-head-full requires "
@@ -2276,9 +2306,34 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		if (mtpr.HasZBL() || mtpr.MultiLayerGateEnabled() || !opts["multi-layer-gate"].empty()
 		    || mtpr.TwoLayerResidualEnabled() || guard_compression_options.enabled)
 			ERROR("Balanced pure-W initialization currently supports one-gate pure models without ZBL, residual stages, or compression guards");
-		if (custom_radial_mixing_init_scale)
-			ERROR("Balanced pure-W initialization uses --pure-w-init-target-rms, not --two-layer-gate-radial-mixing-init-scale");
-	}
+			if (custom_radial_mixing_init_scale)
+				ERROR("Balanced pure-W initialization uses --pure-w-init-target-rms, not --two-layer-gate-radial-mixing-init-scale");
+		}
+		if (balanced_adaptive_radial_init) {
+			if (maxits < 0)
+				ERROR("Balanced adaptive radial initialization requires --max-iter >= 0");
+			if (!mtpr.OuterUsesAdaptiveRadialCoefficients())
+				ERROR("--adaptive-radial-initialization=balanced requires an adaptive radial coefficient model");
+			if (loaded_complete_parameters)
+				ERROR("Balanced adaptive radial initialization only accepts an incomplete fresh seed; "
+				      "resume a complete checkpoint with --init-params=same without --adaptive-radial-initialization=balanced");
+			if (opts["init-params"] != "same")
+				ERROR("Balanced adaptive radial initialization requires --init-params=same; "
+				      "--init-random-seed controls only its new U directions");
+			if (optimizer_kind != "bfgs")
+				ERROR("Balanced adaptive radial initialization currently requires BFGS");
+			if (force_loss_kind != ForceLossKind::L2)
+				ERROR("Balanced adaptive radial initialization requires --force-loss=l2 for its initial linear head solve");
+			if (do_lin_rescale || fine_tune || two_layer_residual_staged
+			    || two_layer_gate_readout_linear_init || mindist_update)
+				ERROR("Balanced adaptive radial initialization is incompatible with do-lin-rescale, fine-tune, "
+				      "staged/readout-only initialization, and update-mindist");
+			if (mtpr.HasZBL() || mtpr.MultiLayerGateEnabled() || !opts["multi-layer-gate"].empty()
+			    || mtpr.TwoLayerResidualEnabled() || guard_compression_options.enabled)
+				ERROR("Balanced adaptive radial initialization currently supports one-gate adaptive models without ZBL, residual stages, or compression guards");
+			if (balanced_pure_w_init)
+				ERROR("Use either --pure-w-initialization=balanced or --adaptive-radial-initialization=balanced, not both");
+		}
 	if (!requested_radial_cutoff_type.empty()
 	    && mtpr.p_RadialBasis->radial_cutoff_type != requested_radial_cutoff_type)
 		ERROR("--radial-cutoff-type must match the loaded model; changing cutoff function requires init-sh/inline initialization");
@@ -2331,20 +2386,24 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const std::string requested_superlinear_mode = opts["superlinear-mode"];
 	if (!requested_superlinear_mode.empty()
 	    && requested_superlinear_mode != "legacy"
-	    && requested_superlinear_mode != "pure-w-channelwise")
-		ERROR("--superlinear-mode should be legacy or pure-w-channelwise");
+	    && requested_superlinear_mode != "pure-w-channelwise"
+	    && requested_superlinear_mode != "radial-coefficient-gate")
+		ERROR("--superlinear-mode should be legacy, pure-w-channelwise, or radial-coefficient-gate");
 	if (!requested_superlinear_mode.empty()
-	    && ((requested_superlinear_mode == "pure-w-channelwise")
-	        != (mtpr.OuterUsesPureRadialMatrix() && mtpr.OuterUsesSameChannelGraph())))
+	    && (((requested_superlinear_mode == "pure-w-channelwise")
+	         != (mtpr.OuterUsesPureRadialMatrix() && mtpr.OuterUsesSameChannelGraph()))
+	        || ((requested_superlinear_mode == "radial-coefficient-gate")
+	            != (mtpr.OuterUsesAdaptiveRadialCoefficients() && mtpr.OuterUsesSameChannelGraph()))))
 		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
-	if (mtpr.OuterUsesPureRadialMatrix()) {
+	if (mtpr.OuterUsesPureRadialMatrix()
+	    || mtpr.OuterUsesAdaptiveRadialCoefficients()) {
 		if (!opts["sh-factor-pruning"].empty() && opts["sh-factor-pruning"] != "same-k")
-			ERROR("--sh-factor-pruning must be same-k for the loaded pure-W channelwise model; the graph is not changed during resume");
+			ERROR("--sh-factor-pruning must be same-k for the loaded same-channel superlinear model; the graph is not changed during resume");
 		const auto gate_body_it = opts.find("two-layer-gate-body-order");
 		if (gate_body_it != opts.end() && !gate_body_it->second.empty()
 		    && ParseOptionalNonnegativeInteger(opts, "two-layer-gate-body-order")
 		        != mtpr.TwoLayerGateBodyOrderCount() + 1)
-			ERROR("--two-layer-gate-body-order must match the loaded pure-W gate graph; changing it requires init-sh/inline initialization");
+			ERROR("--two-layer-gate-body-order must match the loaded same-channel superlinear gate graph; changing it requires init-sh/inline initialization");
 	}
 	bool plain_to_gate_upgrade = false;
 	bool edge_l1_gate_upgrade = false;
@@ -2643,12 +2702,19 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("Atomic model save failed during " + context + ": " + save_error);
 	};
 
-	const double legacy_radial_penalty = mtpr.OuterUsesPureRadialMatrix() ? 0.0 : 1e-9;
+	const bool direct_outer_radial_mode =
+		mtpr.OuterUsesPureRadialMatrix()
+		|| mtpr.OuterUsesAdaptiveRadialCoefficients();
+	const double legacy_radial_penalty = direct_outer_radial_mode ? 0.0 : 1e-9;
 	MTPR_trainer trainer(&mtpr, weight_energy, weight_force, weight_stress,
 	                    scale_by_force, legacy_radial_penalty, curr_fnm, 0);
-	if (prank == 0 && mtpr.OuterUsesPureRadialMatrix())
-		std::cout << "pure-w-channelwise: legacy outer radial norm/orthogonality penalty disabled; "
-		          << "distance-matrix smoothness regularizes physical W(r)." << std::endl;
+	if (prank == 0 && direct_outer_radial_mode)
+		std::cout << (mtpr.OuterUsesAdaptiveRadialCoefficients()
+		                  ? "radial-coefficient-gate"
+		                  : "pure-w-channelwise")
+		          << ": legacy outer radial norm/orthogonality penalty disabled; "
+		          << "distance-matrix smoothness regularizes physical radial response."
+		          << std::endl;
 	//LOSS FUNCTIONAL MODIFICATION!!!
 	trainer.weighting = weighting;
         trainer.do_lin=do_lin;
@@ -2766,9 +2832,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	if (prank == 0 && mtpr.TwoLayerGateEnabled())
 		std::cout << "two-layer gate scale mode: additive-node" << std::endl;
+	if (prank == 0 && mtpr.OuterUsesAdaptiveRadialCoefficients())
+		std::cout << "radial-coefficient-gate: legacy gate-x L2 penalty disabled; "
+		          << "gate_x_l2_regularization=0 and folded adaptive gate regularization should be used."
+		          << std::endl;
 		if (prank == 0)
-			std::cout << "radial smoothness penalty: " << radial_smooth
-			          << " grid=" << radial_smooth_grid << std::endl;
+		std::cout << "radial smoothness penalty: " << radial_smooth
+		          << " grid=" << radial_smooth_grid << std::endl;
 		if (prank == 0
 		    && (scalar_weight_l2_preset != "none"
 		        || scalar_head_l2 != 0.0
@@ -3103,9 +3173,39 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << "[" << CurrentTimestamp() << "] "
 			          << "Pure-W same initial snapshot saved to " << trained_fnm
 			          << " (no parameter reset or linear solve)" << std::endl;
-	}
-	trainer.shift(do_shift);
-	if (balanced_pure_w_init) {
+		}
+		trainer.shift(do_shift);
+		if (balanced_adaptive_radial_init) {
+			const std::uint64_t seed = init_random_seed.has_value
+				? static_cast<std::uint64_t>(init_random_seed.value) : UINT64_C(1);
+			if (prank == 0)
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "Adaptive radial balanced initialization start"
+				          << " seed=" << seed
+				          << " relative_rms=" << adaptive_radial_init_relative_rms
+				          << std::endl;
+			mtpr.InitializeAdaptiveRadialFromData(
+				training_set,
+				linear_training_neighborhoods_ptr,
+				adaptive_radial_init_relative_rms,
+				static_cast<unsigned>(seed));
+#ifdef MLIP_MPI
+			MPI_Bcast(&mtpr.Coeff()[0], mtpr.CoeffCount(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+#endif
+			if (trainer.TrainRankActive())
+				trainer.TrainLinear(prank, training_set, linear_training_neighborhoods_ptr,
+				                    "balanced adaptive radial initial head solve");
+			trainer.BroadcastCoeffsWorld();
+			if (prank == 0)
+				std::cout << "[" << CurrentTimestamp() << "] "
+				          << "Adaptive radial balanced initialization complete; "
+				          << "no Rescale or 75-step pretraining"
+				          << std::endl;
+			save_model_atomically_collective(
+				maxits == 0 ? trained_fnm : "ini.mtp",
+				"balanced adaptive radial initialized model");
+		}
+		if (balanced_pure_w_init) {
 		// A new initialization protocol, never a checkpoint conversion. All
 		// changes are folded into physical W; prediction needs no new metadata.
 		const std::uint64_t seed = init_random_seed.has_value
@@ -3228,9 +3328,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				          << "Readout-only initialized model saved to "
 				          << trained_fnm << std::endl;
 		}
-	}
-	const bool run_initial_untrained_linear_warmup =
-		!balanced_pure_w_init && !loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
+		}
+		const bool run_initial_untrained_linear_warmup =
+			!balanced_pure_w_init && !balanced_adaptive_radial_init
+			&& !loaded_complete_parameters && maxits > 0 && !two_layer_residual_staged;
 	if (run_initial_untrained_linear_warmup) {
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] "
@@ -3253,7 +3354,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << "Initial untrained model warmup rescale+linear solve done"
 			          << std::endl;
 	}
-	if (!balanced_pure_w_init && !mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
+		if (!balanced_pure_w_init && !balanced_adaptive_radial_init
+		    && !mtpr.inited && maxits > 0 && !skip_preinit && !two_layer_residual_staged) {
 		trainer.max_step_count = 75;
 //		trainer.random_sample(prank, training_set);
 //		if (prank == 0){

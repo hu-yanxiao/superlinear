@@ -50,6 +50,13 @@ double Clamp01(double value)
 	return std::max(0.0, std::min(1.0, value));
 }
 
+int CheckedIntProduct(size_t a, size_t b, const char* name)
+{
+	if (a != 0 && b > static_cast<size_t>(std::numeric_limits<int>::max()) / a)
+		ERROR(std::string(name) + " exceeds supported index range");
+	return static_cast<int>(a * b);
+}
+
 struct GateUpgradeQIndex {
 	int l;
 	int k;
@@ -962,7 +969,9 @@ bool MLMTPR::TwoLayerGateUsesDirectScale() const
 
 bool MLMTPR::TwoLayerGateRadialMixingEnabled() const
 {
-	return two_layer_gate_enabled_ && two_layer_gate_radial_mixing_ == "full";
+	return two_layer_gate_enabled_
+	    && !OuterUsesAdaptiveRadialCoefficients()
+	    && two_layer_gate_radial_mixing_ == "full";
 }
 
 bool MLMTPR::HasNonzeroTwoLayerGateRadialMixingCoeffs() const
@@ -1413,7 +1422,8 @@ void MLMTPR::BuildTwoLayerGateBodyOrderBuckets()
 	    != TwoLayerGateBodyMixWeightCount())
 		ERROR("SUS2-SH two-layer gate body mix metadata has inconsistent sizes");
 	if (two_layer_gate_body_order_max_ < 2
-	    || two_layer_gate_body_order_max_ > (OuterUsesPureRadialMatrix() ? 6 : sh_body_order_))
+	    || two_layer_gate_body_order_max_ >
+	       ((OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) ? 6 : sh_body_order_))
 		ERROR("SUS2-SH mu-body-order gate body order is out of range");
 
 	const int gate_count = static_cast<int>(two_layer_gate_scalar_indices_.size());
@@ -1548,6 +1558,8 @@ int MLMTPR::TwoLayerGateWeightCount() const
 {
 	if (!two_layer_gate_enabled_)
 		return 0;
+	if (OuterUsesAdaptiveRadialCoefficients())
+		return 0;
 	if (two_layer_gate_mode_ == "mu-scalar-full")
 		return radial_func_count * TwoLayerGateScalarCount();
 	if (two_layer_gate_mode_ == "mu-body-linear-combo")
@@ -1558,6 +1570,8 @@ int MLMTPR::TwoLayerGateWeightCount() const
 
 int MLMTPR::TwoLayerGateAdditiveCoeffCount() const
 {
+	if (OuterUsesAdaptiveRadialCoefficients())
+		return 0;
 	return two_layer_gate_enabled_ ? species_count * radial_func_count : 0;
 }
 
@@ -1638,6 +1652,8 @@ int MLMTPR::TwoLayerGateTypeCoeffOffset() const
 
 int MLMTPR::TwoLayerGateBodyMixWeightCount() const
 {
+	if (OuterUsesAdaptiveRadialCoefficients())
+		return 0;
 	return TwoLayerGateUsesBodyLinearCombo()
 		? radial_func_count * TwoLayerGateBodyOrderCount()
 		: 0;
@@ -1726,7 +1742,128 @@ int MLMTPR::TwoLayerGateEdgeL1WeightCount() const
 int MLMTPR::TwoLayerGateEdgeL1WeightOffset() const
 {
 	return TwoLayerGateRadialMixingCoeffOffset()
+		+ TwoLayerGateRadialMixingCoeffCount()
+		+ AdaptiveRadialRowCount()
+		+ CheckedIntProduct(
+			static_cast<size_t>(AdaptiveRadialRowCount()),
+			static_cast<size_t>(TwoLayerGateScalarCount()),
+			"SUS2-SH adaptive radial weight count");
+}
+
+int MLMTPR::AdaptiveRadialRowCount() const
+{
+	if (!OuterUsesAdaptiveRadialCoefficients() || p_RadialBasis == nullptr)
+		return 0;
+	size_t count = static_cast<size_t>(sh_l_max_ + 1)
+		* static_cast<size_t>(outer_k_rank_)
+		* static_cast<size_t>(p_RadialBasis->rb_size);
+	if (count > static_cast<size_t>(std::numeric_limits<int>::max()))
+		ERROR("SUS2-SH adaptive radial coefficient row count exceeds supported index range");
+	return static_cast<int>(count);
+}
+
+int MLMTPR::AdaptiveRadialAmplitudeOffset() const
+{
+	return TwoLayerGateRadialMixingCoeffOffset()
 		+ TwoLayerGateRadialMixingCoeffCount();
+}
+
+int MLMTPR::AdaptiveRadialWeightOffset() const
+{
+	return AdaptiveRadialAmplitudeOffset() + AdaptiveRadialRowCount();
+}
+
+int MLMTPR::AdaptiveRadialRowIndex(int l, int o, int n) const
+{
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		ERROR("SUS2-SH adaptive radial coefficients are not enabled");
+	if (l < 0 || l > sh_l_max_)
+		ERROR("SUS2-SH adaptive radial l index is out of range");
+	if (o < 0 || o >= outer_k_rank_)
+		ERROR("SUS2-SH adaptive radial outer channel index is out of range");
+	if (p_RadialBasis == nullptr || n < 0 || n >= p_RadialBasis->rb_size)
+		ERROR("SUS2-SH adaptive radial basis index is out of range");
+	const int R = p_RadialBasis->rb_size;
+	const size_t local =
+		(static_cast<size_t>(l) * outer_k_rank_ + o) * R + n;
+	if (local >= static_cast<size_t>(AdaptiveRadialRowCount()))
+		ERROR("SUS2-SH adaptive radial row index is out of range");
+	return static_cast<int>(local);
+}
+
+int MLMTPR::AdaptiveRadialAmplitudeIndex(int l, int o, int n) const
+{
+	return AdaptiveRadialAmplitudeOffset() + AdaptiveRadialRowIndex(l, o, n);
+}
+
+int MLMTPR::AdaptiveRadialWeightIndex(int l, int o, int n, int q) const
+{
+	if (q < 0 || q >= TwoLayerGateScalarCount())
+		ERROR("SUS2-SH adaptive radial gate scalar index is out of range");
+	const size_t local = static_cast<size_t>(AdaptiveRadialRowIndex(l, o, n))
+		* TwoLayerGateScalarCount() + q;
+	const int checked_count = CheckedIntProduct(
+		static_cast<size_t>(AdaptiveRadialRowCount()),
+		static_cast<size_t>(TwoLayerGateScalarCount()),
+		"SUS2-SH adaptive radial weight count");
+	const size_t count = static_cast<size_t>(checked_count);
+	if (local >= count)
+		ERROR("SUS2-SH adaptive radial weight index is out of range");
+	return AdaptiveRadialWeightOffset() + static_cast<int>(local);
+}
+
+double MLMTPR::AdaptiveRadialAmplitude(int l, int o, int n) const
+{
+	const int coeff_index = AdaptiveRadialAmplitudeIndex(l, o, n);
+	if (coeff_index >= 0
+	    && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int local = AdaptiveRadialRowIndex(l, o, n);
+	if (local >= 0 && local < static_cast<int>(adaptive_radial_amplitudes_.size()))
+		return adaptive_radial_amplitudes_[local];
+	ERROR("SUS2-SH adaptive radial amplitude storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::AdaptiveRadialWeight(int l, int o, int n, int q) const
+{
+	const int coeff_index = AdaptiveRadialWeightIndex(l, o, n, q);
+	if (coeff_index >= 0
+	    && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int local = coeff_index - AdaptiveRadialWeightOffset();
+	if (local >= 0 && local < static_cast<int>(adaptive_radial_weights_.size()))
+		return adaptive_radial_weights_[local];
+	ERROR("SUS2-SH adaptive radial weight storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::AdaptiveRadialAmplitudeOptimizerScale(int row) const
+{
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		return 1.0;
+	if (row < 0 || row >= AdaptiveRadialRowCount())
+		ERROR("SUS2-SH adaptive radial amplitude optimizer-scale row is out of range");
+	if (row < static_cast<int>(adaptive_radial_amplitude_optimizer_scales_.size())) {
+		const double scale = adaptive_radial_amplitude_optimizer_scales_[row];
+		if (std::isfinite(scale) && scale > 0.0)
+			return scale;
+	}
+	return 1.0;
+}
+
+double MLMTPR::AdaptiveRadialWeightOptimizerScale(int q) const
+{
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		return 1.0;
+	if (q < 0 || q >= TwoLayerGateScalarCount())
+		ERROR("SUS2-SH adaptive radial weight optimizer-scale scalar is out of range");
+	if (q < static_cast<int>(adaptive_radial_weight_optimizer_scales_.size())) {
+		const double scale = adaptive_radial_weight_optimizer_scales_[q];
+		if (std::isfinite(scale) && scale > 0.0)
+			return scale;
+	}
+	return 1.0;
 }
 
 int MLMTPR::TwoLayerGateEdgeL1SourceMomentIndex(int source_index) const
@@ -1897,7 +2034,8 @@ const double* MLMTPR::OuterKRank1WeightData() const
 void MLMTPR::AbsorbOuterKRank1WeightsIntoRadialCoeffs()
 {
 	if (!OuterKRankEnabled() || outer_k_rank_ != 1
-	    || outer_k_rank1_direct_radial_ || OuterUsesPureRadialMatrix())
+	    || outer_k_rank1_direct_radial_ || OuterUsesPureRadialMatrix()
+	    || OuterUsesAdaptiveRadialCoefficients())
 		return;
 	const int expected_weight_count =
 		(sh_l_max_ + 1) * sh_k_max_;
@@ -1933,28 +2071,65 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 {
 	if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
 		ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
-	if (outer_radial_mode_ != "legacy-plus-mixer" && outer_radial_mode_ != "pure-matrix")
-		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer or pure-matrix");
+	if (outer_radial_mode_ != "legacy-plus-mixer"
+	    && outer_radial_mode_ != "pure-matrix"
+	    && outer_radial_mode_ != "adaptive-coefficients")
+		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
 	const bool pure = outer_radial_mode_ == "pure-matrix";
-	if (pure != (outer_channel_mode_ == "same-channel"))
-		ERROR("SUS2-SH pure-matrix and same-channel outer modes must be selected together");
-	if (!pure)
+	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
+	if ((pure || adaptive) != (outer_channel_mode_ == "same-channel"))
+		ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
+	if (!pure && !adaptive)
 		return;
 	if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
-	    || !two_layer_gate_enabled_ || !TwoLayerGateRadialMixingEnabled())
+	    || !two_layer_gate_enabled_)
+		ERROR("SUS2-SH same-channel outer requires a ranked two-layer gate");
+	if (pure && !TwoLayerGateRadialMixingEnabled())
 		ERROR("SUS2-SH pure-matrix outer requires a ranked two-layer gate and full radial mixing");
 	if (!TwoLayerGateUsesSharedRadial())
-		ERROR("SUS2-SH pure-matrix outer requires an independent shared-radial gate block");
+		ERROR("SUS2-SH same-channel outer requires an independent shared-radial gate block");
 	if (outer_k_rank1_direct_radial_ || TwoLayerGateUsesDirectScale()
 	    || multi_layer_gate_enabled_ || two_layer_gate_edge_l1_enabled_
-	    || two_layer_residual_enabled_)
-		ERROR("SUS2-SH pure-matrix outer is incompatible with direct shortcuts, multi-layer, edge-L1, or residual modes");
+	    || two_layer_residual_enabled_ || two_layer_gate_readout_enabled_)
+		ERROR("SUS2-SH same-channel outer is incompatible with direct shortcuts, multi-layer, edge-L1, residual, or readout modes");
 	if (!outer_k_rank1_weights_.empty() || OuterKRank1WeightCount() != 0)
-		ERROR("SUS2-SH pure-matrix outer must not contain a factorized outer weight block");
-	const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
-	if (mixing_count <= 0
-	    || two_layer_gate_radial_mixing_coeffs_.size() != static_cast<size_t>(mixing_count))
+		ERROR("SUS2-SH same-channel outer must not contain a factorized outer weight block");
+	if (pure) {
+		const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
+		if (mixing_count <= 0
+		    || two_layer_gate_radial_mixing_coeffs_.size() != static_cast<size_t>(mixing_count))
 		ERROR("SUS2-SH pure-matrix outer has inconsistent physical matrix coefficient metadata");
+	}
+	if (adaptive) {
+		if (outer_k_rank_ > sh_k_max_)
+			ERROR("SUS2-SH adaptive radial coefficients require O <= raw K");
+		if (!TwoLayerGateUsesFullScalarWeights())
+			ERROR("SUS2-SH adaptive radial coefficients require mu-scalar-full gate metadata");
+		if (two_layer_gate_radial_mixing_ != "none"
+		    || TwoLayerGateRadialMixingCoeffCount() != 0)
+			ERROR("SUS2-SH adaptive radial coefficients do not use legacy radial mixing");
+		const int row_count = AdaptiveRadialRowCount();
+		const int weight_count = CheckedIntProduct(
+			static_cast<size_t>(row_count),
+			static_cast<size_t>(TwoLayerGateScalarCount()),
+			"SUS2-SH adaptive radial weight count");
+		if (row_count <= 0 || weight_count <= 0
+		    || adaptive_radial_amplitudes_.size() != static_cast<size_t>(row_count)
+		    || adaptive_radial_weights_.size() != static_cast<size_t>(weight_count))
+			ERROR("SUS2-SH adaptive radial coefficient metadata has inconsistent sizes");
+		if (!adaptive_radial_amplitude_optimizer_scales_.empty()
+		    && adaptive_radial_amplitude_optimizer_scales_.size() != static_cast<size_t>(row_count))
+			ERROR("SUS2-SH adaptive radial amplitude optimizer-scale metadata has inconsistent size");
+		if (!adaptive_radial_weight_optimizer_scales_.empty()
+		    && adaptive_radial_weight_optimizer_scales_.size() != static_cast<size_t>(TwoLayerGateScalarCount()))
+			ERROR("SUS2-SH adaptive radial weight optimizer-scale metadata has inconsistent size");
+		for (double scale : adaptive_radial_amplitude_optimizer_scales_)
+			if (!std::isfinite(scale) || scale <= 0.0)
+				ERROR("SUS2-SH adaptive radial amplitude optimizer-scale metadata must be positive");
+		for (double scale : adaptive_radial_weight_optimizer_scales_)
+			if (!std::isfinite(scale) || scale <= 0.0)
+				ERROR("SUS2-SH adaptive radial weight optimizer-scale metadata must be positive");
+	}
 }
 
 int MLMTPR::LinearCoeffCount() const
@@ -3125,7 +3300,8 @@ int MLMTPR::CountRadialFirstCoeffsNeedingPositiveRepair(double min_value) const
 	// corresponding radial row.  Its sign is physical: forcing the first
 	// coefficient positive would no longer be a gauge change and would alter a
 	// loaded model before the first optimizer step.
-	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix())
+	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix()
+	    || OuterUsesAdaptiveRadialCoefficients())
 		return 0;
 	const double positive_floor = min_value > 0.0 ? min_value : kRadialFirstCoeffPositiveFloor;
 	if (p_RadialBasis == nullptr)
@@ -3171,7 +3347,8 @@ bool MLMTPR::IsRadialFirstCoeff(int coeff_index) const
 {
 	// Direct rank-1 rows are signed effective coefficients d=W*c.  They must use
 	// ordinary physical coordinates when not covered by the weight-norm chart.
-	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix())
+	if (OuterKRankUsesDirectRadial() || OuterUsesPureRadialMatrix()
+	    || OuterUsesAdaptiveRadialCoefficients())
 		return false;
 	if (p_RadialBasis == nullptr)
 		return false;
@@ -3212,14 +3389,19 @@ bool MLMTPR::IsUnusedOuterRadialCoeff(int coeff_index) const
 {
 	// The gate retains its own radial rows. Only the obsolete outer radial
 	// expansion coefficients are frozen: scaling and type factors remain active.
-	if (!OuterUsesPureRadialMatrix() || !TwoLayerGateUsesSharedRadial()
+	if ((!OuterUsesPureRadialMatrix() && !OuterUsesAdaptiveRadialCoefficients())
+	    || !TwoLayerGateUsesSharedRadial()
 	    || p_RadialBasis == nullptr)
 		return false;
 	const int local = coeff_index - RadialCoeffOffset();
 	const int block_size = RadialCoeffBlockSize();
-	return block_size > 0 && local >= 0
-	    && local < radial_func_count * block_size
-	    && local % block_size < p_RadialBasis->rb_size;
+	if (block_size <= 0 || local < 0 || local >= radial_func_count * block_size)
+		return false;
+	if (OuterUsesPureRadialMatrix())
+		return local % block_size < p_RadialBasis->rb_size;
+	const int mu = local / block_size;
+	const int k = (sh_l_max_ >= 0 && L > 0) ? (mu / L) : 0;
+	return k >= outer_k_rank_;
 }
 
 void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs) const
@@ -4506,14 +4688,19 @@ void MLMTPR::Load(const string& filename)
 		}
 		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
 			ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
-		if (outer_radial_mode_ != "legacy-plus-mixer" && outer_radial_mode_ != "pure-matrix")
-			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer or pure-matrix");
+		if (outer_radial_mode_ != "legacy-plus-mixer"
+		    && outer_radial_mode_ != "pure-matrix"
+		    && outer_radial_mode_ != "adaptive-coefficients")
+			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
 		if ((outer_channel_mode_ == "same-channel")
-		    != (outer_radial_mode_ == "pure-matrix"))
-			ERROR("SUS2-SH pure-matrix and same-channel outer modes must be selected together");
+		    != (outer_radial_mode_ == "pure-matrix"
+		        || outer_radial_mode_ == "adaptive-coefficients"))
+			ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
 		if (outer_k_rank_ <= 0
-		    || (!OuterUsesPureRadialMatrix() && outer_k_rank_ > sh_k_max_))
-			ERROR("SUS2-SH outer K-rank must be positive; only pure-matrix mode allows rank above sh_k_max");
+		    || (!OuterUsesPureRadialMatrix()
+		        && !OuterUsesAdaptiveRadialCoefficients()
+		        && outer_k_rank_ > sh_k_max_))
+			ERROR("SUS2-SH outer K-rank must be positive; only same-channel radial modes allow rank above sh_k_max");
 		if (outer_k_rank_ > std::numeric_limits<int>::max()
 			/ ((sh_l_max_ + 1) * (sh_l_max_ + 1)))
 			ERROR("SUS2-SH outer primitive count exceeds supported index range");
@@ -4547,10 +4734,10 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr != "outer_k_rank1_weights")
 			ERROR("SUS2-SH outer K-rank1 metadata is missing outer_k_rank1_weights");
 		ReadDoubleList(ifs, outer_k_rank1_weights_, outer_weight_count);
-		if (OuterUsesPureRadialMatrix()) {
+		if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 			char closing_brace = '\0';
 			if (!(ifs >> closing_brace) || closing_brace != '}')
-				ERROR("SUS2-SH pure-matrix outer weights must be an empty list");
+				ERROR("SUS2-SH same-channel outer weights must be an empty list");
 		}
 		ifs.ignore(1000, '\n');
 		ifs >> tmpstr;
@@ -4835,20 +5022,40 @@ void MLMTPR::Load(const string& filename)
 				} else {
 					InitializeTwoLayerGateTypeCoeffsFromBase();
 				}
+				int explicit_gate_scalar_count = -1;
+				if (tmpstr == "two_layer_gate_scalar_count") {
+					if (!OuterUsesAdaptiveRadialCoefficients())
+						ERROR("SUS2-SH two_layer_gate_scalar_count is only valid for adaptive radial models");
+					ifs.ignore(2);
+					ifs >> explicit_gate_scalar_count;
+					if (explicit_gate_scalar_count <= 0)
+						ERROR("SUS2-SH adaptive radial gate scalar count should be positive");
+					ifs >> tmpstr;
+				}
 				if (tmpstr != "two_layer_gate_weight_count")
 					ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weight_count");
-		ifs.ignore(2);
-			int gate_weight_count = 0;
-			ifs >> gate_weight_count;
-			if (gate_weight_count <= 0)
-				ERROR("SUS2-SH two-layer gate should contain at least one scalar weight");
-			int gate_scalar_count = gate_weight_count;
-			if (TwoLayerGateUsesFullScalarWeights()) {
-				if (radial_func_count <= 0
-				    || gate_weight_count % radial_func_count != 0)
-					ERROR("SUS2-SH full mu/scalar gate weight count is inconsistent");
-				gate_scalar_count = gate_weight_count / radial_func_count;
-			}
+				ifs.ignore(2);
+				int gate_weight_count = 0;
+				ifs >> gate_weight_count;
+				if (OuterUsesAdaptiveRadialCoefficients()) {
+					if (gate_weight_count != 0)
+						ERROR("SUS2-SH adaptive radial gate should not contain obsolete full-mu scalar weights");
+					if (explicit_gate_scalar_count <= 0)
+						ERROR("SUS2-SH adaptive radial gate is missing two_layer_gate_scalar_count");
+				} else if (gate_weight_count <= 0) {
+					ERROR("SUS2-SH two-layer gate should contain at least one scalar weight");
+				}
+				int gate_scalar_count =
+					explicit_gate_scalar_count >= 0
+						? explicit_gate_scalar_count : gate_weight_count;
+				if (TwoLayerGateUsesFullScalarWeights()) {
+					if (!OuterUsesAdaptiveRadialCoefficients()
+					    && (radial_func_count <= 0
+					        || gate_weight_count % radial_func_count != 0))
+						ERROR("SUS2-SH full mu/scalar gate weight count is inconsistent");
+					if (!OuterUsesAdaptiveRadialCoefficients())
+						gate_scalar_count = gate_weight_count / radial_func_count;
+				}
 
 		ifs >> tmpstr;
 		if (tmpstr != "two_layer_gate_scalar_indices")
@@ -4959,6 +5166,62 @@ void MLMTPR::Load(const string& filename)
 					two_layer_gate_radial_mixing_ = "none";
 					two_layer_gate_radial_mixing_coeffs_.clear();
 				}
+				if (tmpstr == "adaptive_radial_amplitude_count") {
+					if (!OuterUsesAdaptiveRadialCoefficients())
+						ERROR("SUS2-SH found adaptive radial coefficients without adaptive outer mode");
+					ifs.ignore(2);
+					int amplitude_count = 0;
+					ifs >> amplitude_count;
+					if (amplitude_count != AdaptiveRadialRowCount())
+						ERROR("SUS2-SH adaptive radial amplitude count is inconsistent");
+					ifs >> tmpstr;
+					if (tmpstr != "adaptive_radial_amplitudes")
+						ERROR("SUS2-SH adaptive radial model is missing amplitudes");
+					ReadDoubleList(ifs, adaptive_radial_amplitudes_, amplitude_count);
+					ifs.ignore(1000, '\n');
+					if (!(ifs >> tmpstr))
+						tmpstr = "";
+					if (tmpstr != "adaptive_radial_weight_count")
+						ERROR("SUS2-SH adaptive radial model is missing weight count");
+					ifs.ignore(2);
+					int weight_count = 0;
+					ifs >> weight_count;
+					const int expected_weight_count =
+						AdaptiveRadialRowCount() * TwoLayerGateScalarCount();
+					if (weight_count != expected_weight_count)
+						ERROR("SUS2-SH adaptive radial weight count is inconsistent");
+					ifs >> tmpstr;
+					if (tmpstr != "adaptive_radial_weights")
+						ERROR("SUS2-SH adaptive radial model is missing weights");
+						ReadDoubleList(ifs, adaptive_radial_weights_, weight_count);
+						ifs.ignore(1000, '\n');
+						if (!(ifs >> tmpstr))
+							tmpstr = "";
+						if (tmpstr == "adaptive_radial_amplitude_optimizer_scales") {
+							ReadDoubleList(ifs,
+							               adaptive_radial_amplitude_optimizer_scales_,
+							               amplitude_count);
+							ifs.ignore(1000, '\n');
+							if (!(ifs >> tmpstr))
+								tmpstr = "";
+						} else {
+							adaptive_radial_amplitude_optimizer_scales_.assign(
+								amplitude_count, 1.0);
+						}
+						if (tmpstr == "adaptive_radial_weight_optimizer_scales") {
+							ReadDoubleList(ifs,
+							               adaptive_radial_weight_optimizer_scales_,
+							               TwoLayerGateScalarCount());
+							ifs.ignore(1000, '\n');
+							if (!(ifs >> tmpstr))
+								tmpstr = "";
+						} else {
+							adaptive_radial_weight_optimizer_scales_.assign(
+								TwoLayerGateScalarCount(), 1.0);
+						}
+					} else if (OuterUsesAdaptiveRadialCoefficients()) {
+						ERROR("SUS2-SH adaptive radial coefficient model is missing adaptive radial arrays");
+					}
 				if (tmpstr == "two_layer_gate_readout_enabled") {
 				ifs.ignore(2);
 				ifs >> bool_token;
@@ -5081,7 +5344,8 @@ void MLMTPR::Load(const string& filename)
 			if (two_layer_gate_include_one_body_)
 				ERROR("SUS2-SH two-layer gate currently requires two_layer_gate_include_one_body = false");
 				if (two_layer_gate_body_order_max_ < 2
-				    || two_layer_gate_body_order_max_ > (OuterUsesPureRadialMatrix() ? 6 : sh_body_order_))
+				    || two_layer_gate_body_order_max_ >
+				       ((OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) ? 6 : sh_body_order_))
 					ERROR("SUS2-SH mu-body-order gate body order is out of range");
 				BuildTwoLayerGateBodyOrderBuckets();
 			if (outer_k_rank1_enabled_) {
@@ -5283,7 +5547,8 @@ void MLMTPR::Load(const string& filename)
 		}
 
 			ValidateOuterModeConfiguration();
-			if (OuterKRankEnabled() && outer_k_rank_ == 1 && !OuterUsesPureRadialMatrix()) {
+			if (OuterKRankEnabled() && outer_k_rank_ == 1
+			    && !OuterUsesPureRadialMatrix() && !OuterUsesAdaptiveRadialCoefficients()) {
 			// A rank-1 K contraction has no independent matrix degree of
 			// freedom: W(l,k) multiplies exactly one freely trainable radial
 			// row c(k,l,:).  Canonicalize legacy files to
@@ -5563,8 +5828,8 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 {
 	if (!is_sh_potential_)
 		ERROR("calc-eij currently supports SUS2-SH models only");
-	if (OuterUsesPureRadialMatrix())
-		ERROR("calc-eij does not yet support pure distance-matrix models; use calc-efs for their physical energies and forces");
+	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients())
+		ERROR("calc-eij does not yet support distance-matrix or adaptive radial models; use calc-efs for their physical energies and forces");
 	if (!has_sh_scalar_info_)
 		ERROR("calc-eij requires sh_scalar_info metadata; initialize or rewrite the model with --write-sh-scalar-info");
 	if (TwoLayerResidualEnabled())
@@ -5741,7 +6006,7 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::Save(const string& filename)
 {
-	if (OuterUsesPureRadialMatrix()) {
+	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 		ValidateOuterModeConfiguration();
 		ValidateSHProductGraphDefinitions();
 	}
@@ -5925,7 +6190,7 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
-		if (OuterUsesPureRadialMatrix()) {
+		if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
 			ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
 		}
@@ -5935,7 +6200,8 @@ void MLMTPR::Save(const string& filename)
 		// Keep a fixed all-ones compatibility shell in rank-1 files so older
 		// experimental readers can still load them. These are not runtime or
 		// optimizer parameters in the direct-radial representation.
-		const int serialized_outer_weight_count = OuterUsesPureRadialMatrix()
+		const int serialized_outer_weight_count =
+			(OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients())
 			? 0 : outer_k_rank_ * (sh_l_max_ + 1) * sh_k_max_;
 		ofs << "outer_k_rank1_weight_count = "
 		    << serialized_outer_weight_count << '\n';
@@ -6035,33 +6301,40 @@ void MLMTPR::Save(const string& filename)
 			ofs << "}\n";
 		}
 		const int gate_additive_count = TwoLayerGateAdditiveCoeffCount();
-		if (gate_additive_count <= 0)
+		if (gate_additive_count <= 0 && !OuterUsesAdaptiveRadialCoefficients())
 			ERROR("SUS2-SH two-layer gate has no additive coefficients");
-		ofs << "two_layer_gate_additive_coeff_count = "
-		    << gate_additive_count << '\n';
-		ofs << "two_layer_gate_additive_coeffs = {";
-		for (int i = 0; i < gate_additive_count; ++i) {
-			if (i > 0)
-				ofs << ", ";
-			const int type = i / radial_func_count;
-			const int mu = i % radial_func_count;
-			ofs << TwoLayerGateAdditiveCoeff(type, mu);
+		if (gate_additive_count > 0) {
+			ofs << "two_layer_gate_additive_coeff_count = "
+			    << gate_additive_count << '\n';
+			ofs << "two_layer_gate_additive_coeffs = {";
+			for (int i = 0; i < gate_additive_count; ++i) {
+				if (i > 0)
+					ofs << ", ";
+				const int type = i / radial_func_count;
+				const int mu = i % radial_func_count;
+				ofs << TwoLayerGateAdditiveCoeff(type, mu);
+			}
+			ofs << "}\n";
 		}
-		ofs << "}\n";
 		const int gate_type_count = TwoLayerGateTypeCoeffCount();
-		if (gate_type_count <= 0)
+		if (gate_type_count <= 0 && !OuterUsesAdaptiveRadialCoefficients())
 			ERROR("SUS2-SH two-layer gate has no gate type coefficients");
-		ofs << "two_layer_gate_type_coeff_count = "
-		    << gate_type_count << '\n';
-		ofs << "two_layer_gate_type_coeffs = {";
-		for (int i = 0; i < gate_type_count; ++i) {
-			if (i > 0)
-				ofs << ", ";
-			const int type = i / radial_func_count;
-			const int mu = i % radial_func_count;
-			ofs << TwoLayerGateTypeCoeff(type, mu);
+		if (gate_type_count > 0) {
+			ofs << "two_layer_gate_type_coeff_count = "
+			    << gate_type_count << '\n';
+			ofs << "two_layer_gate_type_coeffs = {";
+			for (int i = 0; i < gate_type_count; ++i) {
+				if (i > 0)
+					ofs << ", ";
+				const int type = i / radial_func_count;
+				const int mu = i % radial_func_count;
+				ofs << TwoLayerGateTypeCoeff(type, mu);
+			}
+			ofs << "}\n";
 		}
-		ofs << "}\n";
+		if (OuterUsesAdaptiveRadialCoefficients())
+			ofs << "two_layer_gate_scalar_count = "
+			    << TwoLayerGateScalarCount() << '\n';
 		ofs << "two_layer_gate_weight_count = " << TwoLayerGateWeightCount() << '\n';
 		ofs << "two_layer_gate_scalar_indices = {";
 		for (int i = 0; i < static_cast<int>(two_layer_gate_scalar_indices_.size()); ++i) {
@@ -6104,10 +6377,10 @@ void MLMTPR::Save(const string& filename)
 				}
 				ofs << "}\n";
 			}
-			if (TwoLayerGateRadialMixingEnabled()) {
-				const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
-				if (mixing_count <= 0)
-					ERROR("SUS2-SH two-layer gate radial mixing has no coefficients");
+				if (TwoLayerGateRadialMixingEnabled()) {
+					const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
+					if (mixing_count <= 0)
+						ERROR("SUS2-SH two-layer gate radial mixing has no coefficients");
 				ofs << "two_layer_gate_radial_mixing = full\n";
 				ofs << "two_layer_gate_radial_mixing_layout = direct-k\n";
 				ofs << "two_layer_gate_radial_mixing_coeff_count = "
@@ -6129,8 +6402,44 @@ void MLMTPR::Save(const string& filename)
 				}
 				ofs << "}\n";
 			}
-			if (TwoLayerGateReadoutEnabled()) {
-			const int readout_count = TwoLayerGateReadoutCoeffCount();
+				if (OuterUsesAdaptiveRadialCoefficients()) {
+					const int row_count = AdaptiveRadialRowCount();
+					const int weight_count = row_count * TwoLayerGateScalarCount();
+					ofs << "adaptive_radial_amplitude_count = "
+					    << row_count << '\n';
+					ofs << "adaptive_radial_amplitudes = {";
+					for (int row = 0; row < row_count; ++row) {
+						if (row > 0)
+							ofs << ", ";
+						ofs << regression_coeffs[AdaptiveRadialAmplitudeOffset() + row];
+					}
+					ofs << "}\n";
+					ofs << "adaptive_radial_weight_count = "
+					    << weight_count << '\n';
+					ofs << "adaptive_radial_weights = {";
+					for (int i = 0; i < weight_count; ++i) {
+						if (i > 0)
+							ofs << ", ";
+						ofs << regression_coeffs[AdaptiveRadialWeightOffset() + i];
+					}
+					ofs << "}\n";
+					ofs << "adaptive_radial_amplitude_optimizer_scales = {";
+					for (int row = 0; row < row_count; ++row) {
+						if (row > 0)
+							ofs << ", ";
+						ofs << AdaptiveRadialAmplitudeOptimizerScale(row);
+					}
+					ofs << "}\n";
+					ofs << "adaptive_radial_weight_optimizer_scales = {";
+					for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+						if (q > 0)
+							ofs << ", ";
+						ofs << AdaptiveRadialWeightOptimizerScale(q);
+					}
+					ofs << "}\n";
+				}
+				if (TwoLayerGateReadoutEnabled()) {
+				const int readout_count = TwoLayerGateReadoutCoeffCount();
 			if (readout_count != TwoLayerGateScalarCount())
 				ERROR("SUS2-SH gate readout coefficient count is inconsistent");
 			ofs << "two_layer_gate_readout_enabled = true\n";
@@ -7531,6 +7840,16 @@ void MLMTPR::CalcEFS(Configuration& cfg)
 
 void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		CalcAdaptiveRadialEFS(cfg, neighborhoods, true);
+		if (HasZBL() && ZBLEvaluationEnabled()) {
+			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
+				ZBL().AddTo(cfg, neighborhoods);
+			else
+				ZBL().AddTo(cfg);
+		}
+		return;
+	}
 			if (!RequiresTwoLayerGateEvaluation()) {
 				two_layer_full_edge_cache_for_next_calc_ = false;
 				two_layer_reuse_full_edge_cache_once_ = false;
@@ -7701,6 +8020,8 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 double MLMTPR::CalcSiteEnergyValue(const Neighborhood& nbh,
                                    double* out_site_energy0)
 {
+	if (OuterUsesAdaptiveRadialCoefficients())
+		ERROR("SUS2-SH adaptive radial coefficients require full-configuration evaluation; neighborhood-only site energy is unsupported");
 	if (nbh.my_type >= species_count)
 		throw MlipException("Too few species count in the MTP potential!");
 
@@ -7828,6 +8149,18 @@ void MLMTPR::CalcEnergyAndSiteEnergiesImpl(
 	const Neighborhoods& neighborhoods,
 	std::vector<double>* out_energy_by_body_order)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		if (out_energy_by_body_order != nullptr)
+			ERROR("SUS2-SH adaptive radial coefficients do not yet support body-order energy decomposition");
+		CalcAdaptiveRadialEFS(cfg, neighborhoods, false);
+		if (HasZBL() && ZBLEvaluationEnabled()) {
+			if (neighborhoods.cutoff + 1.0e-12 >= ZBL().MaxOuterCutoff())
+				cfg.energy += ZBL().ComputeEnergy(cfg, neighborhoods);
+			else
+				cfg.energy += ZBL().ComputeEnergy(cfg);
+		}
+		return;
+	}
 	cfg.energy = 0.0;
 	memset(&cfg.stresses[0][0], 0, sizeof(Matrix3));
 	cfg.has_energy(true);
@@ -7919,6 +8252,12 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
                                           Array1D& out_grads_accumulator,
                                           const Neighborhoods& neighborhoods)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		AccumulateAdaptiveRadialCombinationGrad(
+			cfg, neighborhoods, ene_weight, frc_weights, str_weights,
+			out_grads_accumulator);
+		return;
+	}
 	if (!is_sh_potential_ || !two_layer_gate_enabled_) {
 		AnyLocalMLIP::AccumulateEFSCombinationGrad(cfg, ene_weight, frc_weights,
 		                                           str_weights, out_grads_accumulator,
@@ -9037,6 +9376,16 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
                                              Array1D& out_grads_accumulator,
                                              const Neighborhoods& neighborhoods)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		static const std::vector<Vector3> frc_weights;
+		static const Matrix3 str_weights(0.0, 0.0, 0.0,
+		                                  0.0, 0.0, 0.0,
+		                                  0.0, 0.0, 0.0);
+		AccumulateAdaptiveRadialCombinationGrad(
+			cfg, neighborhoods, ene_weight, frc_weights, str_weights,
+			out_grads_accumulator);
+		return;
+	}
 	if (!is_sh_potential_ || !two_layer_gate_enabled_) {
 		AnyLocalMLIP::AccumulateEnergyCombinationGrad(cfg, ene_weight,
 		                                              out_grads_accumulator,
@@ -9877,6 +10226,26 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 	if (cfg.size() == 0 || alpha_scalar_moments == 0)
 		return;
 
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		PrepareEvalCaches();
+		PrepareAdaptiveRadial(neighborhoods, false, false);
+		AdaptiveRadialExecution& ex = adaptive_radial_execution_;
+		for (int ind = 0; ind < cfg.size(); ++ind) {
+			const Neighborhood& nbh = neighborhoods[ind];
+			if (nbh.my_type < 0 || nbh.my_type >= species_count)
+				throw MlipException("Too few species count in the MTP potential!");
+			ForwardAdaptiveRadialSite(nbh, ind, nullptr);
+			const double center_linear = linear_coeffs[nbh.my_type];
+			double* const atom_out =
+				out.data() + static_cast<size_t>(ind) * alpha_scalar_moments;
+			for (int q = 0; q < alpha_scalar_moments; ++q)
+				atom_out[q] = center_linear
+				            * linear_mults[q]
+				            * ex.values[alpha_moment_mapping[q]];
+		}
+		return;
+	}
+
 	// Gate preparation has a mutable legacy Configuration signature even though
 	// it only needs configuration metadata here.  Keep the caller's E/F/S and
 	// site-energy fields strictly read-only.
@@ -9967,6 +10336,12 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 	                           bool need_stress,
 	                           bool fixed_center_readout_columns)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		if (fixed_center_readout_columns)
+			ERROR("SUS2-SH adaptive radial coefficients do not support fixed-center readout component columns");
+		CalcAdaptiveRadialComponents(cfg, neighborhoods, need_forces, need_stress);
+		return;
+	}
 	int n = LinearEquationCount();
 
 	if (!need_forces && !need_stress) {
@@ -10244,6 +10619,12 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 	                         const Neighborhoods& neighborhoods,
 	                         bool fixed_center_readout_columns)
 {
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		if (fixed_center_readout_columns)
+			ERROR("SUS2-SH adaptive radial coefficients do not support fixed-center readout component columns");
+		CalcAdaptiveRadialComponents(cfg, neighborhoods, false, false);
+		return;
+	}
 	int n = LinearEquationCount();
 	memset(energy_cmpnts, 0, n * sizeof(energy_cmpnts[0]));
 
@@ -12267,6 +12648,12 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 	const std::string rb_type = p_RadialBasis->GetRBTypeString();
 	if (rb_type.find("_lmp") != std::string::npos)
 		ERROR("Radial smoothness penalty requires a training radial basis with scal/s derivatives; set --radial-smooth=0 for *_lmp radial bases");
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		AddAdaptiveRadialSmoothnessPenalty(
+			coeff, grid_size, out_penalty_accumulator,
+			out_penalty_grad_accumulator);
+		return;
+	}
 
 	const int C = species_count;
 	const int R = p_RadialBasis->rb_size;
@@ -12497,6 +12884,53 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 		}
 	}
 
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		const int row_count = AdaptiveRadialRowCount();
+		const int scalar_count = TwoLayerGateScalarCount();
+		const int amplitude_begin = AdaptiveRadialAmplitudeOffset();
+		const int weight_begin = AdaptiveRadialWeightOffset();
+		const int adaptive_weight_count = CheckedIntProduct(
+			static_cast<size_t>(row_count),
+			static_cast<size_t>(scalar_count),
+			"SUS2-SH adaptive radial weight count");
+		if (amplitude_begin < 0 || weight_begin < 0
+		    || amplitude_begin + row_count > static_cast<int>(regression_coeffs.size())
+		    || weight_begin + adaptive_weight_count > static_cast<int>(regression_coeffs.size()))
+			ERROR("Invalid SUS2-SH adaptive radial coefficient layout for L2 penalty");
+		if (gate_full_coeff != 0.0 && row_count > 0 && scalar_count > 0) {
+			const double weight =
+				gate_full_coeff
+				/ static_cast<double>(
+					static_cast<size_t>(row_count)
+					* static_cast<size_t>(scalar_count));
+			for (int row = 0; row < row_count; ++row) {
+				const int amplitude_index = amplitude_begin + row;
+				const double amplitude = regression_coeffs[amplitude_index];
+				for (int q = 0; q < scalar_count; ++q) {
+					const int coeff_index =
+						weight_begin
+						+ static_cast<int>(
+							static_cast<size_t>(row)
+							* static_cast<size_t>(scalar_count)
+							+ static_cast<size_t>(q));
+					const double scale = AdaptiveRadialWeightOptimizerScale(q);
+					const double radial_weight = regression_coeffs[coeff_index];
+					const double folded =
+						amplitude * radial_weight / scale;
+					out_penalty_accumulator += weight * folded * folded;
+					if (out_penalty_grad_accumulator != nullptr) {
+						const double grad_common = 2.0 * weight * folded / scale;
+						(*out_penalty_grad_accumulator)[coeff_index] +=
+							grad_common * amplitude;
+						(*out_penalty_grad_accumulator)[amplitude_index] +=
+							grad_common * radial_weight;
+					}
+				}
+			}
+		}
+		return;
+	}
+
 	if (TwoLayerGateUsesBodyLinearCombo()) {
 		const int gate_weight_count = TwoLayerGateWeightCount();
 		if (gate_scalar_coeff != 0.0 && gate_weight_count > 0) {
@@ -12555,9 +12989,9 @@ void MLMTPR::AddPenaltyGrad(const double coeff,													// Must calculate ad
 							double& out_penalty_accumulator,
 							Array1D* out_penalty_grad_accumulator)
 {
-	if (OuterUsesPureRadialMatrix()) {
+	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 		if (coeff != 0.0)
-			ERROR("SUS2-SH pure-matrix outer does not support the legacy radial norm/orthogonality penalty; set its weight to zero and use physical radial-matrix smoothness");
+			ERROR("SUS2-SH distance-matrix/adaptive radial outer does not support the legacy radial norm/orthogonality penalty; set its weight to zero and use physical radial smoothness");
 		return;
 	}
 	const int C = species_count;
@@ -12615,7 +13049,7 @@ void MLMTPR::Orthogonalize()
 {
 	// This legacy operation changes only the obsolete factorized outer R
 	// rows. Pure W and the independent gate radial block are physical values.
-	if (OuterUsesPureRadialMatrix())
+	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients())
 		return;
 	const int C = species_count;
 	const int K = radial_func_count;
