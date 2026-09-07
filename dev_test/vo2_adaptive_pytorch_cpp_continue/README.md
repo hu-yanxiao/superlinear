@@ -32,11 +32,16 @@ improvement plateau from stopping before the requested budget; numerical
 failure or other existing terminal conditions still terminate safely.
 
 Each allocated job first verifies old-oracle versus optimized E/F/stress on
-three frozen 9.1 configurations and a zero-step model roundtrip, then starts
-the full-data 5000-step run from the untouched input. `current.mtp`, `best.mtp`,
+three frozen 9.1 configurations, then starts the full-data 5000-step run from
+the untouched input. The optimizer itself checks the coordinate-chart physical
+roundtrip before its first proposal. A zero-step adaptive `train` command is
+not used because this CLI does not export a same-checkpoint zero-step model.
+`current.mtp`, `best.mtp`,
 and `trained.mtp` are separate native-model outputs; accepted steps are recorded
 in `trace.csv` and `training_result.txt`. An early successful return is not
 equivalent to completing all 5000 steps: check the actual accepted count.
+CPU `best.mtp` uses optimizer total loss; PyTorch selected its input checkpoint
+by full-training force MAE. These are different best-checkpoint criteria.
 
 After syncing the committed scripts, run `prepare.sh FULL_SCRIPT_COMMIT` on
 the server, then submit `bsub -J arad_ptcpp_O2 < train.lsf` from O2 and similarly

@@ -63,14 +63,10 @@ task_common=(--init-params=same --skip-preinit
 # Small server-side parity check against the exact C++ oracle used by PyTorch.
 runtime/mlp-sus2-pytorch-oracle calc-efs inputs/resume.mtp inputs/check3.cfg preflight/oracle.cfg > logs/preflight-oracle.log 2>&1
 "$task_binary" calc-efs inputs/resume.mtp inputs/check3.cfg preflight/optimized.cfg > logs/preflight-optimized.log 2>&1
-"$task_binary" train inputs/resume.mtp inputs/check3.cfg "${task_common[@]}" --max-iter=0 \
-  --trained-pot-name=preflight/roundtrip.mtp > logs/preflight-roundtrip.log 2>&1
-"$task_binary" calc-efs preflight/roundtrip.mtp inputs/check3.cfg preflight/roundtrip.cfg > logs/preflight-roundtrip-efs.log 2>&1
 if grep -Eiq '(^|[[:space:]])[-+]?(nan|inf(inity)?)([[:space:]]|$)' preflight/*.cfg; then
   echo 'Non-finite preflight prediction' >&2; exit 1
 fi
 "$task_python" runtime/compare_cfg_numeric.py preflight/oracle.cfg preflight/optimized.cfg > preflight/parity.txt
-"$task_python" runtime/compare_cfg_numeric.py preflight/optimized.cfg preflight/roundtrip.cfg >> preflight/parity.txt
 sha256sum --quiet -c frozen.sha256
 date -Is > PREFLIGHT_PASS
 
