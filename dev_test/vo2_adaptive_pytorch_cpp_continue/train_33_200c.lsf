@@ -1,0 +1,91 @@
+#!/bin/bash
+#BSUB -J arad_ptcpp_5000
+#BSUB -q 33
+#BSUB -n 200
+#BSUB -R "span[ptile=40]"
+#BSUB -W 120:00
+#BSUB -o %J.out
+#BSUB -e %J.err
+set -eo pipefail
+cd "${LS_SUBCWD:?submit from the prepared per-O directory}"
+task_run=$PWD
+case "$task_run" in
+  /work/phy-weigw/hyx/vo2/9.1-adaptive-pytorch-to-cpp-5000-33-200c-20260907/O[248]) ;;
+  *) echo 'Unexpected continuation directory' >&2; exit 2 ;;
+esac
+test ! -e TRAINING_STARTED
+test ! -e current.mtp
+test ! -e trained.mtp
+trap 'task_rc=$?; printf "exit_code=%s\nfinished_at=%s\n" "$task_rc" "$(date -Is)" > "$task_run/exit_status.txt"' EXIT
+module purge
+module load compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0 gcc/11.2.0
+source /work/phy-weigw/anaconda3/etc/profile.d/conda.sh
+source /work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/activate
+set -u
+task_python=/work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/python
+sha256sum --quiet -c frozen.sha256
+task_np=$(wc -l < "${LSB_DJOB_HOSTFILE:?}")
+[[ "$task_np" == 200 ]]
+[[ $(sort -u "$LSB_DJOB_HOSTFILE" | wc -l) == 5 ]]
+sort "$LSB_DJOB_HOSTFILE" | uniq -c | awk '$1 != 40 {bad=1} END {exit bad}'
+cp "$LSB_DJOB_HOSTFILE" hosts.txt
+while IFS= read -r task_env; do unset "$task_env"; done < <(compgen -v SUS2_SH_)
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_DYNAMIC=FALSE
+export I_MPI_FABRICS=shm:ofi I_MPI_PIN=1 I_MPI_PIN_RESPECT_CPUSET=1
+export MLIP_CACHE_NEIGHBORHOODS=1
+export SUS2_SH_PRODUCT_ROWS=0 SUS2_SH_SITE_DER_CACHE=1
+export SUS2_SH_ACCUM_SKIP_SITE_DERS=1 SUS2_SH_PRODUCT_HVT_REVERSE=1
+export SUS2_SH_GATE_TYPE_REFERENCE=0 SUS2_SH_ADAPTIVE_EFS_REFERENCE=0
+task_binary=$task_run/runtime/mlp-sus2
+task_mpi=(mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$task_np")
+"${task_mpi[@]}" hostname > mpi-rank-hostnames.txt 2> logs/mpi-startup.err
+[[ $(wc -l < mpi-rank-hostnames.txt) == 200 ]]
+{
+  date -Is
+  printf 'job_id=%s\nqueue=%s\nmpi_ranks=%s\n' "$LSB_JOBID" "$LSB_QUEUE" "$task_np"
+  sort hosts.txt | uniq -c
+  module list
+  env | sort | grep -E '^(SUS2_SH_|MLIP_CACHE_|I_MPI_|OMP_|MKL_|OPENBLAS_)'
+} > runtime.txt 2>&1
+
+# No init-sh, balanced init, sign repair, Rescale, initial/periodic head solve,
+# or fine-tune. The signed weight-norm chart retains arbitrary trained signs.
+# PyTorch did not have legacy STD/STDD losses: do not introduce CPU std=0.1.
+task_common=(--init-params=same --skip-preinit
+  --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 --force-loss=l2
+  --weighting=vibrations --std-weight=0 --stdd-weight=0
+  --scal-range=3.5,1.5 --scalar-weight-l2-preset=recommended --gate-x-l2=0
+  --radial-smooth=1e-6 --radial-smooth-grid=128
+  --optimizer=bfgs --bfgs-line-search=wolfe --radial-parameterization=weight-norm
+  --bfgs-coordinate-normalization=efs-gn --bfgs-coordinate-probes=4 --bfgs-coordinate-floor=1e-6
+  --optimizer-conv-tol=0)
+
+# Small server-side parity check against the exact C++ oracle used by PyTorch.
+runtime/mlp-sus2-pytorch-oracle calc-efs inputs/resume.mtp inputs/check3.cfg preflight/oracle.cfg > logs/preflight-oracle.log 2>&1
+"$task_binary" calc-efs inputs/resume.mtp inputs/check3.cfg preflight/optimized.cfg > logs/preflight-optimized.log 2>&1
+"$task_binary" train inputs/resume.mtp inputs/check3.cfg "${task_common[@]}" --max-iter=0 \
+  --trained-pot-name=preflight/roundtrip.mtp > logs/preflight-roundtrip.log 2>&1
+"$task_binary" calc-efs preflight/roundtrip.mtp inputs/check3.cfg preflight/roundtrip.cfg > logs/preflight-roundtrip-efs.log 2>&1
+if grep -Eiq '(^|[[:space:]])[-+]?(nan|inf(inity)?)([[:space:]]|$)' preflight/*.cfg; then
+  echo 'Non-finite preflight prediction' >&2; exit 1
+fi
+"$task_python" runtime/compare_cfg_numeric.py preflight/oracle.cfg preflight/optimized.cfg > preflight/parity.txt
+"$task_python" runtime/compare_cfg_numeric.py preflight/optimized.cfg preflight/roundtrip.cfg >> preflight/parity.txt
+sha256sum --quiet -c frozen.sha256
+date -Is > PREFLIGHT_PASS
+
+task_cmd=("${task_mpi[@]}" "$task_binary" train inputs/resume.mtp inputs/train.cfg
+  "${task_common[@]}" --max-iter=5000
+  --curr-pot-name=current.mtp --trained-pot-name=trained.mtp
+  --best-pot-name=best.mtp --bfgs-trace-file=trace.csv)
+printf '%q ' "${task_cmd[@]}" > train.command.txt
+printf '\n' >> train.command.txt
+date -Is > TRAINING_STARTED
+"${task_cmd[@]}" > logs/train.log 2>&1
+test -s trained.mtp
+test -s best.mtp
+task_accepted=$(awk 'END {print NR > 0 ? NR-1 : 0}' trace.csv)
+printf 'accepted_optimizer_steps=%s\nrequested_max_steps=5000\n' "$task_accepted" > training_result.txt
+sha256sum --quiet -c frozen.sha256
+sha256sum current.mtp best.mtp trained.mtp > final_models.sha256
+date -Is > COMPLETED
