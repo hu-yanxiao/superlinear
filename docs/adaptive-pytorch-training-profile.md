@@ -45,6 +45,16 @@ output_scale  = clamp(rms(F_ref_component), 1e-12, 1e6)
 If an RMS is effectively zero, the corresponding scale is one.  Force targets
 are required because `output_scale` is defined from the force-component RMS.
 
+Calibration-sample boundary: native C++ uses all training configurations for
+these statistics. PyTorch uses the same feature-RMS formulas but may cap the
+gate/adaptive/outer calibration subset with `--normalization-max-configs`
+(the formal launch templates use 2048; the CLI default is 256). PyTorch's
+force-RMS output scale still uses all training configurations. Thus formula
+alignment does not imply identical feature scales on a dataset larger than
+the PyTorch cap. Fresh initial coefficients can differ statistically; for a
+complete checkpoint this only changes the optimizer chart, not the loaded
+physical energy/force function or saved regularization priors.
+
 The scalar readout coordinate is scaled so that the C++ physical contribution
 matches PyTorch:
 
