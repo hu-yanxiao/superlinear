@@ -1088,14 +1088,24 @@ public:
 			int AdaptiveRadialRowIndex(int l, int o, int n) const;
 			int AdaptiveRadialAmplitudeIndex(int l, int o, int n) const;
 			int AdaptiveRadialWeightIndex(int l, int o, int n, int q) const;
-				double AdaptiveRadialAmplitude(int l, int o, int n) const;
-				double AdaptiveRadialWeight(int l, int o, int n, int q) const;
-				double AdaptiveRadialAmplitudeOptimizerScale(int row) const;
-				double AdaptiveRadialWeightOptimizerScale(int q) const;
-				void InitializeAdaptiveRadialFromData(
-					std::vector<Configuration>& training_set,
-					const std::vector<Neighborhoods>* training_neighborhoods = nullptr,
-					double relative_rms = 0.03,
+			double AdaptiveRadialAmplitude(int l, int o, int n) const;
+			double AdaptiveRadialWeight(int l, int o, int n, int q) const;
+			double AdaptiveRadialAmplitudeOptimizerScale(int row) const;
+			double AdaptiveRadialWeightOptimizerScale(int q) const;
+			struct AdaptiveRadialNormalizationSums {
+				std::vector<double> gate_scalar_sq;
+				std::vector<double> outer_scalar_sq;
+				std::uint64_t gate_samples = 0;
+				std::uint64_t outer_samples = 0;
+			};
+			void AccumulateAdaptiveRadialNormalizationSums(
+				std::vector<Configuration>& training_set,
+				const std::vector<Neighborhoods>* training_neighborhoods,
+				AdaptiveRadialNormalizationSums& sums);
+			void InitializeAdaptiveRadialFromData(
+				std::vector<Configuration>& training_set,
+				const std::vector<Neighborhoods>* training_neighborhoods = nullptr,
+				double relative_rms = 0.03,
 					unsigned seed = 1);
 					bool TwoLayerGateEdgeL1Enabled() const;
 				int TwoLayerGateEdgeL1SourceCount() const;

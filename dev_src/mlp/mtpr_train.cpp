@@ -1778,7 +1778,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (adaptive_radial_initialization != "legacy"
 	    && adaptive_radial_initialization != "balanced")
 		ERROR("--adaptive-radial-initialization should be legacy or balanced");
-	const bool balanced_adaptive_radial_init =
+	bool balanced_adaptive_radial_init =
 		adaptive_radial_initialization == "balanced";
 	double adaptive_radial_init_relative_rms = 0.03;
 	if (!opts["adaptive-radial-init-relative-rms"].empty()) {
@@ -2261,6 +2261,43 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		                  zbl_options.typewise_factor);
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
+	const bool adaptive_pytorch_profile = mtpr.OuterUsesAdaptiveRadialCoefficients();
+	if (adaptive_pytorch_profile) {
+		// One production conditioning/regularization contract for adaptive models.
+		// Legacy architectures keep their historical options and defaults.
+		for (const char* key : {
+		         "radial-smooth", "radial-smooth-grid", "scalar-weight-l2-preset",
+		         "scalar-head-l2", "gate-scalar-l2", "gate-mix-l2", "gate-full-l2",
+		         "gate-x-l2", "radial-parameterization", "bfgs-coordinate-normalization",
+		         "bfgs-coordinate-probes", "bfgs-coordinate-floor",
+		         "adaptive-radial-initialization", "adaptive-radial-init-relative-rms",
+		         "allow-physical-radial-sign-repair", "atomic-energy-weight",
+		         "weighting", "scale-by-force", "force-loss", "force-log-cosh-scale"}) {
+			if (!opts[key].empty())
+				ERROR("Adaptive superlinear uses the fixed PyTorch training profile; remove --"
+				      + std::string(key) + ". Only --std-weight and --stdd-weight remain selectable regularizers.");
+		}
+		if (!std::isfinite(weight_std) || weight_std < 0.0
+		    || !std::isfinite(weight_stdd) || weight_stdd < 0.0)
+			ERROR("--std-weight and --stdd-weight must be finite and non-negative");
+		if (do_lin || do_lin_rescale || fine_tune || two_layer_residual_staged
+		    || two_layer_gate_readout_linear_init || mindist_update
+		    || !fixed_atomic_energies.empty() || guard_compression_options.enabled)
+			ERROR("Adaptive PyTorch profile does not use legacy linear warmup/refits, sign repair, "
+			      "fixed atomic-energy penalties, or compression penalties");
+		if (mtpr.HasZBL())
+			ERROR("Adaptive PyTorch profile calibration currently requires a model without ZBL");
+		balanced_adaptive_radial_init = !loaded_complete_parameters;
+		radial_parameterization = "weight-norm";
+		bfgs_coordinate_normalization = "pytorch-fixed-rms";
+		scalar_weight_l2_preset = "recommended";
+		scalar_head_l2 = 1.0e-5;
+		gate_full_l2 = 1.0e-4;
+		gate_scalar_l2 = gate_mix_l2 = gate_x_l2 = 0.0;
+		radial_smooth = 1.0e-6;
+		radial_smooth_grid = 128;
+		skip_preinit = true;
+	}
 	if (mtpr.OuterUsesAdaptiveRadialCoefficients()) {
 		if (!explicit_gate_x_l2) {
 			gate_x_l2 = 0.0;
@@ -2732,6 +2769,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		bfgs_coordinate_normalization;
 	trainer.bfgs_coordinate_probes = bfgs_coordinate_probes;
 	trainer.bfgs_coordinate_floor = bfgs_coordinate_floor;
+	trainer.adaptive_pytorch_profile = adaptive_pytorch_profile;
+	trainer.consistent_std_value_loss = adaptive_pytorch_profile;
 	trainer.curr_pot_name = curr_fnm;
 	trainer.best_pot_name = best_fnm;
 	trainer.bfgs_trace_file = optimizer_trace_fnm;
@@ -3189,10 +3228,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				linear_training_neighborhoods_ptr,
 				adaptive_radial_init_relative_rms,
 				static_cast<unsigned>(seed));
+			if (adaptive_pytorch_profile)
+				trainer.PrepareAdaptivePytorchTraining(
+					training_set, linear_training_neighborhoods_ptr, true,
+					static_cast<unsigned>(seed));
 #ifdef MLIP_MPI
 			MPI_Bcast(&mtpr.Coeff()[0], mtpr.CoeffCount(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
 #endif
-			if (trainer.TrainRankActive())
+			if (!adaptive_pytorch_profile && trainer.TrainRankActive())
 				trainer.TrainLinear(prank, training_set, linear_training_neighborhoods_ptr,
 				                    "balanced adaptive radial initial head solve");
 			trainer.BroadcastCoeffsWorld();
@@ -3204,6 +3247,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			save_model_atomically_collective(
 				maxits == 0 ? trained_fnm : "ini.mtp",
 				"balanced adaptive radial initialized model");
+		}
+		if (adaptive_pytorch_profile && loaded_complete_parameters) {
+			trainer.PrepareAdaptivePytorchTraining(
+				training_set, linear_training_neighborhoods_ptr, false, 1);
+			if (maxits == 0)
+				save_model_atomically_collective(trained_fnm, "unchanged adaptive physical checkpoint");
 		}
 		if (balanced_pure_w_init) {
 		// A new initialization protocol, never a checkpoint conversion. All

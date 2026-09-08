@@ -115,6 +115,7 @@ public:
 		double worst_analytic = 0.0;
 		double worst_fd = 0.0;
 		double base_loss = 0.0;
+		double gradient_path_loss = 0.0;
 	};
 
 	struct DirectionalResult {
@@ -138,6 +139,7 @@ public:
 	{
 		std_scaling = 0.0;
 		stdd_scaling = 0.0;
+		consistent_std_value_loss = mtpr->OuterUsesAdaptiveRadialCoefficients();
 		radial_smooth_regularization = 0.0;
 		scalar_head_l2_regularization = 0.0;
 		gate_scalar_l2_regularization = 0.0;
@@ -288,6 +290,7 @@ public:
 				mtpr->TwoLayerResidualEnabled() ? residual_stage : 0;
 		CalcObjectiveFunctionGrad(configs);
 		std::vector<double> analytic = loss_grad_;
+		result.gradient_path_loss = loss_;
 		result.base_loss = ObjectiveFunction(configs);
 		if (mtpr != nullptr)
 			mtpr->two_layer_residual_eval_stage_ = saved_stage;
@@ -1738,6 +1741,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " stage_active_only=" << (stage_active_only ? 1 : 0)
 			          << " base_loss=" << result.base_loss
 			          << " worst_index=" << result.worst_index
+			          << " gradient_path_loss=" << result.gradient_path_loss
 			          << " worst_group=" << DescribeMTPRCoeffIndex(mtpr, result.worst_index)
 			          << " analytic=" << result.worst_analytic
 			          << " finite_difference=" << result.worst_fd

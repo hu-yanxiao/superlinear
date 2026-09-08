@@ -819,9 +819,10 @@ void NonLinearRegression::AddLoss(const Configuration & orig,
 		for (int type : active_type_scratch_)
 			_stdd_ += (type_mean[type] - mean_) * (type_mean[type] - mean_);
 
+		const double std_force_scale = consistent_std_value_loss ? 200.0 : 20.0;
 		for (int i = 0; i < cfg.size(); i++)
-			_std_ += 20.0 * (cfg.cal_se[i] - type_mean[cfg.type(i)]) * (cfg.cal_se[i] - type_mean[cfg.type(i)])
-				/ orig.size() / (20.0 + orig.force(i).NormSq());
+			_std_ += std_force_scale * (cfg.cal_se[i] - type_mean[cfg.type(i)]) * (cfg.cal_se[i] - type_mean[cfg.type(i)])
+				/ orig.size() / (std_force_scale + orig.force(i).NormSq());
 
 		stdd_ += stdd_scaling * _stdd_;
 		std_ += std_scaling * _std_;

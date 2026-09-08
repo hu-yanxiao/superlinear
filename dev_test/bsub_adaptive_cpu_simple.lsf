@@ -17,7 +17,7 @@ export I_MPI_FABRICS=shm:ofi
 # Recompute dataset neighborhoods to limit memory on queue 33.
 export MLIP_CACHE_NEIGHBORHOODS=0
 
-bin=/work/phy-weigw/20260321_Test/superlinear-radial-coefficient-gate-work-codex/bin/mlp-sus2
+bin=/work/phy-weigw/app/superlinear/mlp-sus2
 train_cfg=./train.cfg
 prefix=outer8gate3_cpu
 init_mtp=ini.mtp
@@ -37,12 +37,9 @@ mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$np" \
   --two-layer-gate-factor-pruning=q-total --two-layer-gate-k-rank=3 \
   --two-layer-gate-body-order=4 --two-layer-gate-shared-radial \
   --init-params=same --init-random-seed=20260907 --scal-range=3.5,1.5 \
-  --adaptive-radial-initialization=balanced --adaptive-radial-init-relative-rms=0.03 \
-  --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 --force-loss=l2 \
-  --weighting=vibrations --std-weight=0 --stdd-weight=0 \
-  --gate-x-l2=0 --radial-smooth=1e-6 --scalar-weight-l2-preset=recommended \
-  --optimizer=bfgs --bfgs-line-search=wolfe --radial-parameterization=weight-norm \
-  --bfgs-coordinate-normalization=efs-gn \
+  --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 \
+  --std-weight=0 --stdd-weight=0 \
+  --optimizer=bfgs --bfgs-line-search=wolfe \
   --max-iter=5000 --optimizer-conv-tol=0 \
   --curr-pot-name="${prefix}_current.mtp" \
   --trained-pot-name="${prefix}_p.mtp" --best-pot-name="${prefix}_best.mtp" \

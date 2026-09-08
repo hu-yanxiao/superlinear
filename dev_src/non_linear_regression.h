@@ -115,6 +115,8 @@ public:
 	int norm_by_forces = 0;									// whether to scale weight of E&F in configurations depending on the abs(F)
         double std_scaling = 0.2;
         double stdd_scaling = 0.00001;	
+	// Adaptive profile uses the same STD objective in value and gradient paths.
+	bool consistent_std_value_loss = false;
 	double radial_smooth_regularization = 1.0e-6;
 	int radial_smooth_grid = 128;
 	std::vector<double> fixed_atomic_energies;

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Entry point for the maintained adaptive-radial PyTorch interface.
+set -eo pipefail
+source /work/phy-weigw/app/superlinear/env.sh
+source /work/phy-weigw/anaconda3/etc/profile.d/conda.sh
+source /work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/activate
+export PYTHONPATH=/work/phy-weigw/20260321_Test/superlinear-adaptive-pytorch-work-codex${PYTHONPATH:+:$PYTHONPATH}
+export SUS2SHPT_ADAPTIVE_KERNEL=${SUS2SHPT_ADAPTIVE_KERNEL:-vectorized}
+exec /work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/python -m sus2shpt.cli "$@"

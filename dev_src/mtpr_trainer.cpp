@@ -14,6 +14,7 @@
 #include "diagonal_coordinate_scaling.h"
 #include "efs_head_coordinate_scaling.h"
 #include "radial_weight_norm.h"
+#include "adaptive_pytorch_composition.h"
 
 #ifdef ALGLIB
 #	include "alglib/optimization.h"
@@ -336,6 +337,151 @@ void MTPR_trainer::shift(bool shift_)
 {
 p_mlmtpr->shift_ = shift_;
 
+}
+
+void MTPR_trainer::PrepareAdaptivePytorchTraining(
+	std::vector<Configuration>& configurations,
+	const std::vector<Neighborhoods>* neighborhoods,
+	bool fresh, unsigned seed)
+{
+	if (!adaptive_pytorch_profile || !p_mlmtpr->OuterUsesAdaptiveRadialCoefficients())
+		ERROR("Fixed PyTorch training calibration requires an adaptive radial model");
+	MLMTPR& model = *p_mlmtpr;
+	const int species = model.species_count;
+	MLMTPR::AdaptiveRadialNormalizationSums sums;
+	sus2::adaptive_pytorch_composition::StreamingQR composition(species);
+	double force_sq = 0.0;
+	unsigned long long counts[4] = {0, 0, 0, 0};
+	int failed = 0;
+	try {
+		model.AccumulateAdaptiveRadialNormalizationSums(configurations, neighborhoods, sums);
+		counts[0] = sums.gate_samples;
+		counts[1] = sums.outer_samples;
+		for (const Configuration& cfg : configurations) {
+			if (cfg.has_forces()) {
+				for (int i = 0; i < cfg.size(); ++i)
+					for (int a = 0; a < 3; ++a) {
+						const double f = cfg.force(i)[a];
+						if (!std::isfinite(f))
+							ERROR("Nonfinite reference force in fixed-RMS calibration");
+						force_sq += f * f;
+					}
+				counts[2] += 3ULL * cfg.size();
+			}
+			if (fresh && cfg.has_energy()) {
+				std::vector<double> row(species, 0.0);
+				for (int i = 0; i < cfg.size(); ++i)
+					row.at(cfg.type(i)) += 1.0;
+				composition.AddConfigurationRow(row, cfg.energy);
+				++counts[3];
+			}
+		}
+	} catch (const std::exception& error) {
+		std::cerr << "Adaptive PyTorch calibration: " << error.what() << std::endl;
+		failed = 1;
+	} catch (...) {
+		failed = 1;
+	}
+	int rank = 0, world_size = 1;
+#ifdef MLIP_MPI
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+	MPI_Allreduce(MPI_IN_PLACE, &failed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+#endif
+	if (failed)
+		ERROR("Adaptive PyTorch calibration failed on a dataset shard");
+#ifdef MLIP_MPI
+	MPI_Allreduce(MPI_IN_PLACE, sums.gate_scalar_sq.data(),
+		static_cast<int>(sums.gate_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+	MPI_Allreduce(MPI_IN_PLACE, sums.outer_scalar_sq.data(),
+		static_cast<int>(sums.outer_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+	MPI_Allreduce(MPI_IN_PLACE, counts, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+	MPI_Allreduce(MPI_IN_PLACE, &force_sq, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+#endif
+	if (counts[0] == 0 || counts[1] == 0 || counts[2] == 0 || !std::isfinite(force_sq))
+		ERROR("Adaptive fixed-RMS training requires atoms and finite force targets");
+	auto rms_scale = [](double square_sum, unsigned long long count) {
+		if (!std::isfinite(square_sum) || square_sum < 0.0 || count == 0)
+			ERROR("Invalid adaptive fixed-RMS statistic");
+		const double rms = std::sqrt(square_sum / static_cast<double>(count));
+		return rms > 1.0e-12 ? std::max(1.0e-12, std::min(1.0e12, 1.0 / rms)) : 1.0;
+	};
+	const double force_rms = std::sqrt(force_sq / static_cast<double>(counts[2]));
+	const double output_scale = force_rms > 1.0e-12
+		? std::max(1.0e-12, std::min(1.0e6, force_rms)) : 1.0;
+	adaptive_pytorch_physical_scales.assign(model.CoeffCount(), 1.0);
+	const int Q = model.TwoLayerGateScalarCount();
+	const int D = model.AdaptiveRadialRowCount();
+	const int P = model.alpha_scalar_moments;
+	for (int row = 0; row < D; ++row) {
+		adaptive_pytorch_physical_scales[model.AdaptiveRadialAmplitudeOffset() + row] =
+			model.AdaptiveRadialAmplitudeOptimizerScale(row);
+		for (int q = 0; q < Q; ++q)
+			adaptive_pytorch_physical_scales[model.AdaptiveRadialWeightOffset() + row * Q + q] =
+				rms_scale(sums.gate_scalar_sq[q], counts[0]);
+	}
+	// Stored head * linear_mults is the physical exported moment coefficient.
+	// RMS and force scales are fixed during the optimization, never detached
+	// parameter-dependent normalizers. The exact pullback is dL/dtheta=s*dL/dc.
+	const int head = model.LinearCoeffOffset() + species;
+	for (int q = 0; q < P; ++q) {
+		const double mult = model.linear_mults.at(q);
+		if (!std::isfinite(mult) || mult == 0.0)
+			ERROR("Adaptive PyTorch readout requires finite nonzero linear multipliers");
+		adaptive_pytorch_physical_scales[head + q] =
+			output_scale * rms_scale(sums.outer_scalar_sq[q], counts[1]) / std::abs(mult);
+	}
+	if (fresh) {
+		const std::vector<double>& local_qr = composition.Matrix();
+		std::vector<double> stacked(rank == 0 ? local_qr.size() * world_size : 0);
+#ifdef MLIP_MPI
+		MPI_Gather(local_qr.data(), static_cast<int>(local_qr.size()), MPI_DOUBLE,
+			rank == 0 ? stacked.data() : nullptr, static_cast<int>(local_qr.size()), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+#else
+		stacked = local_qr;
+#endif
+		if (rank == 0) {
+			try {
+				std::vector<std::vector<double>> blocks(world_size);
+				for (int r = 0; r < world_size; ++r)
+					blocks[r].assign(stacked.begin() + r * local_qr.size(),
+					                 stacked.begin() + (r + 1) * local_qr.size());
+				const auto fit = sus2::adaptive_pytorch_composition::SolveStacked(
+					blocks, species, counts[3]);
+				for (int type = 0; type < species; ++type) {
+					model.Coeff()[type] = fit.e0[type] - 1.0;
+					model.Coeff()[model.LinearCoeffOffset() + type] = 1.0;
+				}
+				std::mt19937_64 generator(seed);
+				std::normal_distribution<double> normal(0.0, 0.1 / std::sqrt(static_cast<double>(P)));
+				for (int q = 0; q < P; ++q)
+					model.Coeff()[head + q] = normal(generator)
+						* adaptive_pytorch_physical_scales[head + q]
+						* (model.linear_mults[q] > 0.0 ? 1.0 : -1.0);
+				std::cout << "[adaptive-pytorch-composition] configs=" << counts[3]
+				          << " rank=" << fit.rank << " e0=";
+				for (double e0 : fit.e0) std::cout << " " << std::setprecision(17) << e0;
+				std::cout << std::endl;
+			} catch (...) { failed = 1; }
+		}
+#ifdef MLIP_MPI
+		MPI_Bcast(&failed, 1, MPI_INT, 0, MPI_COMM_WORLD);
+#endif
+		if (failed) ERROR("Adaptive composition least-squares initialization failed");
+#ifdef MLIP_MPI
+		MPI_Bcast(model.Coeff(), model.CoeffCount(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+#endif
+	}
+	if (rank == 0) {
+		std::cout << "[adaptive-pytorch-profile] fresh=" << fresh
+		          << " normalization=fixed-rms atoms=" << counts[1]
+		          << " force_rms=" << std::setprecision(17) << force_rms
+		          << " readout_output_scale=" << output_scale
+		          << " radial_parameterization=weight-norm"
+		          << " scalar_head_l2=1e-5 adaptive_response_l2=1e-4 radial_smooth=1e-6 grid=128"
+		          << " std=" << std_scaling << " stdd=" << stdd_scaling
+		          << " preserve_physical=" << !fresh << std::endl;
+	}
 }
 
 #ifdef MLIP_MPI
@@ -2237,6 +2383,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
 	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
+	const bool use_pytorch_coordinates =
+		bfgs_coordinate_normalization == "pytorch-fixed-rms";
 	const bool use_full_head_coordinates =
 		bfgs_coordinate_normalization == "efs-head-full";
 	const bool use_exact_head_coordinates =
@@ -2250,7 +2398,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	if (!use_radial_weight_norm && radial_parameterization != "physical")
 		ERROR("MTPR_trainer::Train(): unknown radial parameterization "
 		      + radial_parameterization);
-	if (!use_bfgs_coordinate_normalization
+	if (!use_bfgs_coordinate_normalization && !use_pytorch_coordinates
 	    && bfgs_coordinate_normalization != "none")
 		ERROR("MTPR_trainer::Train(): unknown BFGS coordinate normalization "
 		      + bfgs_coordinate_normalization);
@@ -2582,6 +2730,18 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	double full_head_diagonal_shift = 0.0;
 	bool coordinate_normalization_initialized =
 		!use_bfgs_coordinate_normalization;
+	if (use_pytorch_coordinates) {
+		if (!adaptive_pytorch_profile || !p_mlmtpr->OuterUsesAdaptiveRadialCoefficients()
+		    || adaptive_pytorch_physical_scales.size() != static_cast<size_t>(n))
+			ERROR("Adaptive PyTorch coordinates require calibrated fixed scales");
+		for (int i = 0; i < n; ++i) {
+			const double physical_scale = adaptive_pytorch_physical_scales[i];
+			if (!std::isfinite(physical_scale) || physical_scale <= 0.0)
+				ERROR("Invalid adaptive PyTorch physical coordinate scale");
+			if (radial_weight_norm_role[i] < 0)
+				coordinate_scale_by_full[i] = 1.0 / physical_scale;
+		}
+	}
 	auto add_coordinate_normalization_block =
 		[&](const std::string& name, int begin, int count) {
 			if (count <= 0)
@@ -3703,6 +3863,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	auto full_inv_hess_diag_value = [&](int full_idx) {
 		double value = 1.0;
+		if (use_pytorch_coordinates)
+			return value;
 		if (coordinate_normalization_initialized
 		    && coordinate_normalization_block_by_full[full_idx] >= 0)
 			return value;
@@ -5452,9 +5614,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 			if (prank == 0)
 			{
-				const double joint_std_report = need_std_terms ? (std_l / std_scaling) : 0.0;
-			const double center_std_report = need_std_terms ? (stdd_l / stdd_scaling) : 0.0;
-		logstrm1 << "MTPR training ended:" << "\t joint_std^2:" << joint_std_report <<  "\t center_std^2:"  << center_std_report <<"   " << mean_1_l <<"   " << mean_2_l << "   " << mean_3_l << "\t efs:" << bfgs_f - std_l - 0 * stdd_l << endl;
+				const double joint_std_report = std_scaling != 0.0 ? (std_l / std_scaling) : 0.0;
+			const double center_std_report = stdd_scaling != 0.0 ? (stdd_l / stdd_scaling) : 0.0;
+		logstrm1 << "MTPR training ended:" << "\t joint_std^2:" << joint_std_report <<  "\t center_std^2:"  << center_std_report <<"   " << mean_1_l <<"   " << mean_2_l << "   " << mean_3_l << "\t efs:" << bfgs_f - std_l - stdd_l << endl;
 		MLP_LOG("dev", logstrm1.str()); logstrm1.str("");
 	}
 }

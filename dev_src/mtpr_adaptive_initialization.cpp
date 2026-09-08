@@ -105,6 +105,66 @@ void AllreduceInPlace(unsigned long long& value)
 
 } // namespace
 
+void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
+	std::vector<Configuration>& training_set,
+	const std::vector<Neighborhoods>* training_neighborhoods,
+	MLMTPR::AdaptiveRadialNormalizationSums& sums)
+{
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		ERROR("Adaptive radial normalization statistics require adaptive-coefficients outer mode");
+	if (!TwoLayerGateEnabled() || !TwoLayerGateUsesFullScalarWeights())
+		ERROR("Adaptive radial normalization statistics require a mu-scalar-full two-layer gate");
+	if (training_neighborhoods != nullptr
+	    && training_neighborhoods->size() != training_set.size())
+		ERROR("Adaptive radial normalization statistics received inconsistent neighborhood cache size");
+	ValidateOuterModeConfiguration();
+
+	const int Q = TwoLayerGateScalarCount();
+	if (Q <= 0 || alpha_scalar_moments <= 0)
+		ERROR("Adaptive radial normalization statistics found inconsistent scalar dimensions");
+	if (sums.gate_scalar_sq.size() != static_cast<std::size_t>(Q))
+		sums.gate_scalar_sq.assign(Q, 0.0);
+	if (sums.outer_scalar_sq.size() != static_cast<std::size_t>(alpha_scalar_moments))
+		sums.outer_scalar_sq.assign(alpha_scalar_moments, 0.0);
+
+	for (std::size_t cfg_index = 0; cfg_index < training_set.size(); ++cfg_index) {
+		std::unique_ptr<Neighborhoods> owned_neighborhoods;
+		const Neighborhoods* neighborhoods_ptr = nullptr;
+		if (training_neighborhoods != nullptr) {
+			neighborhoods_ptr = &(*training_neighborhoods)[cfg_index];
+		} else {
+			owned_neighborhoods.reset(
+				new Neighborhoods(training_set[cfg_index], CutOff()));
+			neighborhoods_ptr = owned_neighborhoods.get();
+		}
+		const Neighborhoods& neighborhoods = *neighborhoods_ptr;
+		PrepareAdaptiveRadial(neighborhoods, false, false);
+		for (int atom = 0; atom < static_cast<int>(neighborhoods.size()); ++atom) {
+			const double* gate = two_layer_gate_scalar_values_cache_.data()
+				+ static_cast<std::size_t>(atom) * Q;
+			for (int q = 0; q < Q; ++q) {
+				if (!std::isfinite(gate[q]))
+					ERROR("Adaptive radial normalization statistics found non-finite gate scalar");
+				sums.gate_scalar_sq[q] += gate[q] * gate[q];
+			}
+			++sums.gate_samples;
+
+			ForwardAdaptiveRadialSite(neighborhoods[atom], atom, nullptr);
+			for (int q = 0; q < alpha_scalar_moments; ++q) {
+				const int node = alpha_moment_mapping[q];
+				const double value = adaptive_radial_execution_.values[node];
+				if (!std::isfinite(value))
+					ERROR("Adaptive radial normalization statistics found non-finite outer scalar");
+				sums.outer_scalar_sq[q] += value * value;
+			}
+			++sums.outer_samples;
+		}
+	}
+	adaptive_radial_execution_ = AdaptiveRadialExecution();
+	two_layer_edge_cache_ready_ = false;
+	two_layer_forward_final_moment_cache_ready_ = false;
+}
+
 void MLMTPR::InitializeAdaptiveRadialFromData(
 	std::vector<Configuration>& training_set,
 	const std::vector<Neighborhoods>* training_neighborhoods,
@@ -172,7 +232,8 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 		scalar_rms[q] = rms > 1.0e-12 ? rms : 1.0;
 		UpdateRange(rms, scalar_rms_min, scalar_rms_max);
 		// Natural physical U scale. Existing optimizer chart uses its inverse.
-		adaptive_radial_weight_optimizer_scales_[q] = 1.0 / scalar_rms[q];
+		adaptive_radial_weight_optimizer_scales_[q] =
+			std::max(1.0e-12, std::min(1.0e12, 1.0 / scalar_rms[q]));
 	}
 
 	double* amplitudes = regression_coeffs.data() + AdaptiveRadialAmplitudeOffset();
@@ -182,7 +243,8 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 		amplitudes[row] = 1.0;
 		for (int q = 0; q < Q; ++q)
 			weights[static_cast<size_t>(row) * Q + q] =
-				CenteredUnit(seed, row, q) * inv_sqrt_q / scalar_rms[q];
+				CenteredUnit(seed, row, q) * inv_sqrt_q
+				* adaptive_radial_weight_optimizer_scales_[q];
 	}
 
 	std::vector<double> base_sq(blocks, 0.0);

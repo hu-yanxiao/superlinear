@@ -129,6 +129,13 @@ public:
 	std::string bfgs_line_search = "wolfe";
 	std::string radial_parameterization = "physical";
 	std::string bfgs_coordinate_normalization = "none";
+	bool adaptive_pytorch_profile = false;
+	// Fixed, foldable training coordinates; not part of the potential evaluation.
+	std::vector<double> adaptive_pytorch_physical_scales;
+	void PrepareAdaptivePytorchTraining(
+		std::vector<Configuration>& training_set,
+		const std::vector<Neighborhoods>* neighborhoods,
+		bool fresh, unsigned seed);
 	int bfgs_coordinate_probes = 4;
 	double bfgs_coordinate_floor = 1.0e-6;
 	int lbfgs_history_size = 20;

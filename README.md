@@ -1,6 +1,21 @@
 # SUS2-SH
 
-This superlinear development branch, `codex/pure-w-channelwise`, adds a
+## Current adaptive-radial superlinear branch
+
+`codex/radial-coefficient-gate` implements environment-dependent radial basis
+coefficients, selected with `--superlinear-mode=radial-coefficient-gate`.
+Its C++ trainer uses the fixed PyTorch normalization/regularization profile;
+only `--std-weight` and `--stdd-weight` remain selectable regularizers. Energy,
+force and stress loss weights remain configurable. See
+[the training and export contract](docs/adaptive-pytorch-training-profile.md)
+and [the minimal CPU submission template](dev_test/bsub_adaptive_cpu_simple.lsf).
+The maintained phy-weigw entry points are installed under
+`/work/phy-weigw/app/superlinear/`. GPUMD support is maintained in the separate
+`hu-yanxiao/GPUMD-superlinear` repository; adaptive LAMMPS support is not claimed.
+
+## Inherited pure-W and release3 reference
+
+The inherited superlinear branch, `codex/pure-w-channelwise`, adds a
 complete distance matrix `W_l(r): K -> O` with independent outer channels.
 Use `--superlinear-mode=pure-w-channelwise` explicitly; legacy models keep
 their existing interpretation. Training defaults to `--init-params=same`.
