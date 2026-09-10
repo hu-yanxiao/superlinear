@@ -44,6 +44,120 @@ def integer(text: str, key: str) -> int:
     return int(scalar(text, key))
 
 
+def gate_basic_index(
+    channel: int,
+    l: int,
+    m: int,
+    *,
+    lmax: int,
+    gate_rank: int,
+    basic_begin: int,
+    basic_count: int,
+) -> int:
+    local = (
+        gate_rank * ((lmax + 1) * (lmax + 1) - (l + 1) * (l + 1))
+        + (gate_rank - 1 - channel) * (2 * l + 1)
+        + (m + l)
+    )
+    if local < 0 or local >= basic_count:
+        raise AssertionError("test reconstructed invalid gate basic index")
+    return basic_begin + local
+
+
+def corrupt_same_k_product_lane(source: Path, target: Path) -> None:
+    text = source.read_text(encoding="utf-8")
+    lmax = integer(text, "sh_l_max")
+    gate_rank = integer(text, "two_layer_gate_k_rank")
+    basic_begin = integer(text, "two_layer_gate_k_rank_basic_begin")
+    basic_count = integer(text, "two_layer_gate_k_rank_basic_count")
+    product_begin = integer(text, "two_layer_gate_k_rank_product_begin")
+    product_end = integer(text, "two_layer_gate_k_rank_product_end")
+    products_match = re.search(
+        r"(?ms)^sh_products\s*=\s*\{(.*?)\}\s*\nalpha_scalar_moments",
+        text,
+    )
+    if products_match is None:
+        raise AssertionError("missing sh_products block")
+    body = products_match.group(1)
+    product_matches = list(
+        re.finditer(r"\{(-?\d+),\s*(-?\d+),\s*(-?\d+),\s*([^{}]+?)\}", body)
+    )
+    if product_end > len(product_matches):
+        raise AssertionError("product range exceeds parsed sh_products")
+
+    channel = {}
+    for ch in range(gate_rank):
+        for l in range(lmax, -1, -1):
+            for m in range(-l, l + 1):
+                channel[
+                    gate_basic_index(
+                        ch,
+                        l,
+                        m,
+                        lmax=lmax,
+                        gate_rank=gate_rank,
+                        basic_begin=basic_begin,
+                        basic_count=basic_count,
+                    )
+                ] = ch
+
+    corrupt_index = None
+    corrupt_left = None
+    for idx in range(product_begin, product_end):
+        match = product_matches[idx]
+        left = int(match.group(1))
+        right = int(match.group(2))
+        target_moment = int(match.group(3))
+        left_ch = channel.get(left)
+        right_ch = channel.get(right)
+        if left_ch is None or right_ch is None:
+            continue
+        if left_ch != right_ch:
+            raise AssertionError("original same-k model is already cross-channel")
+        other_ch = (right_ch + 1) % gate_rank
+        corrupt_left = gate_basic_index(
+            other_ch,
+            0,
+            0,
+            lmax=lmax,
+            gate_rank=gate_rank,
+            basic_begin=basic_begin,
+            basic_count=basic_count,
+        )
+        if corrupt_left == left:
+            corrupt_left = gate_basic_index(
+                (right_ch + 2) % gate_rank,
+                0,
+                0,
+                lmax=lmax,
+                gate_rank=gate_rank,
+                basic_begin=basic_begin,
+                basic_count=basic_count,
+            )
+        corrupt_index = idx
+        channel[target_moment] = left_ch
+        break
+
+    if corrupt_index is None or corrupt_left is None:
+        raise AssertionError("could not find gate product to corrupt")
+    match = product_matches[corrupt_index]
+    replacement = "{" + ", ".join(
+        [
+            str(corrupt_left),
+            match.group(2),
+            match.group(3),
+            match.group(4).strip(),
+        ]
+    ) + "}"
+    new_body = body[: match.start()] + replacement + body[match.end() :]
+    target.write_text(
+        text[: products_match.start(1)]
+        + new_body
+        + text[products_match.end(1) :],
+        encoding="utf-8",
+    )
+
+
 def init_model(
     binary: Path,
     out: Path,
@@ -164,9 +278,9 @@ def main(argv: list[str]) -> int:
             "q-total",
             outer_rank=2,
             gate_rank=4,
-            body_order=4,
+            body_order=6,
             gate_body_order=4,
-            body_l_max="3,3,2,2",
+            body_l_max="3,3,3,2,1",
         )
 
         check_model(
@@ -206,6 +320,15 @@ def main(argv: list[str]) -> int:
             expected_gate_rank=4,
             expected_gate_body_order=4,
         )
+
+        corrupt = root / "same_k_cross_lane_corrupt.mtp"
+        corrupt_same_k_product_lane(same, corrupt)
+        corrupt_result = run(
+            [str(binary), "roundtrip-model-dev", str(corrupt), str(root / "corrupt_out.mtp")],
+            expect_ok=False,
+        )
+        if "same-k gate product crosses gate channels" not in corrupt_result.stdout:
+            raise AssertionError("corrupt same-k gate product was not rejected by provenance validator")
 
         cfg = root / "tiny.cfg"
         tiny_cfg(cfg)

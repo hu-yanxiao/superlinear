@@ -2137,18 +2137,22 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		if (two_layer_gate_factor_pruning_ == "same-k") {
 			std::vector<int> gate_channel(alpha_moments_count, -1);
 			const int basics_per_channel = (sh_l_max_ + 1) * (sh_l_max_ + 1);
-			const int gate_basic_begin = two_layer_gate_k_rank_basic_begin_;
-			const int gate_basic_end = gate_basic_begin + two_layer_gate_k_rank_basic_count_;
 			if (basics_per_channel <= 0
 			    || two_layer_gate_k_rank_basic_count_
 			       != two_layer_gate_k_rank_ * basics_per_channel)
 				ERROR("SUS2-SH same-k gate has inconsistent primitive layout");
-			for (int moment = gate_basic_begin; moment < gate_basic_end; ++moment) {
-				if (moment < 0 || moment >= alpha_moments_count)
-					ERROR("SUS2-SH same-k gate primitive moment is out of range");
-				gate_channel[moment] =
-					(moment - gate_basic_begin) / basics_per_channel;
-			}
+			for (int channel = 0; channel < two_layer_gate_k_rank_; ++channel)
+				for (int l = sh_l_max_; l >= 0; --l)
+					for (int m = -l; m <= l; ++m) {
+						const int moment =
+							TwoLayerGateKRankBasicIndex(channel, l, m);
+						if (moment < 0 || moment >= alpha_moments_count)
+							ERROR("SUS2-SH same-k gate primitive moment is out of range");
+						if (gate_channel[moment] >= 0
+						    && gate_channel[moment] != channel)
+							ERROR("SUS2-SH same-k gate primitive has duplicate channel provenance");
+						gate_channel[moment] = channel;
+					}
 			if (two_layer_gate_k_rank_product_begin_ < 0
 			    || two_layer_gate_k_rank_product_end_
 			       > static_cast<int>(sh_products_.size())
