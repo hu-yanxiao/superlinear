@@ -36,11 +36,14 @@ gate scaling is shared, gradients from both layers **add to the same slots**.
 Decoupled gate scaling retains its own slots. Shared scaling never implies
 sharing the trainable `c`, `a`, or `U` across output channels.
 
-The outer invariant graph uses one k=1 angular topology, independently replicated
-O times. Products never combine distinct output lanes. If the k=1 topology has
-P invariants, the outer head has O*P invariants. The native energy convention is
-unchanged: `E_i = shift[type_i] + h[type_i] * (1 + sum_p d_p * Phi_ip)`, including
-the saved linear multipliers in `d`.
+By default, the outer invariant graph uses one k=1 angular topology,
+independently replicated O times. Products never combine distinct output lanes,
+and if the k=1 topology has P invariants, the outer head has O*P invariants.
+When initialized with `--sh-factor-pruning=q-total`, the same adaptive radial
+coefficient primitives feed a cross-channel outer invariant graph instead, so
+outer products may combine different output lanes. The native energy convention
+is unchanged: `E_i = shift[type_i] + h[type_i] * (1 + sum_p d_p * Phi_ip)`,
+including the saved linear multipliers in `d`.
 
 The storage order for adaptive rows is `(l*O+o)*N+n`; `q` is contiguous in `U`.
 The base `c` and species constants occupy the existing `mu=o*L+l` radial rows;

@@ -1055,6 +1055,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts,
 		"sh-factor-pruning", (pure_w_channelwise || radial_coefficient_gate)
 			? SHFactorPruning::SameK : SHFactorPruning::QTotal);
+	const bool outer_same_channel_mode =
+		pure_w_channelwise
+		|| (radial_coefficient_gate
+		    && factor_pruning == SHFactorPruning::SameK);
 	const auto outer_k_rank1_alias_it = opts.find("outer-k-rank1");
 	const bool outer_k_rank1_alias = outer_k_rank1_alias_it != opts.end();
 	if (outer_k_rank1_alias && outer_k_rank1_alias_it->second != "true")
@@ -1132,9 +1136,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--superlinear-mode=pure-w-channelwise requires --outer-k-rank=<O> with O > 0 (O may exceed K).");
 	if (radial_coefficient_gate && !outer_k_rank_enabled)
 		ERROR("--superlinear-mode=radial-coefficient-gate requires --outer-k-rank=<O> with 0 < O <= K.");
-	if ((pure_w_channelwise || radial_coefficient_gate)
-	    && factor_pruning != SHFactorPruning::SameK)
-		ERROR("--superlinear-mode same-channel modes require --sh-factor-pruning=same-k or omission.");
+	if (pure_w_channelwise && factor_pruning != SHFactorPruning::SameK)
+		ERROR("--superlinear-mode=pure-w-channelwise requires --sh-factor-pruning=same-k or omission.");
+	if (radial_coefficient_gate
+	    && factor_pruning != SHFactorPruning::SameK
+	    && factor_pruning != SHFactorPruning::QTotal)
+		ERROR("--superlinear-mode=radial-coefficient-gate supports --sh-factor-pruning=same-k or q-total.");
 	if (outer_k_rank < 0
 	    || ((!pure_w_channelwise && !radial_coefficient_gate)
 	        && outer_k_rank > kmax))
@@ -1321,7 +1328,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (outer_k_rank_enabled) {
 		outer_rank_graph.Build();
 		outer_rank_graph.AddAllBasics();
-		if (pure_w_channelwise || radial_coefficient_gate) {
+		if (outer_same_channel_mode) {
 			SHGraphBuilder angular(lmax, 1, SHFactorPruning::SameK, &cg_cache);
 			angular.Build();
 			angular.AddAllBasics();
@@ -1481,7 +1488,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "outer_radial_mode = pure-matrix\n";
 		}
 		if (radial_coefficient_gate) {
-			ofs << "outer_channel_mode = same-channel\n";
+			ofs << "outer_channel_mode = "
+			    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
+			    << "\n";
 			ofs << "outer_radial_mode = adaptive-coefficients\n";
 		}
 		ofs << "outer_k_rank1_basic_begin = "

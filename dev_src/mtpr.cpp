@@ -2105,23 +2105,25 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
 	const bool pure = outer_radial_mode_ == "pure-matrix";
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
-	if ((pure || adaptive) != (outer_channel_mode_ == "same-channel"))
+	if (pure && outer_channel_mode_ != "same-channel")
+		ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
+	if (!pure && !adaptive && outer_channel_mode_ == "same-channel")
 		ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
 	if (!pure && !adaptive)
 		return;
 	if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
 	    || !two_layer_gate_enabled_)
-		ERROR("SUS2-SH same-channel outer requires a ranked two-layer gate");
+		ERROR("SUS2-SH direct-radial outer requires a ranked two-layer gate");
 	if (pure && !TwoLayerGateRadialMixingEnabled())
 		ERROR("SUS2-SH pure-matrix outer requires a ranked two-layer gate and full radial mixing");
 	if (!TwoLayerGateUsesSharedRadial())
-		ERROR("SUS2-SH same-channel outer requires an independent shared-radial gate block");
+		ERROR("SUS2-SH direct-radial outer requires an independent shared-radial gate block");
 	if (outer_k_rank1_direct_radial_ || TwoLayerGateUsesDirectScale()
 	    || multi_layer_gate_enabled_ || two_layer_gate_edge_l1_enabled_
 	    || two_layer_residual_enabled_ || two_layer_gate_readout_enabled_)
-		ERROR("SUS2-SH same-channel outer is incompatible with direct shortcuts, multi-layer, edge-L1, residual, or readout modes");
+		ERROR("SUS2-SH direct-radial outer is incompatible with direct shortcuts, multi-layer, edge-L1, residual, or readout modes");
 	if (!outer_k_rank1_weights_.empty() || OuterKRank1WeightCount() != 0)
-		ERROR("SUS2-SH same-channel outer must not contain a factorized outer weight block");
+		ERROR("SUS2-SH direct-radial outer must not contain a factorized outer weight block");
 	if (pure) {
 		const int mixing_count = TwoLayerGateRadialMixingCoeffCount();
 		if (mixing_count <= 0
@@ -4793,9 +4795,12 @@ void MLMTPR::Load(const string& filename)
 		    && outer_radial_mode_ != "pure-matrix"
 		    && outer_radial_mode_ != "adaptive-coefficients")
 			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
-		if ((outer_channel_mode_ == "same-channel")
-		    != (outer_radial_mode_ == "pure-matrix"
-		        || outer_radial_mode_ == "adaptive-coefficients"))
+		if (outer_radial_mode_ == "pure-matrix"
+		    && outer_channel_mode_ != "same-channel")
+			ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
+		if (outer_channel_mode_ == "same-channel"
+		    && outer_radial_mode_ != "pure-matrix"
+		    && outer_radial_mode_ != "adaptive-coefficients")
 			ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
 		if (outer_k_rank_ <= 0
 		    || (!OuterUsesPureRadialMatrix()
@@ -4838,7 +4843,7 @@ void MLMTPR::Load(const string& filename)
 		if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 			char closing_brace = '\0';
 			if (!(ifs >> closing_brace) || closing_brace != '}')
-				ERROR("SUS2-SH same-channel outer weights must be an empty list");
+				ERROR("SUS2-SH direct-radial outer weights must be an empty list");
 		}
 		ifs.ignore(1000, '\n');
 		ifs >> tmpstr;

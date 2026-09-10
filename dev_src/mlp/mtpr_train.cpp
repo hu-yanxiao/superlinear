@@ -2430,17 +2430,20 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	    && (((requested_superlinear_mode == "pure-w-channelwise")
 	         != (mtpr.OuterUsesPureRadialMatrix() && mtpr.OuterUsesSameChannelGraph()))
 	        || ((requested_superlinear_mode == "radial-coefficient-gate")
-	            != (mtpr.OuterUsesAdaptiveRadialCoefficients() && mtpr.OuterUsesSameChannelGraph()))))
+	            != mtpr.OuterUsesAdaptiveRadialCoefficients())))
 		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
 	if (mtpr.OuterUsesPureRadialMatrix()
 	    || mtpr.OuterUsesAdaptiveRadialCoefficients()) {
-		if (!opts["sh-factor-pruning"].empty() && opts["sh-factor-pruning"] != "same-k")
-			ERROR("--sh-factor-pruning must be same-k for the loaded same-channel superlinear model; the graph is not changed during resume");
+		const std::string loaded_outer_factor_pruning =
+			mtpr.OuterUsesSameChannelGraph() ? "same-k" : "q-total";
+		if (!opts["sh-factor-pruning"].empty()
+		    && opts["sh-factor-pruning"] != loaded_outer_factor_pruning)
+			ERROR("--sh-factor-pruning must match the loaded superlinear outer graph; changing it requires init-sh/inline initialization");
 		const auto gate_body_it = opts.find("two-layer-gate-body-order");
 		if (gate_body_it != opts.end() && !gate_body_it->second.empty()
 		    && ParseOptionalNonnegativeInteger(opts, "two-layer-gate-body-order")
 		        != mtpr.TwoLayerGateBodyOrderCount() + 1)
-			ERROR("--two-layer-gate-body-order must match the loaded same-channel superlinear gate graph; changing it requires init-sh/inline initialization");
+			ERROR("--two-layer-gate-body-order must match the loaded superlinear gate graph; changing it requires init-sh/inline initialization");
 	}
 	bool plain_to_gate_upgrade = false;
 	bool edge_l1_gate_upgrade = false;

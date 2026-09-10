@@ -3,9 +3,9 @@
 
 This script is intended for server-side execution after building mlp-sus2.  It
 does not depend on test data: it initializes small adaptive models, checks the
-serialized topology/counts, verifies model roundtrip preserves the explicit
-gate-pruning metadata, and confirms resume rejects a mismatched explicit gate
-mode.
+serialized topology/counts, verifies model roundtrip preserves explicit
+outer/gate pruning metadata, and confirms resume rejects mismatched explicit
+graph modes.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 
 def run(cmd: list[str], *, expect_ok: bool = True) -> subprocess.CompletedProcess[str]:
@@ -163,33 +164,35 @@ def init_model(
     out: Path,
     gate_factor: str,
     *,
+    outer_factor: Optional[str] = None,
     outer_rank: int,
     gate_rank: int,
     body_order: int,
     gate_body_order: int,
     body_l_max: str,
 ) -> None:
-    run(
-        [
-            str(binary),
-            "init-sh",
-            str(out),
-            "--species-count=2",
-            "--l-max=3",
-            "--k-max=8",
-            f"--body-order={body_order}",
-            f"--body-l-max={body_l_max}",
-            "--cutoff=6.5",
-            "--radial-basis-size=10",
-            "--radial-basis-type=RBChebyshev_sss",
-            "--scaling-map=K",
-            "--superlinear-mode=radial-coefficient-gate",
-            f"--outer-k-rank={outer_rank}",
-            f"--two-layer-gate-k-rank={gate_rank}",
-            f"--two-layer-gate-body-order={gate_body_order}",
-            f"--two-layer-gate-factor-pruning={gate_factor}",
-        ]
-    )
+    cmd = [
+        str(binary),
+        "init-sh",
+        str(out),
+        "--species-count=2",
+        "--l-max=3",
+        "--k-max=8",
+        f"--body-order={body_order}",
+        f"--body-l-max={body_l_max}",
+        "--cutoff=6.5",
+        "--radial-basis-size=10",
+        "--radial-basis-type=RBChebyshev_sss",
+        "--scaling-map=K",
+        "--superlinear-mode=radial-coefficient-gate",
+        f"--outer-k-rank={outer_rank}",
+        f"--two-layer-gate-k-rank={gate_rank}",
+        f"--two-layer-gate-body-order={gate_body_order}",
+        f"--two-layer-gate-factor-pruning={gate_factor}",
+    ]
+    if outer_factor is not None:
+        cmd.append(f"--sh-factor-pruning={outer_factor}")
+    run(cmd)
 
 
 def tiny_cfg(path: Path) -> None:
@@ -222,12 +225,13 @@ def check_model(
     expected_outer_rank: int,
     expected_gate_rank: int,
     expected_gate_body_order: int,
+    expected_outer_channel_mode: str = "same-channel",
 ) -> None:
     text = path.read_text(encoding="utf-8")
     if scalar(text, "outer_radial_mode") != "adaptive-coefficients":
         raise AssertionError("model is not adaptive-coefficients")
-    if scalar(text, "outer_channel_mode") != "same-channel":
-        raise AssertionError("model is not same-channel outer")
+    if scalar(text, "outer_channel_mode") != expected_outer_channel_mode:
+        raise AssertionError("model has wrong outer channel mode")
     if scalar(text, "two_layer_gate_factor_pruning") != expected_factor:
         raise AssertionError("wrong serialized gate factor-pruning mode")
     if integer(text, "outer_k_rank") != expected_outer_rank:
@@ -262,6 +266,7 @@ def main(argv: list[str]) -> int:
         root = Path(tmp)
         same = root / "same_k.mtp"
         qtotal = root / "q_total.mtp"
+        cross_outer_same_gate = root / "cross_outer_same_gate.mtp"
         init_model(
             binary,
             same,
@@ -282,6 +287,17 @@ def main(argv: list[str]) -> int:
             gate_body_order=4,
             body_l_max="3,3,3,2,1",
         )
+        init_model(
+            binary,
+            cross_outer_same_gate,
+            "same-k",
+            outer_factor="q-total",
+            outer_rank=2,
+            gate_rank=8,
+            body_order=6,
+            gate_body_order=6,
+            body_l_max="3,3,3,2,1",
+        )
 
         check_model(
             same,
@@ -299,11 +315,29 @@ def main(argv: list[str]) -> int:
             expected_gate_rank=4,
             expected_gate_body_order=4,
         )
+        check_model(
+            cross_outer_same_gate,
+            "same-k",
+            expected_q=232,
+            expected_outer_rank=2,
+            expected_gate_rank=8,
+            expected_gate_body_order=6,
+            expected_outer_channel_mode="cross-channel",
+        )
 
         same_rt = root / "same_k_roundtrip.mtp"
         qtotal_rt = root / "q_total_roundtrip.mtp"
+        cross_outer_same_gate_rt = root / "cross_outer_same_gate_roundtrip.mtp"
         run([str(binary), "roundtrip-model-dev", str(same), str(same_rt)])
         run([str(binary), "roundtrip-model-dev", str(qtotal), str(qtotal_rt)])
+        run(
+            [
+                str(binary),
+                "roundtrip-model-dev",
+                str(cross_outer_same_gate),
+                str(cross_outer_same_gate_rt),
+            ]
+        )
         check_model(
             same_rt,
             "same-k",
@@ -319,6 +353,15 @@ def main(argv: list[str]) -> int:
             expected_outer_rank=2,
             expected_gate_rank=4,
             expected_gate_body_order=4,
+        )
+        check_model(
+            cross_outer_same_gate_rt,
+            "same-k",
+            expected_q=232,
+            expected_outer_rank=2,
+            expected_gate_rank=8,
+            expected_gate_body_order=6,
+            expected_outer_channel_mode="cross-channel",
         )
 
         corrupt = root / "same_k_cross_lane_corrupt.mtp"
@@ -358,6 +401,19 @@ def main(argv: list[str]) -> int:
         )
         if "two-layer-gate-factor-pruning does not match" not in wrong_qtotal.stdout:
             raise AssertionError("q-total resume mismatch did not fail at gate-pruning check")
+        wrong_outer = run(
+            [
+                str(binary),
+                "train",
+                str(cross_outer_same_gate),
+                str(cfg),
+                "--sh-factor-pruning=same-k",
+                "--max-iter=0",
+            ],
+            expect_ok=False,
+        )
+        if "sh-factor-pruning must match" not in wrong_outer.stdout:
+            raise AssertionError("cross-channel outer resume mismatch did not fail at outer-pruning check")
 
     print("adaptive_gate_same_k_contract_check: PASS")
     return 0
