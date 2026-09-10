@@ -302,18 +302,23 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
     cfg.cal_se.resize(cfg.size()); cfg.cal_se0.resize(cfg.size());
     cfg.type_mean.assign(cfg.unique_elems.size(),0.0);
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
-    for (int i=0;i<cfg.size();++i) {
-        ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
-        const int type=neighborhoods[i].my_type;
-        const double center=linear_coeffs[type];
-        double scalar_energy=0;
-        if (need_derivatives) std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
-        for (int q=0;q<alpha_scalar_moments;++q) {
-            const int node=alpha_moment_mapping[q];
-            const double weight=center*linear_coeffs[species_count+q]*linear_mults[q];
-            scalar_energy+=weight*ex.values[node];
-            if (need_derivatives) ex.adjoints[node]+=weight;
-            max_linear[q]=std::max(max_linear[q],std::abs(linear_coeffs[species_count+q]*ex.values[node]));
+    const bool species_readout=UsesSpeciesReadout();
+	    for (int i=0;i<cfg.size();++i) {
+	        ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
+	        const int type=neighborhoods[i].my_type;
+	        const double center=linear_coeffs[type];
+	        const int readout_offset=LinearCoeffOffset()+species_count
+	            +(species_readout ? type*alpha_scalar_moments : 0);
+	        const double* readout=regression_coeffs.data()+readout_offset;
+	        double scalar_energy=0;
+	        if (need_derivatives) std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
+	        for (int q=0;q<alpha_scalar_moments;++q) {
+	            const int node=alpha_moment_mapping[q];
+	            const double coeff=readout[q];
+	            const double weight=(species_readout ? coeff : center*coeff)*linear_mults[q];
+	            scalar_energy+=weight*ex.values[node];
+	            if (need_derivatives) ex.adjoints[node]+=weight;
+            max_linear[q]=std::max(max_linear[q],std::abs(coeff*ex.values[node]));
         }
         cfg.cal_se0[i]=scalar_energy;
         cfg.cal_se[i]=regression_coeffs[type]+center+scalar_energy;
@@ -356,37 +361,47 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
     if (need_forces) { forces_cmpnts.resize(cfg.size(),columns,3); forces_cmpnts.set(0); }
     if (need_stress) std::memset(stress_cmpnts,0,columns*sizeof(stress_cmpnts[0]));
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
+    const bool species_readout=UsesSpeciesReadout();
+    const int readout_count=ScalarReadoutCoeffCount();
     ex.site_values.resize(static_cast<size_t>(cfg.size())*alpha_moments_count);
     for (int i=0;i<cfg.size();++i) {
         ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
         std::copy(ex.values.begin(),ex.values.end(),ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count);
-        energy_cmpnts[neighborhoods[i].my_type]+=1.0;
-        for (int q=0;q<alpha_scalar_moments;++q) energy_cmpnts[species_count+q]+=ex.values[alpha_moment_mapping[q]];
+        const int type=neighborhoods[i].my_type;
+        energy_cmpnts[type]+=1.0;
+        for (int q=0;q<alpha_scalar_moments;++q) {
+            const int column=species_count+(species_readout ? type*alpha_scalar_moments+q : q);
+            energy_cmpnts[column]+=ex.values[alpha_moment_mapping[q]];
+        }
     }
     if (!derivatives) return;
     const bool reference=ReferenceComponents();
     const int D=ex.rows,P=alpha_scalar_moments;
     if (!reference)
-        ex.component_coefficient_adjoints.resize(static_cast<size_t>(cfg.size())*P*D);
+        ex.component_coefficient_adjoints.resize(static_cast<size_t>(cfg.size())*readout_count*D);
     // The linear solver's columns are raw scalar bases (linear_mults and
     // species prefactors are handled by its established coordinate chart).
     // Reuse graph values and radial contractions for all columns.
-    for (int q=0;q<alpha_scalar_moments;++q) {
+    for (int head=0;head<readout_count;++head) {
+        const int type_filter=species_readout ? head/P : -1;
+        const int q=species_readout ? head%P : head;
         std::fill(ex.coefficient_adjoints.begin(),ex.coefficient_adjoints.end(),0.0);
         for (int i=0;i<cfg.size();++i) {
+            if (type_filter >= 0 && neighborhoods[i].my_type != type_filter)
+                continue;
             std::copy(ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count,
                       ex.site_values.data()+static_cast<size_t>(i+1)*alpha_moments_count,ex.values.begin());
             std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
             ex.adjoints[alpha_moment_mapping[q]]=1.0;
             ReverseAdaptiveRadialGraph(false);
-            AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i,species_count+q,need_forces,need_stress);
+            AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i,species_count+head,need_forces,need_stress);
         }
         if (reference)
-            FinishAdaptiveRadialGateForces(cfg,neighborhoods,species_count+q,need_forces,need_stress);
+            FinishAdaptiveRadialGateForces(cfg,neighborhoods,species_count+head,need_forces,need_stress);
         else for (int i=0;i<cfg.size();++i)
             std::copy(ex.coefficient_adjoints.data()+static_cast<size_t>(i)*D,
                       ex.coefficient_adjoints.data()+static_cast<size_t>(i+1)*D,
-                      ex.component_coefficient_adjoints.data()+(static_cast<size_t>(i)*P+q)*D);
+                      ex.component_coefficient_adjoints.data()+(static_cast<size_t>(i)*readout_count+head)*D);
     }
     if (!reference) FinishAdaptiveRadialGateComponents(cfg,neighborhoods,need_forces,need_stress);
 }
@@ -394,7 +409,7 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
 void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighborhoods& neighborhoods,
                                                 bool need_forces,bool need_stress) {
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
-    const int P=alpha_scalar_moments,D=ex.rows,Q=ex.scalars,H=ex.harmonics;
+    const int P=ScalarReadoutCoeffCount(),D=ex.rows,Q=ex.scalars,H=ex.harmonics;
     const int basic_count=static_cast<int>(two_layer_gate_required_basic_indices_.size());
     const int gate_mu_count=static_cast<int>(two_layer_gate_required_mu_indices_.size());
     const int cached_moments=static_cast<int>(two_layer_gate_required_moment_indices_.size());
@@ -491,6 +506,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int atoms=cfg.size(),D=ex.rows,Q=ex.scalars,H=ex.harmonics,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
+    const bool species_readout=UsesSpeciesReadout();
     const size_t edge_count=two_layer_edge_offsets_cache_.empty()
         ? 0 : two_layer_edge_offsets_cache_.back();
     const int radial_der_stride=AdaptiveRadialDerStride(
@@ -523,18 +539,28 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
         ForwardAdaptiveRadialSite(nbh,i,tangent ? &direction : nullptr);
         std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
         if (tangent) std::fill(ex.tangent_adjoints.begin(),ex.tangent_adjoints.end(),0.0);
-        const int type=nbh.my_type;
-        const double center=linear_coeffs[type];
-        out[type]+=ene_weight[i];
-        double center_grad=ene_weight[i];
-        for (int q=0;q<alpha_scalar_moments;++q) {
-            const int node=alpha_moment_mapping[q];
-            const double head=linear_coeffs[species_count+q]*linear_mults[q];
-            const double feature=ene_weight[i]*ex.values[node]+(tangent ? ex.tangents[node] : 0.0);
-            center_grad+=head*feature;
-            out[LinearCoeffOffset()+species_count+q]+=center*linear_mults[q]*feature;
-            ex.adjoints[node]+=ene_weight[i]*center*head;
-            if (tangent) ex.tangent_adjoints[node]+=center*head;
+	        const int type=nbh.my_type;
+	        const double center=linear_coeffs[type];
+	        const int readout_offset=LinearCoeffOffset()+species_count
+	            +(species_readout ? type*alpha_scalar_moments : 0);
+	        const double* readout=regression_coeffs.data()+readout_offset;
+	        out[type]+=ene_weight[i];
+	        double center_grad=ene_weight[i];
+	        for (int q=0;q<alpha_scalar_moments;++q) {
+	            const int node=alpha_moment_mapping[q];
+	            const double coeff=readout[q];
+	            const double head=coeff*linear_mults[q];
+	            const double feature=ene_weight[i]*ex.values[node]+(tangent ? ex.tangents[node] : 0.0);
+	            if (species_readout) {
+	                out[readout_offset+q]+=linear_mults[q]*feature;
+	                ex.adjoints[node]+=ene_weight[i]*head;
+	                if (tangent) ex.tangent_adjoints[node]+=head;
+	            } else {
+	                center_grad+=head*feature;
+	                out[readout_offset+q]+=center*linear_mults[q]*feature;
+	                ex.adjoints[node]+=ene_weight[i]*center*head;
+	                if (tangent) ex.tangent_adjoints[node]+=center*head;
+            }
         }
         out[LinearCoeffOffset()+type]+=center_grad;
         ReverseAdaptiveRadialGraph(tangent);

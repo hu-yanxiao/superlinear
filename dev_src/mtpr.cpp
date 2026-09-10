@@ -803,6 +803,29 @@ void ReadDoubleList(std::ifstream& ifs, std::vector<double>& values, int count)
 		ERROR("Error reading floating-point list from .mtp file");
 }
 
+void ReadDoubleListExact(std::ifstream& ifs,
+                         std::vector<double>& values,
+                         int count,
+                         const char* field_name)
+{
+	values.assign(count, 0.0);
+	ifs.ignore(1000, '{');
+	for (int i = 0; i < count; ++i) {
+		ifs >> values[i];
+		if (ifs.fail() || !std::isfinite(values[i]))
+			ERROR(std::string("Error reading floating-point list field: ") + field_name);
+		char delimiter = '\0';
+		ifs >> delimiter;
+		if (ifs.fail())
+			ERROR(std::string("Error reading floating-point list field: ") + field_name);
+		const bool last = (i + 1 == count);
+		if (!last && delimiter != ',')
+			ERROR(std::string("Malformed floating-point list field: ") + field_name);
+		if (last && delimiter != '}')
+			ERROR(std::string("Floating-point list has an unexpected length: ") + field_name);
+	}
+}
+
 bool ReadBoolToken(const std::string& value)
 {
 	return value == "true" || value == "1" || value == "yes";
@@ -2103,8 +2126,12 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 	    && outer_radial_mode_ != "pure-matrix"
 	    && outer_radial_mode_ != "adaptive-coefficients")
 		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
+	if (readout_mode_ != "shared" && readout_mode_ != "species")
+		ERROR("SUS2-SH readout_mode should be shared or species");
 	const bool pure = outer_radial_mode_ == "pure-matrix";
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
+	if (readout_mode_ == "species" && !adaptive)
+		ERROR("SUS2-SH species readout currently requires adaptive radial coefficients");
 	if (pure && outer_channel_mode_ != "same-channel")
 		ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
 	if (!pure && !adaptive && outer_channel_mode_ == "same-channel")
@@ -2217,7 +2244,80 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 
 int MLMTPR::LinearCoeffCount() const
 {
-	return alpha_count + species_count - 1;
+	return species_count + ScalarReadoutCoeffCount();
+}
+
+int MLMTPR::ScalarReadoutCoeffCount() const
+{
+	if (alpha_scalar_moments <= 0)
+		return 0;
+	if (readout_mode_ == "shared")
+		return alpha_scalar_moments;
+	if (readout_mode_ == "species")
+		return CheckedIntProduct(
+			static_cast<size_t>(species_count),
+			static_cast<size_t>(alpha_scalar_moments),
+			"SUS2-SH species readout coefficient count");
+	ERROR("SUS2-SH readout_mode should be shared or species");
+	return 0;
+}
+
+int MLMTPR::ScalarReadoutCoeffIndex(int type, int scalar_index) const
+{
+	if (type < 0 || type >= species_count)
+		ERROR("SUS2-SH readout species index is out of range");
+	if (scalar_index < 0 || scalar_index >= alpha_scalar_moments)
+		ERROR("SUS2-SH readout scalar index is out of range");
+	if (readout_mode_ == "shared")
+		return LinearCoeffOffset() + species_count + scalar_index;
+	if (readout_mode_ == "species")
+		return LinearCoeffOffset() + species_count
+			+ type * alpha_scalar_moments + scalar_index;
+	ERROR("SUS2-SH readout_mode should be shared or species");
+	return -1;
+}
+
+double MLMTPR::ScalarReadoutCoeff(int type, int scalar_index) const
+{
+	const int coeff_index = ScalarReadoutCoeffIndex(type, scalar_index);
+	if (coeff_index < 0 || coeff_index >= static_cast<int>(regression_coeffs.size()))
+		ERROR("SUS2-SH scalar readout coefficient storage is inconsistent");
+	return regression_coeffs[coeff_index];
+}
+
+void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
+{
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		ERROR("Species readout conversion currently supports only adaptive radial coefficient models");
+	if (readout_mode_ == "species")
+		ERROR("Model already uses species readout");
+	if (readout_mode_ != "shared")
+		ERROR("SUS2-SH readout_mode should be shared or species");
+	const int old_linear_count = species_count + alpha_scalar_moments;
+	const int old_linear_offset = LinearCoeffOffset();
+	if (static_cast<int>(regression_coeffs.size()) != CoeffCount())
+		ERROR("Shared readout conversion found incomplete regression coefficients");
+	if (old_linear_offset < 0
+	    || old_linear_offset + old_linear_count > static_cast<int>(regression_coeffs.size()))
+		ERROR("Shared readout conversion found inconsistent coefficient layout");
+	std::vector<double> converted(
+		static_cast<size_t>(species_count)
+		+ static_cast<size_t>(species_count) * alpha_scalar_moments,
+		0.0);
+	for (int type = 0; type < species_count; ++type)
+		converted[type] = regression_coeffs[old_linear_offset + type];
+	for (int type = 0; type < species_count; ++type) {
+		const double center = regression_coeffs[old_linear_offset + type];
+		for (int q = 0; q < alpha_scalar_moments; ++q)
+			converted[species_count + type * alpha_scalar_moments + q] =
+				center * regression_coeffs[old_linear_offset + species_count + q];
+	}
+	const std::vector<double> prefix(regression_coeffs.begin(),
+	                                regression_coeffs.begin() + old_linear_offset);
+	readout_mode_ = "species";
+	regression_coeffs = prefix;
+	regression_coeffs.insert(regression_coeffs.end(), converted.begin(), converted.end());
+	linear_coeffs.swap(converted);
 }
 
 int MLMTPR::LinearEquationCount() const
@@ -3514,10 +3614,16 @@ void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, boo
 	const int scal_end = RadialCoeffOffset();
 	const int gate_scal_begin = TwoLayerGateScalingCoeffOffset();
 	const int gate_scal_end = gate_scal_begin + TwoLayerGateScalingCoeffCount();
+	const int species_readout_bias_begin = UsesSpeciesReadout() ? LinearCoeffOffset() : -1;
+	const int species_readout_bias_end = UsesSpeciesReadout()
+		? species_readout_bias_begin + species_count : -1;
 	for (int coeff_index = 0; coeff_index < static_cast<int>(regression_coeffs.size()); ++coeff_index) {
 		if (exclude_scal_coeffs
 		    && ((coeff_index >= scal_begin && coeff_index < scal_end)
 		        || (coeff_index >= gate_scal_begin && coeff_index < gate_scal_end)))
+			continue;
+		if (coeff_index >= species_readout_bias_begin
+		    && coeff_index < species_readout_bias_end)
 			continue;
 		if (IsRedundantRadialSpeciesCoeff(coeff_index)
 		    || IsUnusedOuterRadialCoeff(coeff_index))
@@ -3808,6 +3914,8 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 		ERROR("PruneSpecies is not supported for outer K-rank models");
 	if (TwoLayerGateReadoutEnabled())
 		ERROR("PruneSpecies is not supported for two-layer gate readout models");
+	if (UsesSpeciesReadout())
+		ERROR("PruneSpecies is not supported for species readout models");
 	if (!HasCompleteParameters())
 		ERROR("PruneSpecies requires a complete trained model with shift/scal/radial/linear coefficients.");
 	if (old_species_indices.empty())
@@ -4045,6 +4153,9 @@ void MLMTPR::Load(const string& filename)
 	has_scal_coeffs = false;
 	has_radial_coeffs = false;
 	has_linear_coeffs = false;
+	outer_channel_mode_ = "cross-channel";
+	outer_radial_mode_ = "legacy-plus-mixer";
+	readout_mode_ = "shared";
 
 	ifstream ifs(filename);
 	if (!ifs.is_open())
@@ -4290,10 +4401,11 @@ void MLMTPR::Load(const string& filename)
 			is_sh_potential_ = (potential_tag == "SUS2-SH");
 			ifs >> tmpstr;
 		}
-		if (is_sh_potential_
-		    && model_file_version != "1.1.0"
-		    && model_file_version != "1.2.0")
-			ERROR("SUS2-SH model version must be \"1.1.0\" or \"1.2.0\"");
+	if (is_sh_potential_
+	    && model_file_version != "1.1.0"
+	    && model_file_version != "1.2.0"
+	    && model_file_version != "1.3.0")
+		ERROR("SUS2-SH model version must be \"1.1.0\", \"1.2.0\", or \"1.3.0\"");
 			if (is_sh_potential_)
 			{
 		if (tmpstr != "sh_l_max")
@@ -4789,12 +4901,19 @@ void MLMTPR::Load(const string& filename)
 			ifs >> outer_radial_mode_;
 			ifs >> tmpstr;
 		}
+		if (tmpstr == "readout_mode") {
+			ifs.ignore(2);
+			ifs >> readout_mode_;
+			ifs >> tmpstr;
+		}
 		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
 			ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
 		if (outer_radial_mode_ != "legacy-plus-mixer"
 		    && outer_radial_mode_ != "pure-matrix"
 		    && outer_radial_mode_ != "adaptive-coefficients")
 			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
+		if (readout_mode_ != "shared" && readout_mode_ != "species")
+			ERROR("SUS2-SH readout_mode should be shared or species");
 		if (outer_radial_mode_ == "pure-matrix"
 		    && outer_channel_mode_ != "same-channel")
 			ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
@@ -4807,6 +4926,8 @@ void MLMTPR::Load(const string& filename)
 		        && !OuterUsesAdaptiveRadialCoefficients()
 		        && outer_k_rank_ > sh_k_max_))
 			ERROR("SUS2-SH outer K-rank must be positive; only same-channel radial modes allow rank above sh_k_max");
+		if (readout_mode_ == "species" && !OuterUsesAdaptiveRadialCoefficients())
+			ERROR("SUS2-SH species readout currently requires adaptive radial coefficients");
 		if (outer_k_rank_ > std::numeric_limits<int>::max()
 			/ ((sh_l_max_ + 1) * (sh_l_max_ + 1)))
 			ERROR("SUS2-SH outer primitive count exceeds supported index range");
@@ -5679,6 +5800,10 @@ void MLMTPR::Load(const string& filename)
 		}
 
 			ValidateOuterModeConfiguration();
+			if (model_file_version == "1.3.0" && readout_mode_ != "species")
+				ERROR("SUS2-SH model version 1.3.0 requires readout_mode = species");
+			if (readout_mode_ == "species" && model_file_version != "1.3.0")
+				ERROR("SUS2-SH species readout requires model version 1.3.0");
 			if (OuterKRankEnabled() && outer_k_rank_ == 1
 			    && !OuterUsesPureRadialMatrix() && !OuterUsesAdaptiveRadialCoefficients()) {
 			// A rank-1 K contraction has no independent matrix degree of
@@ -5693,13 +5818,19 @@ void MLMTPR::Load(const string& filename)
 			AbsorbOuterKRank1WeightsIntoRadialCoeffs();
 		}
 
-		if (tmpstr != "species_coeffs")
+	if (tmpstr != "species_coeffs")
 	{
 		inited = false;
 		//cout << "Linear coeffs not found, initializing defaults, species_count = " << species_count << endl;
 		linear_coeffs.resize(LinearCoeffCount());
 		for (int i = 0; i < LinearCoeffCount(); i++)
 			linear_coeffs[i] = 1e-3;
+		if (UsesSpeciesReadout()) {
+			for (int type = 0; type < species_count; ++type)
+				for (int q = 0; q < alpha_scalar_moments; ++q)
+					linear_coeffs[species_count + type * alpha_scalar_moments + q] =
+						1e-6;
+		}
 	}
 	else
 	{
@@ -5716,17 +5847,26 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr != "moment_coeffs")
 			ERROR("Cannot read linear coeffs");
 
-		ifs.ignore(2);
+			ifs.ignore(2);
 
-		linear_coeffs.resize(LinearCoeffCount());
+			linear_coeffs.resize(LinearCoeffCount());
 
-		ifs.ignore(10, '{');
+			if (UsesSpeciesReadout()) {
+				std::vector<double> readout_coeffs;
+				ReadDoubleListExact(
+					ifs, readout_coeffs, ScalarReadoutCoeffCount(), "moment_coeffs");
+				std::copy(readout_coeffs.begin(),
+				          readout_coeffs.end(),
+				          linear_coeffs.begin() + species_count);
+			} else {
+				ifs.ignore(10, '{');
+				for (int i = 0; i < ScalarReadoutCoeffCount(); i++)
+					ifs >> linear_coeffs[i + species_count] >> foo;
+				if (ifs.fail())
+					ERROR("Cannot read linear coeffs");
+			}
 
-
-		for (int i = 0; i < alpha_count - 1; i++)
-			ifs >> linear_coeffs[i + species_count] >> foo;
-
-	}
+		}
 	if (UsesPrecomputedLmpTable(rbasis_type))
 	{
 		radial_list.resize(species_count * species_count, 200002, radial_func_count);
@@ -6154,7 +6294,8 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (uses_extended_sh_format ? "1.2.0" : "1.1.0") << '\n';
+	    << (UsesSpeciesReadout() ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -6325,6 +6466,8 @@ void MLMTPR::Save(const string& filename)
 		if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
 			ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
+			if (UsesSpeciesReadout())
+				ofs << "readout_mode = species\n";
 		}
 		ofs << "outer_k_rank1_basic_begin = " << outer_k_rank1_basic_begin_ << '\n';
 		ofs << "outer_k_rank1_basic_count = " << outer_k_rank1_basic_count_ << '\n';
@@ -6737,7 +6880,7 @@ void MLMTPR::Save(const string& filename)
 	ofs << '}' << endl;
 
 	ofs << "moment_coeffs = {";
-	for (int i = 0; i < alpha_count - 1; i++)
+	for (int i = 0; i < ScalarReadoutCoeffCount(); i++)
 	{
 		if (i != 0)
 			ofs << ", ";
@@ -6867,7 +7010,7 @@ void MLMTPR::Save_2(const string& filename)
         ofs << '}' << endl;
 
         ofs << "moment_coeffs = {";
-        for (int i = 0; i < alpha_count - 1; i++)
+        for (int i = 0; i < ScalarReadoutCoeffCount(); i++)
         {
                 if (i != 0)
                         ofs << ", ";
@@ -10356,15 +10499,17 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 	if (static_cast<int>(linear_mults.size()) != alpha_scalar_moments)
 		ERROR("CalcScalarHeadSiteComponents: linear multiplier count mismatch");
 
+	const int readout_count = ScalarReadoutCoeffCount();
 	out.assign(
-		static_cast<size_t>(cfg.size()) * alpha_scalar_moments, 0.0);
-	if (cfg.size() == 0 || alpha_scalar_moments == 0)
+		static_cast<size_t>(cfg.size()) * readout_count, 0.0);
+	if (cfg.size() == 0 || readout_count == 0)
 		return;
 
 	if (OuterUsesAdaptiveRadialCoefficients()) {
 		PrepareEvalCaches();
 		PrepareAdaptiveRadial(neighborhoods, false, false);
 		AdaptiveRadialExecution& ex = adaptive_radial_execution_;
+		const bool species_readout = UsesSpeciesReadout();
 		for (int ind = 0; ind < cfg.size(); ++ind) {
 			const Neighborhood& nbh = neighborhoods[ind];
 			if (nbh.my_type < 0 || nbh.my_type >= species_count)
@@ -10372,14 +10517,19 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 			ForwardAdaptiveRadialSite(nbh, ind, nullptr);
 			const double center_linear = linear_coeffs[nbh.my_type];
 			double* const atom_out =
-				out.data() + static_cast<size_t>(ind) * alpha_scalar_moments;
-			for (int q = 0; q < alpha_scalar_moments; ++q)
-				atom_out[q] = center_linear
+				out.data() + static_cast<size_t>(ind) * readout_count;
+			for (int q = 0; q < alpha_scalar_moments; ++q) {
+				const int column =
+					species_readout ? nbh.my_type * alpha_scalar_moments + q : q;
+				atom_out[column] = (species_readout ? 1.0 : center_linear)
 				            * linear_mults[q]
 				            * ex.values[alpha_moment_mapping[q]];
+			}
 		}
 		return;
 	}
+	if (UsesSpeciesReadout())
+		ERROR("CalcScalarHeadSiteComponents species readout currently supports only adaptive radial coefficients");
 
 	// Gate preparation has a mutable legacy Configuration signature even though
 	// it only needs configuration metadata here.  Keep the caller's E/F/S and
@@ -10432,7 +10582,7 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 			CalcBasisFuncs(nbh, basis_vals);
 			const double center_linear = linear_coeffs[nbh.my_type];
 			double* const atom_out =
-				out.data() + static_cast<size_t>(ind) * alpha_scalar_moments;
+				out.data() + static_cast<size_t>(ind) * readout_count;
 			for (int q = 0; q < alpha_scalar_moments; ++q)
 				atom_out[q] = center_linear
 				            * linear_mults[q]
@@ -11877,6 +12027,8 @@ void MLMTPR::RadialCoeffsInit(ifstream& ifs_rad)
 
 void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 {
+	if (UsesSpeciesReadout())
+		ERROR("CalcSiteEnergyDers does not support species readout; use CalcEFS for adaptive species-readout models");
 	if (is_sh_potential_) {
 		CalcSHSiteEnergyDers(nbh);
 		return;
@@ -12163,6 +12315,8 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 										const double se_weight,
 										const Vector3* se_ders_weights) 
 {
+	if (UsesSpeciesReadout())
+		ERROR("AccumulateCombinationGrad does not support species readout; use AccumulateEFSCombinationGrad for adaptive species-readout models");
 	if (is_sh_potential_) {
 		AccumulateSHCombinationGrad(nbh, out_grad_accumulator, se_weight, se_ders_weights);
 		if (TwoLayerGateReadoutEnabled())
@@ -12987,11 +13141,14 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 		const int linear_begin = LinearCoeffOffset();
 		const int scalar_begin = linear_begin + species_count;
 		if (scalar_begin < 0
-		    || scalar_begin + alpha_scalar_moments > static_cast<int>(regression_coeffs.size()))
+		    || scalar_begin + ScalarReadoutCoeffCount() > static_cast<int>(regression_coeffs.size()))
 			ERROR("Invalid MTPR scalar head coefficient layout for L2 penalty");
-		const double weight = head_coeff / static_cast<double>(alpha_scalar_moments);
-		for (int q = 0; q < alpha_scalar_moments; ++q) {
-			const int coeff_index = scalar_begin + q;
+		const int readout_count = ScalarReadoutCoeffCount();
+		const double weight = head_coeff / static_cast<double>(readout_count);
+		for (int local = 0; local < readout_count; ++local) {
+			const int coeff_index = scalar_begin + local;
+			const int q = UsesSpeciesReadout()
+				? local % alpha_scalar_moments : local;
 			const double mult = q < static_cast<int>(linear_mults.size())
 				? linear_mults[q]
 				: 1.0;

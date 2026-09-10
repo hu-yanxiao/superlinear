@@ -1052,6 +1052,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool pure_w_channelwise = superlinear_mode == "pure-w-channelwise";
 	const bool radial_coefficient_gate =
 		superlinear_mode == "radial-coefficient-gate";
+	const std::string readout_mode = StringOpt(opts, "readout-mode", "shared");
+	if (readout_mode != "shared" && readout_mode != "species")
+		ERROR("--readout-mode should be shared or species.");
+	if (readout_mode == "species" && !radial_coefficient_gate)
+		ERROR("--readout-mode=species currently requires --superlinear-mode=radial-coefficient-gate.");
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts,
 		"sh-factor-pruning", (pure_w_channelwise || radial_coefficient_gate)
 			? SHFactorPruning::SameK : SHFactorPruning::QTotal);
@@ -1361,7 +1366,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		outer_k_rank_enabled || two_layer_gate_k_rank_enabled
 		|| two_layer_gate_readout;
 	ofs << "version = "
-	    << (uses_extended_sh_format ? "1.2.0" : "1.1.0") << "\n";
+	    << (readout_mode == "species" ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
@@ -1492,6 +1498,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
 			    << "\n";
 			ofs << "outer_radial_mode = adaptive-coefficients\n";
+			if (readout_mode == "species")
+				ofs << "readout_mode = species\n";
 		}
 		ofs << "outer_k_rank1_basic_begin = "
 		    << outer_rank_node_offset << "\n";
@@ -1908,4 +1916,4 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "}\n";
 		}
 	}
-}
+	}

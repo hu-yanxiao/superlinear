@@ -413,6 +413,7 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 	const int Q = model.TwoLayerGateScalarCount();
 	const int D = model.AdaptiveRadialRowCount();
 	const int P = model.alpha_scalar_moments;
+	const int readout_count = model.ScalarReadoutCoeffCount();
 	for (int row = 0; row < D; ++row) {
 		adaptive_pytorch_physical_scales[model.AdaptiveRadialAmplitudeOffset() + row] =
 			model.AdaptiveRadialAmplitudeOptimizerScale(row);
@@ -424,11 +425,12 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 	// RMS and force scales are fixed during the optimization, never detached
 	// parameter-dependent normalizers. The exact pullback is dL/dtheta=s*dL/dc.
 	const int head = model.LinearCoeffOffset() + species;
-	for (int q = 0; q < P; ++q) {
+	for (int local = 0; local < readout_count; ++local) {
+		const int q = model.UsesSpeciesReadout() ? local % P : local;
 		const double mult = model.linear_mults.at(q);
 		if (!std::isfinite(mult) || mult == 0.0)
 			ERROR("Adaptive PyTorch readout requires finite nonzero linear multipliers");
-		adaptive_pytorch_physical_scales[head + q] =
+		adaptive_pytorch_physical_scales[head + local] =
 			output_scale * rms_scale(sums.outer_scalar_sq[q], counts[1]) / std::abs(mult);
 	}
 	if (fresh) {
@@ -454,10 +456,15 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 				}
 				std::mt19937_64 generator(seed);
 				std::normal_distribution<double> normal(0.0, 0.1 / std::sqrt(static_cast<double>(P)));
+				std::vector<double> shared_draws(P, 0.0);
 				for (int q = 0; q < P; ++q)
-					model.Coeff()[head + q] = normal(generator)
-						* adaptive_pytorch_physical_scales[head + q]
+					shared_draws[q] = normal(generator);
+				for (int local = 0; local < readout_count; ++local) {
+					const int q = model.UsesSpeciesReadout() ? local % P : local;
+					model.Coeff()[head + local] = shared_draws[q]
+						* adaptive_pytorch_physical_scales[head + local]
 						* (model.linear_mults[q] > 0.0 ? 1.0 : -1.0);
+				}
 				std::cout << "[adaptive-pytorch-composition] configs=" << counts[3]
 				          << " rank=" << fit.rank << " e0=";
 				for (double e0 : fit.e0) std::cout << " " << std::setprecision(17) << e0;
@@ -479,6 +486,8 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " readout_output_scale=" << output_scale
 		          << " radial_parameterization=weight-norm"
 		          << " scalar_head_l2=1e-5 adaptive_response_l2=1e-4 radial_smooth=1e-6 grid=128"
+		          << " species_readout_bias="
+		          << (model.UsesSpeciesReadout() ? "frozen-gauge" : "trainable")
 		          << " std=" << std_scaling << " stdd=" << stdd_scaling
 		          << " preserve_physical=" << !fresh << std::endl;
 	}
@@ -760,8 +769,10 @@ double MTPR_trainer::LinearColumnCurrentCoeff(int column) const
 		}
 		const int scalar_index = column - p_mlmtpr->species_count;
 		double value = p_mlmtpr->regression_coeffs[linear_begin + column];
-		if (scalar_index >= 0 && scalar_index < static_cast<int>(p_mlmtpr->linear_mults.size()))
-			value *= p_mlmtpr->linear_mults[scalar_index];
+		const int q = p_mlmtpr->UsesSpeciesReadout()
+			? scalar_index % p_mlmtpr->alpha_scalar_moments : scalar_index;
+		if (q >= 0 && q < static_cast<int>(p_mlmtpr->linear_mults.size()))
+			value *= p_mlmtpr->linear_mults[q];
 		return value;
 	}
 
@@ -1019,7 +1030,10 @@ void MTPR_trainer::SolveSLAE()
 	     i < linear_offset + linear_count; i++) {
 		if (!LinearSolveColumnActive(i - linear_offset))
 			continue;
-		p_mlmtpr->regression_coeffs[i] /= p_mlmtpr->linear_mults[i - (linear_offset + p_mlmtpr->species_count)] * 1.0;
+		const int local = i - (linear_offset + p_mlmtpr->species_count);
+		const int q = p_mlmtpr->UsesSpeciesReadout()
+			? local % p_mlmtpr->alpha_scalar_moments : local;
+		p_mlmtpr->regression_coeffs[i] /= p_mlmtpr->linear_mults[q] * 1.0;
 	}
 	p_mlmtpr->LinCoeff();
 
@@ -1515,7 +1529,8 @@ void MTPR_trainer::TrainLinear(int prank,
 			return;
 
 		const int scalar_begin = p_mlmtpr->species_count;
-		const int scalar_end = scalar_begin + p_mlmtpr->alpha_scalar_moments;
+		const int scalar_count = p_mlmtpr->ScalarReadoutCoeffCount();
+		const int scalar_end = scalar_begin + scalar_count;
 		const int readout_count = p_mlmtpr->TwoLayerGateReadoutCoeffCount();
 		const int readout_begin =
 			p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
@@ -1529,7 +1544,7 @@ void MTPR_trainer::TrainLinear(int prank,
 				// coefficient.  linear_mults is applied only when the solved value
 				// is stored back into regression_coeffs, so it must not appear here.
 				ridge = global_scale
-					/ static_cast<double>(p_mlmtpr->alpha_scalar_moments);
+					/ static_cast<double>(scalar_count);
 			} else if (readout_count > 0
 			           && column >= readout_begin
 			           && column < readout_begin + readout_count) {
@@ -2778,7 +2793,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		add_coordinate_normalization_block(
 			"scalar-head",
 			linear_begin + p_mlmtpr->species_count,
-			p_mlmtpr->alpha_scalar_moments);
+			p_mlmtpr->ScalarReadoutCoeffCount());
 		add_coordinate_normalization_block(
 			"residual-e0-head",
 			p_mlmtpr->TwoLayerResidualE0CoeffOffset(),
@@ -2839,7 +2854,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			break;
 		}
 		if (static_cast<int>(full_head_full_indices.size())
-		    != p_mlmtpr->alpha_scalar_moments)
+		    != p_mlmtpr->ScalarReadoutCoeffCount())
 			ERROR("MTPR_trainer::Train(): efs-head-full requires every scalar head to be active");
 		full_head_active_indices.reserve(full_head_full_indices.size());
 		for (int full_idx : full_head_full_indices) {
@@ -3232,7 +3247,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			           < p_mlmtpr->species_count)
 				ERROR("efs-head requires initialized center linear prefactors");
 			exact_head_center_factor = linear_coeffs_reference[0];
-			for (int type = 0; type < p_mlmtpr->species_count; ++type)
+			if (!p_mlmtpr->UsesSpeciesReadout())
+				for (int type = 0; type < p_mlmtpr->species_count; ++type)
 					if (!std::isfinite(linear_coeffs_reference[type])
 					    || linear_coeffs_reference[type] != exact_head_center_factor)
 						ERROR("efs-head requires equal center linear prefactors; use efs-gn for a general checkpoint");
@@ -3495,11 +3511,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
 				for (std::size_t selected = 0;
 				     selected < selected_full_indices.size(); ++selected) {
-					const int q = selected_full_indices[selected] - scalar_begin;
+					const int local = selected_full_indices[selected] - scalar_begin;
+					const int q = p_mlmtpr->UsesSpeciesReadout()
+						? local % p_mlmtpr->alpha_scalar_moments : local;
 					if (q < 0 || q >= p_mlmtpr->alpha_scalar_moments)
 						ERROR("efs-head selected a non-scalar-head coordinate");
-					const int column = p_mlmtpr->species_count + q;
-					const double mult = exact_head_center_factor
+					const int column = p_mlmtpr->species_count + local;
+					const double mult =
+						(p_mlmtpr->UsesSpeciesReadout() ? 1.0 : exact_head_center_factor)
 						* (q < static_cast<int>(linear_mults_reference.size())
 						       ? linear_mults_reference[q] : 1.0);
 					double diagonal_value = 0.0;
@@ -3704,13 +3723,15 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
 			const double base_curvature =
 				2.0 * scalar_head_l2_regularization
-				/ static_cast<double>(p_mlmtpr->alpha_scalar_moments);
-			for (int q = 0; q < p_mlmtpr->alpha_scalar_moments; ++q) {
+				/ static_cast<double>(p_mlmtpr->ScalarReadoutCoeffCount());
+			for (int local = 0; local < p_mlmtpr->ScalarReadoutCoeffCount(); ++local) {
+				const int q = p_mlmtpr->UsesSpeciesReadout()
+					? local % p_mlmtpr->alpha_scalar_moments : local;
 				const double mult =
 					q < static_cast<int>(p_mlmtpr->linear_mults.size())
 						? p_mlmtpr->linear_mults[q]
 						: 1.0;
-				diagonal[scalar_begin + q] +=
+				diagonal[scalar_begin + local] +=
 					base_curvature * mult * mult;
 			}
 		}
@@ -3878,7 +3899,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 		}
 		const int linear_moment_begin = n - nlin + p_mlmtpr->species_count;
 		if (full_idx >= linear_moment_begin && full_idx < n) {
-			const double mult = p_mlmtpr->linear_mults[full_idx - linear_moment_begin];
+			const int local = full_idx - linear_moment_begin;
+			const int q = p_mlmtpr->UsesSpeciesReadout()
+				? local % p_mlmtpr->alpha_scalar_moments : local;
+			const double mult = p_mlmtpr->linear_mults[q];
 			value /= mult * mult;
 		}
 		return value;

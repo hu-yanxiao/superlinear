@@ -1335,8 +1335,10 @@ double LinearEquationCurrentCoeff(const MLMTPR& mtpr, int column)
 			     + mtpr.regression_coeffs[linear_begin + column];
 		const int scalar_index = column - mtpr.species_count;
 		double value = mtpr.regression_coeffs[linear_begin + column];
-		if (scalar_index >= 0 && scalar_index < static_cast<int>(mtpr.linear_mults.size()))
-			value *= mtpr.linear_mults[scalar_index];
+		const int q = mtpr.UsesSpeciesReadout()
+			? scalar_index % mtpr.alpha_scalar_moments : scalar_index;
+		if (q >= 0 && q < static_cast<int>(mtpr.linear_mults.size()))
+			value *= mtpr.linear_mults[q];
 		return value;
 	}
 	const int e0_index = column - linear_count;
@@ -1613,6 +1615,26 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		MLMTPR mtpr(args[0]);
 		mtpr.Save(args[1]);
+	} END_COMMAND;
+
+	BEGIN_COMMAND("convert-adaptive-readout-dev",
+		"converts an adaptive radial model from shared scalar readout to species-resolved readout",
+		"mlp-sus2 convert-adaptive-readout-dev input.mtp output.mtp --readout-mode=species\n"
+	) {
+		if (args.size() != 2) {
+			std::cout << "mlp-sus2 convert-adaptive-readout-dev: input and output model arguments are required\n";
+			return 1;
+		}
+		if (opts["readout-mode"] != "species")
+			ERROR("convert-adaptive-readout-dev currently requires --readout-mode=species");
+		if (mpi_rank == 0) {
+			MLMTPR mtpr(args[0]);
+			mtpr.ConvertSharedReadoutToSpeciesReadout();
+			mtpr.Save(args[1]);
+		}
+#ifdef MLIP_MPI
+		MPI_Barrier(MPI_COMM_WORLD);
+#endif
 	} END_COMMAND;
 
 	BEGIN_COMMAND("enable-two-layer-gate-radial-mixing-dev",
@@ -2524,9 +2546,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"           outer pruning=same-k; input k (or lk) scaling is shared over all output o;\n"
 				"           deterministic nonzero W initialization; train defaults to --init-params=same (retain parameters).\n"
 				"           radial-coefficient-gate: adaptive c_l,o,n + a_l,o,n*w_j,l,o,n coefficients,\n"
-				"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
-				"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
-				"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
+					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
+					"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
+					"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
+					"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total; adaptive/pure default=same-k), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
 				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (adaptive default=q-total; legacy default=outer),\n"

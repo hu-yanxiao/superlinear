@@ -92,6 +92,7 @@ protected:
 	// Absent model metadata retains the legacy factorized/cross-channel model.
 	std::string outer_channel_mode_ = "cross-channel";
 	std::string outer_radial_mode_ = "legacy-plus-mixer";
+	std::string readout_mode_ = "shared";
 	int outer_k_rank1_basic_begin_ = 0;
 	int outer_k_rank1_basic_count_ = 0;
 	int outer_k_rank1_product_begin_ = 0;
@@ -1004,6 +1005,14 @@ public:
 						bool OuterUsesSameChannelGraph() const {
 							return OuterKRankEnabled() && outer_channel_mode_ == "same-channel";
 						}
+						const std::string& ReadoutMode() const { return readout_mode_; }
+						bool UsesSpeciesReadout() const {
+							return readout_mode_ == "species";
+						}
+						int ScalarReadoutCoeffCount() const;
+						int ScalarReadoutCoeffIndex(int type, int scalar_index) const;
+						double ScalarReadoutCoeff(int type, int scalar_index) const;
+						void ConvertSharedReadoutToSpeciesReadout();
 						bool OuterKRankUsesDirectRadial() const {
 							return outer_k_rank_ == 1 && outer_k_rank1_direct_radial_;
 						}

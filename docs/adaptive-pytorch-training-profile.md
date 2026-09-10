@@ -105,6 +105,12 @@ gate_mix_l2          = 0
 gate_x_l2            = 0
 ```
 
+For `readout_mode = species`, native full nonlinear training also fixes the
+additive `species_coeffs`/`h[type]` entries as a gauge anchor and leaves
+`shift_coeffs` trainable.  This removes the otherwise exact additive redundancy
+in `shift[type] + h[type]` while preserving the physical model and the complete
+saved coefficient layout.
+
 The scalar-head L2 penalty is applied to the physical exported readout:
 
 ```text
