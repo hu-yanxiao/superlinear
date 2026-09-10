@@ -619,6 +619,7 @@ public:
 				bool two_layer_gate_decoupled_scaling_ = false;
 				std::string two_layer_gate_mode_ = "mu-body-linear-combo";
 			std::string two_layer_gate_site_mode_ = "neighbor";
+			std::string two_layer_gate_factor_pruning_ = "q-total";
 				bool two_layer_residual_enabled_ = false;
 			std::string two_layer_gate_scale_mode_ = "legacy";
 			double two_layer_gate_bias_ = 1.0;
@@ -982,10 +983,12 @@ public:
 						bool TwoLayerGateUsesDirectScale() const;
 						bool TwoLayerGateUsesCenterGate() const;
 						const std::string& TwoLayerGateSiteMode() const { return two_layer_gate_site_mode_; }
+						const std::string& TwoLayerGateFactorPruning() const { return two_layer_gate_factor_pruning_; }
 						void SetTwoLayerGateMode(const std::string& mode);
 						double TwoLayerGateTanhAmplitude() const;
 						void SetTwoLayerGateTanhAmplitude(double amplitude);
 						void SetTwoLayerGateSiteMode(const std::string& mode);
+						void SetTwoLayerGateFactorPruning(const std::string& mode);
 					bool IsSHPotential() const { return is_sh_potential_; }
 					const std::string& ScalingMap() const { return scaling_map; }
 						bool OuterKRank1Enabled() const { return outer_k_rank1_enabled_; }

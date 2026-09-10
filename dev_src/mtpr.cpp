@@ -433,6 +433,19 @@ GateScalarFactorPruning ParseGateScalarFactorPruning(
 	return GateScalarFactorPruning::QTotal;
 }
 
+std::string NormalizeGateScalarFactorPruning(
+	const std::string& value,
+	const std::string& option_name)
+{
+	const GateScalarFactorPruning pruning =
+		ParseGateScalarFactorPruning(value, option_name);
+	if (pruning == GateScalarFactorPruning::SameK)
+		return "same-k";
+	if (pruning == GateScalarFactorPruning::Legacy)
+		return "legacy";
+	return "q-total";
+}
+
 std::pair<int, int> GateScalarQChannel(int q_index, int lmax, int kmax)
 {
 	if (q_index < 0 || q_index >= (lmax + 1) * kmax)
@@ -1029,6 +1042,13 @@ void MLMTPR::SetTwoLayerGateSiteMode(const std::string& mode)
 	two_layer_gate_site_mode_ = mode;
 }
 
+void MLMTPR::SetTwoLayerGateFactorPruning(const std::string& mode)
+{
+	two_layer_gate_factor_pruning_ =
+		NormalizeGateScalarFactorPruning(
+			mode, "--two-layer-gate-factor-pruning");
+}
+
 void MLMTPR::EnsureSHScalarInfoForGateUpgrade()
 {
 	if (has_sh_scalar_info_)
@@ -1112,6 +1132,7 @@ void MLMTPR::UpgradePlainSHToTwoLayerGate(int gate_body_order,
 	two_layer_gate_enabled_ = true;
 	SetTwoLayerGateMode(gate_mode);
 	SetTwoLayerGateSiteMode(gate_site_mode);
+	SetTwoLayerGateFactorPruning(gate_factor_pruning);
 	two_layer_gate_body_order_max_ = selected_gate_body_order;
 	two_layer_gate_include_one_body_ = false;
 	two_layer_gate_shared_radial_ = independent_gate_radial_coeffs;
@@ -1346,19 +1367,26 @@ void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 bool MLMTPR::TwoLayerGateMatchesFactorPruning(
 	const std::string& factor_pruning) const
 {
-	if (!two_layer_gate_enabled_ || !has_sh_scalar_info_)
+	if (!two_layer_gate_enabled_)
 		return false;
+	const std::string requested =
+		NormalizeGateScalarFactorPruning(
+			factor_pruning, "--two-layer-gate-factor-pruning");
+	if (!two_layer_gate_factor_pruning_.empty())
+		return requested == two_layer_gate_factor_pruning_;
+	if (!has_sh_scalar_info_)
+		return requested == "q-total";
 	// The first outer-K-rank1 format deliberately fixes the preserved K=4 gate
 	// graph to q-total.  Its sh_scalar_info_ describes the separate K=1 outer
 	// graph, so reconstructing K=4 gate indices from that metadata is invalid.
 	if (outer_k_rank1_enabled_)
-		return factor_pruning == "q-total" || factor_pruning == "total";
+		return requested == "q-total";
 	return two_layer_gate_scalar_indices_ == SelectGateScalarIndices(
 		sh_scalar_info_,
 		two_layer_gate_body_order_max_,
 		sh_l_max_,
 		sh_k_max_,
-		factor_pruning,
+		requested,
 		"--two-layer-gate-factor-pruning");
 }
 
@@ -2103,6 +2131,55 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 	if (adaptive) {
 		if (outer_k_rank_ > sh_k_max_)
 			ERROR("SUS2-SH adaptive radial coefficients require O <= raw K");
+		if (two_layer_gate_factor_pruning_ != "q-total"
+		    && two_layer_gate_factor_pruning_ != "same-k")
+			ERROR("SUS2-SH adaptive radial gate factor pruning should be q-total or same-k");
+		if (two_layer_gate_factor_pruning_ == "same-k") {
+			std::vector<int> gate_channel(alpha_moments_count, -1);
+			const int basics_per_channel = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+			const int gate_basic_begin = two_layer_gate_k_rank_basic_begin_;
+			const int gate_basic_end = gate_basic_begin + two_layer_gate_k_rank_basic_count_;
+			if (basics_per_channel <= 0
+			    || two_layer_gate_k_rank_basic_count_
+			       != two_layer_gate_k_rank_ * basics_per_channel)
+				ERROR("SUS2-SH same-k gate has inconsistent primitive layout");
+			for (int moment = gate_basic_begin; moment < gate_basic_end; ++moment) {
+				if (moment < 0 || moment >= alpha_moments_count)
+					ERROR("SUS2-SH same-k gate primitive moment is out of range");
+				gate_channel[moment] =
+					(moment - gate_basic_begin) / basics_per_channel;
+			}
+			if (two_layer_gate_k_rank_product_begin_ < 0
+			    || two_layer_gate_k_rank_product_end_
+			       > static_cast<int>(sh_products_.size())
+			    || two_layer_gate_k_rank_product_begin_
+			       > two_layer_gate_k_rank_product_end_)
+				ERROR("SUS2-SH same-k gate product range is invalid");
+			for (int product_index = two_layer_gate_k_rank_product_begin_;
+			     product_index < two_layer_gate_k_rank_product_end_;
+			     ++product_index) {
+				const SHProduct& product = sh_products_[product_index];
+				if (product.left < 0 || product.left >= alpha_moments_count
+				    || product.right < 0 || product.right >= alpha_moments_count
+				    || product.target < 0 || product.target >= alpha_moments_count)
+					ERROR("SUS2-SH same-k gate product index is out of range");
+				const int left_channel = gate_channel[product.left];
+				const int right_channel = gate_channel[product.right];
+				if (left_channel < 0 || right_channel < 0
+				    || left_channel != right_channel)
+					ERROR("SUS2-SH same-k gate product crosses gate channels");
+				if (gate_channel[product.target] >= 0
+				    && gate_channel[product.target] != left_channel)
+					ERROR("SUS2-SH same-k gate product has inconsistent target provenance");
+				gate_channel[product.target] = left_channel;
+			}
+			for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+				const int moment = TwoLayerGateScalarMomentIndex(q);
+				if (moment < 0 || moment >= alpha_moments_count
+				    || gate_channel[moment] < 0)
+					ERROR("SUS2-SH same-k gate scalar does not belong to one gate channel");
+			}
+		}
 		if (!TwoLayerGateUsesFullScalarWeights())
 			ERROR("SUS2-SH adaptive radial coefficients require mu-scalar-full gate metadata");
 		if (two_layer_gate_radial_mixing_ != "none"
@@ -4061,6 +4138,7 @@ void MLMTPR::Load(const string& filename)
 				two_layer_gate_decoupled_scaling_ = false;
 				two_layer_gate_mode_ = "mu-body-linear-combo";
 		two_layer_gate_site_mode_ = "neighbor";
+		two_layer_gate_factor_pruning_.clear();
 		two_layer_residual_enabled_ = false;
 	two_layer_gate_scale_mode_ = "legacy";
 		two_layer_gate_bias_ = 1.0;
@@ -4884,6 +4962,15 @@ void MLMTPR::Load(const string& filename)
 				} else {
 					two_layer_gate_site_mode_ = "neighbor";
 			}
+			if (tmpstr == "two_layer_gate_factor_pruning") {
+				ifs.ignore(2);
+				std::string loaded_gate_factor_pruning;
+				ifs >> loaded_gate_factor_pruning;
+				SetTwoLayerGateFactorPruning(loaded_gate_factor_pruning);
+				ifs >> tmpstr;
+			} else {
+				two_layer_gate_factor_pruning_.clear();
+			}
 			if (tmpstr == "two_layer_residual_enabled") {
 				ifs.ignore(2);
 			ifs >> bool_token;
@@ -5112,6 +5199,23 @@ void MLMTPR::Load(const string& filename)
 			            gate_scalar_count);
 			ifs.ignore(1000, '\n');
 			ifs >> tmpstr;
+		}
+		if (two_layer_gate_factor_pruning_.empty()) {
+			if (OuterKRankEnabled() || TwoLayerGateKRankEnabled()) {
+				// All ranked gate models written before explicit gate-pruning
+				// metadata used q-total.  New same-k ranked gates are tagged.
+				two_layer_gate_factor_pruning_ = "q-total";
+			} else if (has_sh_scalar_info_) {
+				two_layer_gate_factor_pruning_ =
+					InferGateScalarFactorPruning(
+						sh_scalar_info_,
+						two_layer_gate_scalar_indices_,
+						two_layer_gate_body_order_max_,
+						sh_l_max_,
+						sh_k_max_);
+			} else {
+				two_layer_gate_factor_pruning_ = "q-total";
+			}
 		}
 		if (tmpstr != "two_layer_gate_weights")
 			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weights");
@@ -6284,6 +6388,9 @@ void MLMTPR::Save(const string& filename)
 		ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order_max_ << '\n';
 		ofs << "two_layer_gate_include_one_body = false\n";
 		ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode_ << '\n';
+		ofs << "two_layer_gate_factor_pruning = "
+		    << (two_layer_gate_factor_pruning_.empty()
+		        ? "q-total" : two_layer_gate_factor_pruning_) << '\n';
 		ofs << "two_layer_gate_scale_mode = additive-node\n";
 		if (multi_layer_gate_enabled_ && TwoLayerGateUsesDecoupledScaling())
 			ERROR("SUS2-SH cannot save multi-layer gate with decoupled first-layer gate scaling");

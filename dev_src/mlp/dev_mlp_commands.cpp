@@ -2528,7 +2528,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
-				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (default=outer),\n"
+				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (adaptive default=q-total; legacy default=outer),\n"
 				"         --two-layer-gate-mode=mu-body-linear-combo|mu-scalar-full (default=mu-body-linear-combo),\n"
 				"         --two-layer-gate-site-mode=neighbor (default=neighbor),\n"
 						"         --two-layer-gate-shared-radial (default for gate models),\n"

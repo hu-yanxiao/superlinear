@@ -370,6 +370,15 @@ bool IsFactorPruningSubset(SHFactorPruning inner, SHFactorPruning outer)
 	return FactorPruningRank(inner) <= FactorPruningRank(outer);
 }
 
+const char* FactorPruningName(SHFactorPruning pruning)
+{
+	if (pruning == SHFactorPruning::SameK)
+		return "same-k";
+	if (pruning == SHFactorPruning::Legacy)
+		return "legacy";
+	return "q-total";
+}
+
 std::vector<int> ParseBodyLMax(const std::map<std::string, std::string>& opts,
                                int global_lmax,
                                int body_order)
@@ -1143,8 +1152,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	    && factor_pruning != SHFactorPruning::QTotal)
 		ERROR("--outer-k-rank currently requires --sh-factor-pruning=q-total so contracted channels retain their cross products.");
 	if (two_layer_gate_k_rank_enabled
-	    && two_layer_gate_factor_pruning != SHFactorPruning::QTotal)
-		ERROR("--two-layer-gate-k-rank currently requires --two-layer-gate-factor-pruning=q-total so contracted channels retain their cross products.");
+	    && two_layer_gate_factor_pruning != SHFactorPruning::QTotal
+	    && !(radial_coefficient_gate
+	         && two_layer_gate_factor_pruning == SHFactorPruning::SameK))
+		ERROR("--two-layer-gate-k-rank currently supports q-total; same-k is supported only for --superlinear-mode=radial-coefficient-gate.");
 	if (HasOpt(opts, "two-layer-gate-body-order") && !two_layer_gate)
 		ERROR("--two-layer-gate-body-order requires --two-layer-gate.");
 	if (HasOpt(opts, "two-layer-gate-factor-pruning") && !two_layer_gate)
@@ -1284,9 +1295,20 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_k_rank_enabled) {
 		gate_rank_graph.Build();
 		gate_rank_graph.AddAllBasics();
-		gate_rank_graph.AddScalars(
-			two_layer_gate_edge_l1 ? body_order : two_layer_gate_body_order,
-			body_lmax);
+		if (two_layer_gate_factor_pruning == SHFactorPruning::SameK) {
+			SHGraphBuilder gate_angular(
+				lmax, 1, SHFactorPruning::SameK, &cg_cache);
+			gate_angular.Build();
+			gate_angular.AddAllBasics();
+			gate_angular.AddScalars(
+				two_layer_gate_edge_l1 ? body_order : two_layer_gate_body_order,
+				body_lmax);
+			gate_rank_graph.BindSingleChannelPlan(gate_angular);
+		} else {
+			gate_rank_graph.AddScalars(
+				two_layer_gate_edge_l1 ? body_order : two_layer_gate_body_order,
+				body_lmax);
+		}
 		if (gate_rank_graph.basic_.size()
 		    != static_cast<size_t>(
 			   two_layer_gate_k_rank * (lmax + 1) * (lmax + 1)))
@@ -1556,6 +1578,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "two_layer_gate_body_order_max = " << two_layer_gate_body_order << "\n";
 			ofs << "two_layer_gate_include_one_body = false\n";
 			ofs << "two_layer_gate_site_mode = " << two_layer_gate_site_mode << "\n";
+			ofs << "two_layer_gate_factor_pruning = "
+			    << FactorPruningName(two_layer_gate_factor_pruning) << "\n";
 			ofs << "two_layer_gate_scale_mode = additive-node\n";
 			if (two_layer_gate_shared_radial) {
 				const int gate_radial_count = kmax * (lmax + 1) * rb_size;

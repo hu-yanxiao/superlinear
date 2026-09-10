@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Contract checks for adaptive radial gate same-k topology.
+
+This script is intended for server-side execution after building mlp-sus2.  It
+does not depend on test data: it initializes small adaptive models, checks the
+serialized topology/counts, verifies model roundtrip preserves the explicit
+gate-pruning metadata, and confirms resume rejects a mismatched explicit gate
+mode.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+def run(cmd: list[str], *, expect_ok: bool = True) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if expect_ok and proc.returncode != 0:
+        raise SystemExit(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stdout}")
+    if not expect_ok and proc.returncode == 0:
+        raise SystemExit(f"command unexpectedly succeeded: {' '.join(cmd)}\n{proc.stdout}")
+    return proc
+
+
+def scalar(text: str, key: str) -> str:
+    match = re.search(rf"(?m)^\s*{re.escape(key)}\s*=\s*([^\n]+?)\s*$", text)
+    if match is None:
+        raise AssertionError(f"missing scalar key {key}")
+    return match.group(1).strip()
+
+
+def integer(text: str, key: str) -> int:
+    return int(scalar(text, key))
+
+
+def init_model(
+    binary: Path,
+    out: Path,
+    gate_factor: str,
+    *,
+    outer_rank: int,
+    gate_rank: int,
+    body_order: int,
+    gate_body_order: int,
+    body_l_max: str,
+) -> None:
+    run(
+        [
+            str(binary),
+            "init-sh",
+            str(out),
+            "--species-count=2",
+            "--l-max=3",
+            "--k-max=8",
+            f"--body-order={body_order}",
+            f"--body-l-max={body_l_max}",
+            "--cutoff=6.5",
+            "--radial-basis-size=10",
+            "--radial-basis-type=RBChebyshev_sss",
+            "--scaling-map=K",
+            "--superlinear-mode=radial-coefficient-gate",
+            f"--outer-k-rank={outer_rank}",
+            f"--two-layer-gate-k-rank={gate_rank}",
+            f"--two-layer-gate-body-order={gate_body_order}",
+            f"--two-layer-gate-factor-pruning={gate_factor}",
+        ]
+    )
+
+
+def tiny_cfg(path: Path) -> None:
+    path.write_text(
+        """BEGIN_CFG
+ Size
+    2
+ Supercell
+    8.0 0.0 0.0
+    0.0 8.0 0.0
+    0.0 0.0 8.0
+ AtomData:  id type       cartes_x      cartes_y      cartes_z     fx          fy          fz
+    1    0       0.0           0.0           0.0          0.0         0.0         0.0
+    2    1       1.9           0.2           0.1          0.0         0.0         0.0
+ Energy
+    0.0
+ PlusStress:  xx          yy          zz          yz          xz          xy
+    0.0         0.0         0.0         0.0         0.0         0.0
+END_CFG
+""",
+        encoding="utf-8",
+    )
+
+
+def check_model(
+    path: Path,
+    expected_factor: str,
+    *,
+    expected_q: int,
+    expected_outer_rank: int,
+    expected_gate_rank: int,
+    expected_gate_body_order: int,
+) -> None:
+    text = path.read_text(encoding="utf-8")
+    if scalar(text, "outer_radial_mode") != "adaptive-coefficients":
+        raise AssertionError("model is not adaptive-coefficients")
+    if scalar(text, "outer_channel_mode") != "same-channel":
+        raise AssertionError("model is not same-channel outer")
+    if scalar(text, "two_layer_gate_factor_pruning") != expected_factor:
+        raise AssertionError("wrong serialized gate factor-pruning mode")
+    if integer(text, "outer_k_rank") != expected_outer_rank:
+        raise AssertionError("wrong outer rank")
+    if integer(text, "two_layer_gate_k_rank") != expected_gate_rank:
+        raise AssertionError("wrong gate rank")
+    if integer(text, "two_layer_gate_body_order_max") != expected_gate_body_order:
+        raise AssertionError("wrong gate body-order")
+    q = integer(text, "two_layer_gate_scalar_count")
+    if q != expected_q:
+        raise AssertionError(f"wrong gate scalar count: got {q}, expected {expected_q}")
+    rows = 4 * expected_outer_rank * 10
+    if integer(text, "adaptive_radial_amplitude_count") != rows:
+        raise AssertionError("wrong adaptive row count")
+    if integer(text, "adaptive_radial_weight_count") != rows * q:
+        raise AssertionError("adaptive weight count does not match rows*Q")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--binary",
+        default=os.environ.get("MLP_BIN", "bin/mlp-sus2"),
+        help="Path to built mlp-sus2 binary",
+    )
+    args = parser.parse_args(argv)
+    binary = Path(args.binary).resolve()
+    if not binary.exists():
+        raise SystemExit(f"missing binary: {binary}")
+
+    with tempfile.TemporaryDirectory(prefix="adaptive_gate_same_k_") as tmp:
+        root = Path(tmp)
+        same = root / "same_k.mtp"
+        qtotal = root / "q_total.mtp"
+        init_model(
+            binary,
+            same,
+            "same-k",
+            outer_rank=8,
+            gate_rank=8,
+            body_order=6,
+            gate_body_order=6,
+            body_l_max="3,3,3,2,1",
+        )
+        init_model(
+            binary,
+            qtotal,
+            "q-total",
+            outer_rank=2,
+            gate_rank=4,
+            body_order=4,
+            gate_body_order=4,
+            body_l_max="3,3,2,2",
+        )
+
+        check_model(
+            same,
+            "same-k",
+            expected_q=232,
+            expected_outer_rank=8,
+            expected_gate_rank=8,
+            expected_gate_body_order=6,
+        )
+        check_model(
+            qtotal,
+            "q-total",
+            expected_q=348,
+            expected_outer_rank=2,
+            expected_gate_rank=4,
+            expected_gate_body_order=4,
+        )
+
+        same_rt = root / "same_k_roundtrip.mtp"
+        qtotal_rt = root / "q_total_roundtrip.mtp"
+        run([str(binary), "roundtrip-model-dev", str(same), str(same_rt)])
+        run([str(binary), "roundtrip-model-dev", str(qtotal), str(qtotal_rt)])
+        check_model(
+            same_rt,
+            "same-k",
+            expected_q=232,
+            expected_outer_rank=8,
+            expected_gate_rank=8,
+            expected_gate_body_order=6,
+        )
+        check_model(
+            qtotal_rt,
+            "q-total",
+            expected_q=348,
+            expected_outer_rank=2,
+            expected_gate_rank=4,
+            expected_gate_body_order=4,
+        )
+
+        cfg = root / "tiny.cfg"
+        tiny_cfg(cfg)
+        wrong_same = run(
+            [
+                str(binary),
+                "train",
+                str(same),
+                str(cfg),
+                "--two-layer-gate-factor-pruning=q-total",
+                "--max-iter=0",
+            ],
+            expect_ok=False,
+        )
+        if "two-layer-gate-factor-pruning does not match" not in wrong_same.stdout:
+            raise AssertionError("same-k resume mismatch did not fail at gate-pruning check")
+        wrong_qtotal = run(
+            [
+                str(binary),
+                "train",
+                str(qtotal),
+                str(cfg),
+                "--two-layer-gate-factor-pruning=same-k",
+                "--max-iter=0",
+            ],
+            expect_ok=False,
+        )
+        if "two-layer-gate-factor-pruning does not match" not in wrong_qtotal.stdout:
+            raise AssertionError("q-total resume mismatch did not fail at gate-pruning check")
+
+    print("adaptive_gate_same_k_contract_check: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
