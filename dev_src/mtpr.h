@@ -90,9 +90,13 @@ protected:
 	int outer_k_rank_ = 0;
 	bool outer_k_rank1_direct_radial_ = false;
 	// Absent model metadata retains the legacy factorized/cross-channel model.
-	std::string outer_channel_mode_ = "cross-channel";
-	std::string outer_radial_mode_ = "legacy-plus-mixer";
-	std::string readout_mode_ = "shared";
+		std::string outer_channel_mode_ = "cross-channel";
+		std::string outer_radial_mode_ = "legacy-plus-mixer";
+		std::string readout_mode_ = "shared";
+		int tensor_message_lmax_ = 0;
+		std::vector<double> tensor_message_coeffs_;
+		std::vector<double> tensor_message_optimizer_scales_;
+		std::vector<int> tensor_message_gate_moment_dense_indices_;
 	int outer_k_rank1_basic_begin_ = 0;
 	int outer_k_rank1_basic_count_ = 0;
 	int outer_k_rank1_product_begin_ = 0;
@@ -367,11 +371,12 @@ protected:
 		std::vector<Vector3>& gate_scalar_ders,
 		int cache_atom_index,
 		const double* body_order_adjoints);
-		void CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
-			const Neighborhood& nbh,
-			std::vector<Vector3>& gate_scalar_ders,
-			int cache_atom_index,
-			const double* scalar_seeds);
+	void CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+		const Neighborhood& nbh,
+		std::vector<Vector3>& gate_scalar_ders,
+		int cache_atom_index,
+		const double* scalar_seeds,
+		const double* raw_moment_seeds = nullptr);
 		void CalcSecondLayerGateWeightedScalarDersForScalarSeeds(
 			const Neighborhood& nbh,
 			std::vector<Vector3>& gate_scalar_ders,
@@ -403,7 +408,8 @@ protected:
 			const double* gate_moment_tangents,
 			const double* energy_scalar_seeds,
 			const std::vector<double>* second_gate_directional_values = nullptr,
-			const double* raw_energy_moment_seeds = nullptr);
+			const double* raw_energy_moment_seeds = nullptr,
+			const double* raw_value_moment_seeds = nullptr);
 		void AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
 			const Neighborhood& nbh,
 			std::vector<double>& out_grad_accumulator,
@@ -789,9 +795,10 @@ public:
 			const Matrix3& str_weights,
 			Array1D& out_grads_accumulator);
 		void CalcAdaptiveRadialComponents(Configuration& cfg,
-		                                  const Neighborhoods& neighborhoods,
-		                                  bool need_forces,
-		                                  bool need_stress);
+		                                const Neighborhoods& neighborhoods,
+		                                bool need_forces,
+		                                bool need_stress,
+		                                bool fixed_center_readout_columns = false);
 		void AccumulateEFSCombinationGrad(Configuration& cfg,
 	                                  std::vector<double>& ene_weight,
 	                                  const std::vector<Vector3>& frc_weights,
@@ -1006,9 +1013,20 @@ public:
 							return OuterKRankEnabled() && outer_channel_mode_ == "same-channel";
 						}
 						const std::string& ReadoutMode() const { return readout_mode_; }
-						bool UsesSpeciesReadout() const {
-							return readout_mode_ == "species";
-						}
+							bool UsesSpeciesReadout() const {
+								return readout_mode_ == "species";
+							}
+							bool TensorMessageEnabled() const {
+								return tensor_message_lmax_ > 0;
+							}
+							int TensorMessageLMax() const { return tensor_message_lmax_; }
+							int TensorMessageCoeffCount() const;
+							int TensorMessageCoeffOffset() const;
+							int TensorMessageCoeffIndex(int L, int outer_channel, int gate_channel) const;
+							int TensorMessageComponentCount() const;
+							int TensorMessageComponentIndex(int L, int outer_channel, int m) const;
+							double TensorMessageCoeff(int L, int outer_channel, int gate_channel) const;
+							double TensorMessageOptimizerScale(int local) const;
 						int ScalarReadoutCoeffCount() const;
 						int ScalarReadoutCoeffIndex(int type, int scalar_index) const;
 						double ScalarReadoutCoeff(int type, int scalar_index) const;
@@ -1107,9 +1125,12 @@ public:
 			struct AdaptiveRadialNormalizationSums {
 				std::vector<double> gate_scalar_sq;
 				std::vector<double> outer_scalar_sq;
+				std::vector<double> tensor_irrep_sq;
 				std::uint64_t gate_samples = 0;
 				std::uint64_t outer_samples = 0;
 			};
+			void AccumulateTensorMessageIrrepSquares(std::vector<double>& sums) const;
+			void SetTensorMessageOptimizerScales(const std::vector<double>& per_coeff);
 			void AccumulateAdaptiveRadialNormalizationSums(
 				std::vector<Configuration>& training_set,
 				const std::vector<Neighborhoods>* training_neighborhoods,
@@ -1302,7 +1323,9 @@ public:
 							    > static_cast<size_t>(std::numeric_limits<int>::max()))
 								ERROR("SUS2-SH adaptive radial weight count exceeds supported index range");
 							const int adaptive_radial_weight_count =
-								static_cast<int>(adaptive_radial_weight_count_size);
+									static_cast<int>(adaptive_radial_weight_count_size);
+								const int tensor_message_count =
+									TensorMessageCoeffCount();
 							const int gate_edge_l1_weight_count = TwoLayerGateEdgeL1WeightCount();
 						const int second_gate_radial_count = SecondLayerGateRadialCoeffCount();
 						const int second_gate_additive_count = SecondLayerGateAdditiveCoeffCount();
@@ -1328,10 +1351,11 @@ public:
 							const int new_gate_edge_l1_offset =
 									new_gate_body_mix_offset + gate_body_mix_weight_count
 									+ gate_radial_mixing_count;
-							const int new_second_gate_radial_offset =
-								new_gate_edge_l1_offset + adaptive_radial_row_count
-									+ adaptive_radial_weight_count
-									+ gate_edge_l1_weight_count;
+								const int new_second_gate_radial_offset =
+									new_gate_edge_l1_offset + adaptive_radial_row_count
+										+ adaptive_radial_weight_count
+										+ tensor_message_count
+										+ gate_edge_l1_weight_count;
 							const int new_second_gate_additive_offset =
 								new_second_gate_radial_offset + second_gate_radial_count;
 							const int new_second_gate_type_offset =
@@ -1478,8 +1502,8 @@ public:
 							two_layer_gate_radial_mixing_coeffs_.assign(
 								gate_radial_mixing_count, 0.0);
 						}
-						if (adaptive_radial_row_count > 0) {
-							if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+							if (adaptive_radial_row_count > 0) {
+								if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
 								adaptive_radial_amplitudes_.assign(
 									old_coeffs.begin() + new_gate_edge_l1_offset,
 									old_coeffs.begin() + new_gate_edge_l1_offset
@@ -1508,12 +1532,30 @@ public:
 									adaptive_radial_weight_optimizer_scales_.assign(
 										TwoLayerGateScalarCount(), 1.0);
 							}
-						} else {
-							adaptive_radial_amplitudes_.clear();
-							adaptive_radial_weights_.clear();
-							adaptive_radial_amplitude_optimizer_scales_.clear();
-							adaptive_radial_weight_optimizer_scales_.clear();
-						}
+							} else {
+								adaptive_radial_amplitudes_.clear();
+								adaptive_radial_weights_.clear();
+								adaptive_radial_amplitude_optimizer_scales_.clear();
+								adaptive_radial_weight_optimizer_scales_.clear();
+							}
+							if (tensor_message_count > 0) {
+								const int tensor_offset = new_gate_edge_l1_offset
+									+ adaptive_radial_row_count + adaptive_radial_weight_count;
+								if (static_cast<int>(old_coeffs.size()) == expected_new_size) {
+									tensor_message_coeffs_.assign(
+										old_coeffs.begin() + tensor_offset,
+										old_coeffs.begin() + tensor_offset + tensor_message_count);
+								} else if (static_cast<int>(tensor_message_coeffs_.size())
+								           != tensor_message_count) {
+									tensor_message_coeffs_.assign(tensor_message_count, 0.0);
+								}
+								if (static_cast<int>(tensor_message_optimizer_scales_.size())
+								    != tensor_message_count)
+									tensor_message_optimizer_scales_.assign(tensor_message_count, 1.0);
+							} else {
+								tensor_message_coeffs_.clear();
+								tensor_message_optimizer_scales_.clear();
+							}
 							if (gate_edge_l1_weight_count > 0) {
 								if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
 								    == gate_edge_l1_weight_count) {
@@ -1672,9 +1714,10 @@ public:
 								+ gate_type_count + gate_weight_count
 								+ gate_body_mix_weight_count
 								+ gate_radial_mixing_count
-								+ adaptive_radial_row_count
-								+ adaptive_radial_weight_count
-								+ gate_edge_l1_weight_count
+									+ adaptive_radial_row_count
+									+ adaptive_radial_weight_count
+									+ tensor_message_count
+									+ gate_edge_l1_weight_count
 								+ second_gate_radial_count + second_gate_additive_count
 								+ second_gate_type_count + second_gate_weight_count
 									+ second_gate_body_mix_weight_count
@@ -1737,7 +1780,7 @@ public:
 							regression_coeffs[TwoLayerGateRadialMixingCoeffOffset() + i] =
 								two_layer_gate_radial_mixing_coeffs_[i];
 					}
-					if (adaptive_radial_row_count > 0) {
+						if (adaptive_radial_row_count > 0) {
 						if (static_cast<int>(adaptive_radial_amplitudes_.size())
 						    != adaptive_radial_row_count)
 							adaptive_radial_amplitudes_.assign(
@@ -1760,8 +1803,22 @@ public:
 						for (int i = 0; i < adaptive_radial_weight_count; ++i)
 							regression_coeffs[AdaptiveRadialWeightOffset() + i] =
 								adaptive_radial_weights_[i];
-					}
-							if (gate_edge_l1_weight_count > 0) {
+						}
+						if (tensor_message_count > 0) {
+							if (static_cast<int>(tensor_message_coeffs_.size())
+							    != tensor_message_count)
+								tensor_message_coeffs_.assign(tensor_message_count, 0.0);
+							if (static_cast<int>(tensor_message_optimizer_scales_.size())
+							    != tensor_message_count)
+								tensor_message_optimizer_scales_.assign(tensor_message_count, 1.0);
+							for (int i = 0; i < tensor_message_count; ++i)
+								regression_coeffs[TensorMessageCoeffOffset() + i] =
+									tensor_message_coeffs_[i];
+						} else {
+							tensor_message_coeffs_.clear();
+							tensor_message_optimizer_scales_.clear();
+						}
+						if (gate_edge_l1_weight_count > 0) {
 						if (static_cast<int>(two_layer_gate_edge_l1_weights_.size())
 						    != gate_edge_l1_weight_count)
 							two_layer_gate_edge_l1_weights_.assign(

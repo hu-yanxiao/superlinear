@@ -126,6 +126,14 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 		sums.gate_scalar_sq.assign(Q, 0.0);
 	if (sums.outer_scalar_sq.size() != static_cast<std::size_t>(alpha_scalar_moments))
 		sums.outer_scalar_sq.assign(alpha_scalar_moments, 0.0);
+	if (TensorMessageEnabled()) {
+		const std::size_t irreps = static_cast<std::size_t>(tensor_message_lmax_)
+			* static_cast<std::size_t>(two_layer_gate_k_rank_);
+		if (sums.tensor_irrep_sq.size() != irreps)
+			sums.tensor_irrep_sq.assign(irreps, 0.0);
+	} else {
+		sums.tensor_irrep_sq.clear();
+	}
 
 	for (std::size_t cfg_index = 0; cfg_index < training_set.size(); ++cfg_index) {
 		std::unique_ptr<Neighborhoods> owned_neighborhoods;
@@ -139,6 +147,11 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 		}
 		const Neighborhoods& neighborhoods = *neighborhoods_ptr;
 		PrepareAdaptiveRadial(neighborhoods, false, false);
+		// Reuse the post-rank gate cache prepared above. Sum every magnetic
+		// component together; a component-dependent scale would break rotation
+		// equivariance. gate_samples below supplies the common atom count.
+		if (TensorMessageEnabled())
+			AccumulateTensorMessageIrrepSquares(sums.tensor_irrep_sq);
 		for (int atom = 0; atom < static_cast<int>(neighborhoods.size()); ++atom) {
 			const double* gate = two_layer_gate_scalar_values_cache_.data()
 				+ static_cast<std::size_t>(atom) * Q;

@@ -7283,7 +7283,8 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 	const Neighborhood& nbh,
 	std::vector<Vector3>& gate_scalar_ders,
 	int cache_atom_index,
-	const double* scalar_seeds)
+	const double* scalar_seeds,
+	const double* raw_moment_seeds)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
@@ -7291,8 +7292,8 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 	if (two_layer_gate_required_moments_.empty()
 	    || two_layer_gate_required_moment_indices_.empty())
 		BuildTwoLayerGateProductProgram();
-	if (scalar_seeds == nullptr)
-		ERROR("SUS2-SH two-layer gate scalar seeds are missing");
+	if (scalar_seeds == nullptr && raw_moment_seeds == nullptr)
+		ERROR("SUS2-SH two-layer gate scalar/raw moment seeds are missing");
 
 	gate_scalar_ders.assign(
 		static_cast<size_t>(nbh.count), Vector3(0.0, 0.0, 0.0));
@@ -7301,11 +7302,18 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 		return;
 
 	bool has_weighted_seed = false;
-	for (int q = 0; q < gate_count; ++q)
-		if (scalar_seeds[q] != 0.0) {
-			has_weighted_seed = true;
-			break;
-		}
+	if (scalar_seeds != nullptr)
+		for (int q = 0; q < gate_count; ++q)
+			if (scalar_seeds[q] != 0.0) {
+				has_weighted_seed = true;
+				break;
+			}
+	if (!has_weighted_seed && raw_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			if (raw_moment_seeds[moment] != 0.0) {
+				has_weighted_seed = true;
+				break;
+			}
 	if (!has_weighted_seed)
 		return;
 
@@ -7339,13 +7347,17 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 	const double* gate_type_coeff_matrix = TwoLayerGateTypeCoeffMatrixData();
 
 	site_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
-	for (int q = 0; q < gate_count; ++q) {
-		const double seed = scalar_seeds[q];
-		if (seed == 0.0)
-			continue;
-		site_energy_ders_wrt_moments_[
-			TwoLayerGateScalarMomentIndexUnchecked(q)] += seed;
-	}
+	if (raw_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			site_energy_ders_wrt_moments_[moment] += raw_moment_seeds[moment];
+	if (scalar_seeds != nullptr)
+		for (int q = 0; q < gate_count; ++q) {
+			const double seed = scalar_seeds[q];
+			if (seed == 0.0)
+				continue;
+			site_energy_ders_wrt_moments_[
+				TwoLayerGateScalarMomentIndexUnchecked(q)] += seed;
+		}
 
 	for (int p = static_cast<int>(two_layer_gate_required_product_indices_.size()) - 1;
 	     p >= 0; --p) {
@@ -8313,7 +8325,8 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	const double* gate_moment_tangents,
 	const double* energy_scalar_seeds,
 	const std::vector<double>* second_gate_directional_values,
-	const double* raw_energy_moment_seeds)
+	const double* raw_energy_moment_seeds,
+	const double* raw_value_moment_seeds)
 {
 	if (gate_scalar_seeds == nullptr)
 		ERROR("SUS2-SH two-layer gate scalar seeds are missing");
@@ -8341,6 +8354,12 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		for (int moment = 0; moment < alpha_moments_count; ++moment)
 			if (raw_energy_moment_seeds[moment] != 0.0) {
 				has_energy_seed = true;
+				break;
+			}
+	if (raw_value_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			if (raw_value_moment_seeds[moment] != 0.0) {
+				has_gate_seed = true;
 				break;
 			}
 
@@ -8388,6 +8407,9 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 	sh_gate_energy_ders_wrt_moments_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dsenders_.assign(alpha_moments_count, 0.0);
 	grad_dloss_dmom_.assign(alpha_moments_count, 0.0);
+	if (raw_value_moment_seeds != nullptr)
+		for (int moment = 0; moment < alpha_moments_count; ++moment)
+			site_energy_ders_wrt_moments_[moment] += raw_value_moment_seeds[moment];
 	for (int q = 0; q < gate_count; ++q) {
 		const double gate_adjoint = gate_scalar_seeds[q];
 		const double energy_adjoint =
@@ -8400,9 +8422,9 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 		if (has_der_weights && energy_adjoint != 0.0)
 			sh_gate_energy_ders_wrt_moments_[moment] += energy_adjoint;
 	}
-	// This optional raw seed path is reserved for the edge-L1 source l=1
-	// moment triplets.  It reuses the same reverse-over-forward machinery as
-	// the scalar gate HVP without first projecting through a scalar readout.
+	// Direct equivariant tangent seeds share the scalar gate HVP machinery.
+	// Tensor messages also pass independent value seeds above, so neither
+	// path is lost when the other seed happens to be zero.
 	if (has_der_weights && raw_energy_moment_seeds != nullptr)
 		for (int moment = 0; moment < alpha_moments_count; ++moment)
 			sh_gate_energy_ders_wrt_moments_[moment] +=

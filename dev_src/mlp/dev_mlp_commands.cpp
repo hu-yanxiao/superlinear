@@ -1262,7 +1262,8 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 	double displacement,
 	int max_atoms,
 	int coeff_begin,
-	int coeff_end)
+	int coeff_end,
+	bool fixed_center_readout_columns)
 {
 	DevLinearComponentsFDResult result;
 	const int coeff_count = mtpr.LinearEquationCount();
@@ -1274,7 +1275,8 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 	for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
 		Configuration base = configs[cfg_index];
 		Neighborhoods base_neighborhoods(base, mtpr.CutOff());
-		mtpr.CalcEFSComponents(base, base_neighborhoods, true, false);
+		mtpr.CalcEFSComponents(base, base_neighborhoods, true, false,
+		                      fixed_center_readout_columns);
 
 		const int atom_limit = max_atoms <= 0
 			? base.size()
@@ -1295,10 +1297,12 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 				minus.pos(i, a) -= displacement;
 				Neighborhoods plus_neighborhoods(plus, mtpr.CutOff());
 				Neighborhoods minus_neighborhoods(minus, mtpr.CutOff());
-				mtpr.CalcEFSComponents(plus, plus_neighborhoods, false, false);
+				mtpr.CalcEFSComponents(plus, plus_neighborhoods, false, false,
+				                      fixed_center_readout_columns);
 				std::vector<double> plus_energy_components(
 					mtpr.energy_cmpnts, mtpr.energy_cmpnts + coeff_count);
-				mtpr.CalcEFSComponents(minus, minus_neighborhoods, false, false);
+				mtpr.CalcEFSComponents(minus, minus_neighborhoods, false, false,
+				                      fixed_center_readout_columns);
 				for (int k = coeff_begin; k < coeff_end; ++k) {
 					const double fd_force =
 						-(plus_energy_components[k] - mtpr.energy_cmpnts[k])
@@ -1376,7 +1380,13 @@ DevLinearReadoutResult CheckLinearReadout(
 		mtpr.CalcEFS(direct, neighborhoods);
 
 		Configuration component_cfg = configs[cfg_index];
-		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, check_stress);
+		// Adaptive shared heads use h_Z * d_q. Hold the center prefactors
+		// fixed in the component chart; raw TrainLinear columns intentionally
+		// omit h_Z and cannot reconstruct a checkpoint with unequal centers.
+		const bool fixed_center=mtpr.OuterUsesAdaptiveRadialCoefficients()
+			&& !mtpr.UsesSpeciesReadout();
+		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, check_stress,
+		                      fixed_center);
 		double linear_energy = 0.0;
 		for (int k = 0; k < coeff_count; ++k)
 			linear_energy += mtpr.energy_cmpnts[k] * coeffs[k];
@@ -1504,6 +1514,9 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 	    && index < mtpr.AdaptiveRadialWeightOffset()
 	        + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount())
 		return "adaptive_radial_weight";
+	if (index >= mtpr.TensorMessageCoeffOffset()
+	    && index < mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount())
+		return "tensor_message";
 	if (index >= mtpr.TwoLayerGateEdgeL1WeightOffset()
 	    && index < mtpr.TwoLayerGateEdgeL1WeightOffset()
 	        + mtpr.TwoLayerGateEdgeL1WeightCount())
@@ -1742,6 +1755,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
 				          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
 				          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
+				          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
+				          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
 					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 					          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 					          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -1850,6 +1865,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
 			          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
 			          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
+			          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
+			          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -2126,7 +2143,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-linear-components-fd-dev",
 		"checks linear-regression force components against energy-component finite differences",
-		"mlp-sus2 check-linear-components-fd-dev model.mtp cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
+		"mlp-sus2 check-linear-components-fd-dev model.mtp cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4 [--fixed-center-readout-columns]\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-linear-components-fd-dev: model and cfg arguments are required\n";
@@ -2158,7 +2175,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 		const DevLinearComponentsFDResult result =
 			CheckLinearComponentsFiniteDifference(mtpr, configs, displacement,
-			                                      max_atoms, coeff_start, coeff_end);
+			                                      max_atoms, coeff_start, coeff_end,
+			                                      opts["fixed-center-readout-columns"] != "");
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "checked_components=" << result.checked_components
@@ -2547,9 +2565,10 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"           deterministic nonzero W initialization; train defaults to --init-params=same (retain parameters).\n"
 				"           radial-coefficient-gate: adaptive c_l,o,n + a_l,o,n*w_j,l,o,n coefficients,\n"
 					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
-					"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
-					"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
-					"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
+						"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
+						"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
+						"         --tensor-message-lmax=0|1|2 (adaptive radial coefficient gate only; default=0),\n"
+						"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total; adaptive/pure default=same-k), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"
 				"         --two-layer-gate-factor-pruning=same-k|legacy|q-total (adaptive default=q-total; legacy default=outer),\n"

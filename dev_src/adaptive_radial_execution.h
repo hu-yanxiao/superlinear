@@ -15,6 +15,11 @@ struct AdaptiveRadialExecution {
     std::vector<double> coefficient_adjoints, coefficient_tangent_adjoints;
     std::vector<double> scalar_tangents, scalar_adjoints, scalar_tangent_adjoints;
     std::vector<double> gate_moment_tangents;
+    std::vector<double> tensor_messages, tensor_message_tangents;
+    std::vector<double> tensor_message_adjoints, tensor_message_tangent_adjoints;
+    std::vector<double> tensor_gate_moment_adjoints;
+    std::vector<double> tensor_gate_moment_tangent_adjoints;
+    std::vector<double> component_tensor_message_adjoints;
     std::vector<double> values, tangents, adjoints, tangent_adjoints;
     std::vector<double> radial_values, radial_derivatives, radial_tangents;
     std::vector<double> site_values;

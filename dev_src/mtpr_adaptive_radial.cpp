@@ -59,6 +59,16 @@ bool AdaptiveRadialDersAreCompact(size_t cache_size, size_t edge_count,
 int AdaptiveRadialCoordDerOffset(int rb_start, int n, bool compact) {
     return compact ? rb_start+n : 5*rb_start+n;
 }
+int TensorComponentLocal(int Lmsg, int outer_channel, int m, int outer_count) {
+    return ((Lmsg * Lmsg - 1) * outer_count)
+        + outer_channel * (2 * Lmsg + 1) + (m + Lmsg);
+}
+size_t TensorGateDenseLocal(int gate_channel, int Lmsg, int m, int tensor_lmax) {
+    const int width = (tensor_lmax + 1) * 2 + 1;
+    return (static_cast<size_t>(gate_channel) * tensor_lmax
+            + static_cast<size_t>(Lmsg - 1)) * static_cast<size_t>(width)
+        + static_cast<size_t>(m + tensor_lmax);
+}
 }
 
 void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
@@ -144,6 +154,53 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
     if (parameters) ex.radial_tangents.resize(edges*B);
     ex.coefficient_adjoints.assign(static_cast<size_t>(atoms)*D,0.0);
     ex.coefficient_tangents.clear();
+    if (TensorMessageEnabled()) {
+        const int TC = TensorMessageComponentCount();
+        const int G = two_layer_gate_k_rank_;
+        const int Lmsg = tensor_message_lmax_;
+        const int cached_moments =
+            static_cast<int>(two_layer_gate_required_moment_indices_.size());
+        if (static_cast<int>(tensor_message_gate_moment_dense_indices_.size())
+            != G * Lmsg * ((Lmsg + 1) * 2 + 1))
+            ERROR("SUS2-SH tensor message dense gate moment map is inconsistent");
+        if (two_layer_gate_moment_values_cache_.size()
+            != static_cast<size_t>(atoms) * cached_moments)
+            ERROR("SUS2-SH tensor message requires cached gate moment values");
+        ex.tensor_messages.assign(static_cast<size_t>(atoms) * TC, 0.0);
+        const double* Bmsg = regression_coeffs.data() + TensorMessageCoeffOffset();
+        for (int atom = 0; atom < atoms; ++atom) {
+            const double* z =
+                two_layer_gate_moment_values_cache_.data()
+                + static_cast<size_t>(atom) * cached_moments;
+            double* hmsg = ex.tensor_messages.data()
+                + static_cast<size_t>(atom) * TC;
+            for (int L = 1; L <= Lmsg; ++L)
+                for (int o = 0; o < outer_k_rank_; ++o)
+                    for (int m = -L; m <= L; ++m) {
+                        double value = 0.0;
+                        for (int g = 0; g < G; ++g) {
+                            const int dense =
+                                tensor_message_gate_moment_dense_indices_[
+                                    TensorGateDenseLocal(g, L, m, Lmsg)];
+                            if (dense < 0 || dense >= cached_moments)
+                                ERROR("SUS2-SH tensor message gate moment cache index is invalid");
+                            const size_t b =
+                                ((static_cast<size_t>(L - 1) * outer_k_rank_ + o)
+                                 * G) + g;
+                            value += Bmsg[b] * z[dense];
+                        }
+                        hmsg[TensorComponentLocal(L, o, m, outer_k_rank_)] =
+                            value;
+                    }
+        }
+        if (derivatives)
+            ex.tensor_message_adjoints.assign(static_cast<size_t>(atoms) * TC, 0.0);
+        else
+            ex.tensor_message_adjoints.clear();
+    } else {
+        ex.tensor_messages.clear();
+        ex.tensor_message_adjoints.clear();
+    }
 }
 
 void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
@@ -151,6 +208,9 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int H=ex.harmonics,D=ex.rows,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
+    const bool tensor_enabled=TensorMessageEnabled();
+    const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
+    const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
     const bool tangent=direction!=nullptr;
     const size_t edge_count=two_layer_edge_offsets_cache_.empty()
         ? 0 : two_layer_edge_offsets_cache_.back();
@@ -170,6 +230,13 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
         const double* dr=ex.derivatives ? two_layer_edge_radial_ders_cache_.data()+edge*radial_der_stride : nullptr;
         const double* c=ex.coefficients.data()+static_cast<size_t>(nbh.inds[j])*D;
         const double* ct=tangent ? ex.coefficient_tangents.data()+static_cast<size_t>(nbh.inds[j])*D : nullptr;
+        const double* hmsg=tensor_enabled
+            ? ex.tensor_messages.data()+static_cast<size_t>(nbh.inds[j])*TC
+            : nullptr;
+        const double* htmsg=(tensor_enabled && tangent
+            && !ex.tensor_message_tangents.empty())
+            ? ex.tensor_message_tangents.data()+static_cast<size_t>(nbh.inds[j])*TC
+            : nullptr;
         const double wr=tangent ? ((*direction)[j][0]*nbh.vecs[j][0]+(*direction)[j][1]*nbh.vecs[j][1]+(*direction)[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
         for (int l=0; l<=sh_l_max_; ++l)
             for (int o=0; o<outer_k_rank_; ++o) {
@@ -189,11 +256,18 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                 const double species=OuterTypeCoeff(nbh.my_type,mu)*OuterTypeCoeff(nbh.types[j],mu);
                 for (int m=-l; m<=l; ++m) {
                     const int h=l*l+l+m,node=ex.outer_nodes[o*H+h];
-                    ex.values[node]+=species*value*y[h];
+                    double angular=y[h];
+                    double angular_t=0.0;
+                    if (tensor_enabled && l>=1 && l<=Lmsg) {
+                        const int tc=TensorComponentLocal(l,o,m,outer_k_rank_);
+                        angular+=hmsg[tc];
+                        if (htmsg!=nullptr) angular_t+=htmsg[tc];
+                    }
+                    ex.values[node]+=species*value*angular;
                     if (tangent) {
-                        double yt=0;
+                        double yt=angular_t;
                         for (int a=0; a<3; ++a) yt+=dy[3*h+a]*(*direction)[j][a];
-                        ex.tangents[node]+=species*(value_t*y[h]+value*yt);
+                        ex.tangents[node]+=species*(value_t*angular+value*yt);
                     }
                 }
             }
@@ -225,25 +299,40 @@ void MLMTPR::AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int H=ex.harmonics,D=ex.rows,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
+    const bool tensor_enabled=TensorMessageEnabled();
+    const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
+    const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
     for (int j=0;j<nbh.count;++j) {
         const size_t edge=two_layer_edge_offsets_cache_[atom]+j;
         const double* y=two_layer_edge_sh_values_cache_.data()+edge*H;
         const double* dy=two_layer_edge_sh_ders_cache_.data()+edge*3*H;
         const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
         double* ca=ex.coefficient_adjoints.data()+static_cast<size_t>(nbh.inds[j])*D;
+        const double* hmsg=tensor_enabled
+            ? ex.tensor_messages.data()+static_cast<size_t>(nbh.inds[j])*TC
+            : nullptr;
+        double* ha=tensor_enabled
+            ? ex.tensor_message_adjoints.data()+static_cast<size_t>(nbh.inds[j])*TC
+            : nullptr;
         Vector3 edge_der(0,0,0);
         for (int l=0;l<=sh_l_max_;++l)
             for (int o=0;o<outer_k_rank_;++o) {
                 const int block=l*outer_k_rank_+o, row=block*R,mu=o*(sh_l_max_+1)+l;
+                const double species=OuterTypeCoeff(nbh.my_type,mu)*OuterTypeCoeff(nbh.types[j],mu);
                 double radial_adjoint=0;
                 Vector3 angular_adjoint(0,0,0);
                 for (int m=-l;m<=l;++m) {
                     const int h=l*l+l+m;
                     const double adj=ex.adjoints[ex.outer_nodes[o*H+h]];
-                    radial_adjoint+=adj*y[h];
+                    double angular=y[h];
+                    if (tensor_enabled && l>=1 && l<=Lmsg)
+                        angular+=hmsg[TensorComponentLocal(l,o,m,outer_k_rank_)];
+                    radial_adjoint+=adj*angular;
                     for (int a=0;a<3;++a) angular_adjoint[a]+=adj*dy[3*h+a];
+                    if (tensor_enabled && l>=1 && l<=Lmsg && ha!=nullptr)
+                        ha[TensorComponentLocal(l,o,m,outer_k_rank_)]
+                            += species * adj * ex.radial_values[edge*B+block];
                 }
-                const double species=OuterTypeCoeff(nbh.my_type,mu)*OuterTypeCoeff(nbh.types[j],mu);
                 const double r=ex.radial_values[edge*B+block], rd=ex.radial_derivatives[edge*B+block];
                 for (int a=0;a<3;++a)
                     edge_der[a]+=species*(radial_adjoint*rd*nbh.vecs[j][a]/nbh.dists[j]+r*angular_adjoint[a]);
@@ -268,6 +357,12 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
                                           int component,bool need_forces,bool need_stress) {
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int atoms=neighborhoods.size(),D=ex.rows,Q=ex.scalars;
+    const bool tensor_enabled=TensorMessageEnabled();
+    const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
+    const int G=two_layer_gate_k_rank_;
+    const int Lmsg=tensor_message_lmax_;
+    const double* Bmsg=tensor_enabled
+        ? regression_coeffs.data()+TensorMessageCoeffOffset() : nullptr;
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     for (int i=0;i<atoms;++i)
         for (int row=0;row<D;++row) ex.coefficient_adjoints[static_cast<size_t>(i)*D+row]*=amplitude[row];
@@ -276,10 +371,40 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
         cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,atoms,Q,D,1.0,
                     ex.coefficient_adjoints.data(),D,regression_coeffs.data()+AdaptiveRadialWeightOffset(),Q,
                     0.0,ex.scalar_adjoints.data(),Q);
+    if (tensor_enabled)
+        ex.tensor_gate_moment_adjoints.resize(alpha_moments_count);
+    else
+        ex.tensor_gate_moment_adjoints.clear();
     std::vector<Vector3> derivatives;
     for (int i=0;i<atoms;++i) {
         const Neighborhood& nbh=neighborhoods[i];
-        CalcTwoLayerGateWeightedScalarDersForScalarSeeds(nbh,derivatives,i,ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q);
+        if (tensor_enabled) {
+            const double* ha=ex.tensor_message_adjoints.data()
+                + static_cast<size_t>(i)*TC;
+            std::fill(ex.tensor_gate_moment_adjoints.begin(),
+                      ex.tensor_gate_moment_adjoints.end(),0.0);
+            double* raw=ex.tensor_gate_moment_adjoints.data();
+            for (int L=1; L<=Lmsg; ++L)
+                for (int o=0; o<outer_k_rank_; ++o)
+                    for (int m=-L; m<=L; ++m) {
+                        const double adj=ha[TensorComponentLocal(L,o,m,outer_k_rank_)];
+                        if (adj==0.0) continue;
+                        for (int g=0; g<G; ++g) {
+                            const int dense=tensor_message_gate_moment_dense_indices_[
+                                TensorGateDenseLocal(g,L,m,Lmsg)];
+                            const int moment=two_layer_gate_required_moment_indices_[dense];
+                            const size_t b=
+                                ((static_cast<size_t>(L-1)*outer_k_rank_+o)*G)+g;
+                            raw[moment]+=Bmsg[b]*adj;
+                        }
+                    }
+        }
+        CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
+            nbh,derivatives,i,
+            ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q,
+            tensor_enabled
+                ? ex.tensor_gate_moment_adjoints.data()
+                : nullptr);
         for (int j=0;j<nbh.count;++j) {
             if (component<0) AddEdgeDerivative(cfg,i,nbh.inds[j],derivatives[j],nbh.vecs[j]);
             else for (int a=0;a<3;++a) {
@@ -353,7 +478,8 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
 }
 
 void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods& neighborhoods,
-                                         bool need_forces,bool need_stress) {
+                                         bool need_forces,bool need_stress,
+                                         bool fixed_center_readout_columns) {
     const bool derivatives=need_forces||need_stress;
     PrepareAdaptiveRadial(neighborhoods,derivatives,false);
     const int columns=LinearEquationCount();
@@ -362,46 +488,69 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
     if (need_stress) std::memset(stress_cmpnts,0,columns*sizeof(stress_cmpnts[0]));
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const bool species_readout=UsesSpeciesReadout();
+    // TrainLinear requests raw Phi columns and subsequently fixes its center
+    // gauge. A physical readout diagnostic may instead hold unequal h_Z fixed
+    // and request sum_i h_Zi Phi_i columns. Species readout has no such factor.
+    const bool include_center=fixed_center_readout_columns && !species_readout;
     const int readout_count=ScalarReadoutCoeffCount();
     ex.site_values.resize(static_cast<size_t>(cfg.size())*alpha_moments_count);
     for (int i=0;i<cfg.size();++i) {
         ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
         std::copy(ex.values.begin(),ex.values.end(),ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count);
         const int type=neighborhoods[i].my_type;
+        const double center=include_center ? linear_coeffs[type] : 1.0;
         energy_cmpnts[type]+=1.0;
         for (int q=0;q<alpha_scalar_moments;++q) {
             const int column=species_count+(species_readout ? type*alpha_scalar_moments+q : q);
-            energy_cmpnts[column]+=ex.values[alpha_moment_mapping[q]];
+            energy_cmpnts[column]+=center*ex.values[alpha_moment_mapping[q]];
         }
     }
     if (!derivatives) return;
     const bool reference=ReferenceComponents();
     const int D=ex.rows,P=alpha_scalar_moments;
-    if (!reference)
+    const int TC=TensorMessageEnabled() ? TensorMessageComponentCount() : 0;
+    if (!reference) {
         ex.component_coefficient_adjoints.resize(static_cast<size_t>(cfg.size())*readout_count*D);
-    // The linear solver's columns are raw scalar bases (linear_mults and
-    // species prefactors are handled by its established coordinate chart).
+        if (TensorMessageEnabled())
+            ex.component_tensor_message_adjoints.assign(
+                static_cast<size_t>(cfg.size())*readout_count*TC,0.0);
+        else
+            ex.component_tensor_message_adjoints.clear();
+    }
+    // Default linear-solver columns are raw scalar bases. In the optional
+    // fixed-center chart h_Z is held fixed and scales each central atom's
+    // complete direct and neighbor-environment derivative, including H.
     // Reuse graph values and radial contractions for all columns.
     for (int head=0;head<readout_count;++head) {
         const int type_filter=species_readout ? head/P : -1;
         const int q=species_readout ? head%P : head;
         std::fill(ex.coefficient_adjoints.begin(),ex.coefficient_adjoints.end(),0.0);
+        if (TensorMessageEnabled())
+            std::fill(ex.tensor_message_adjoints.begin(),
+                      ex.tensor_message_adjoints.end(),0.0);
         for (int i=0;i<cfg.size();++i) {
             if (type_filter >= 0 && neighborhoods[i].my_type != type_filter)
                 continue;
             std::copy(ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count,
                       ex.site_values.data()+static_cast<size_t>(i+1)*alpha_moments_count,ex.values.begin());
             std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
-            ex.adjoints[alpha_moment_mapping[q]]=1.0;
+            ex.adjoints[alpha_moment_mapping[q]]=include_center
+                ? linear_coeffs[neighborhoods[i].my_type] : 1.0;
             ReverseAdaptiveRadialGraph(false);
             AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i,species_count+head,need_forces,need_stress);
         }
         if (reference)
             FinishAdaptiveRadialGateForces(cfg,neighborhoods,species_count+head,need_forces,need_stress);
-        else for (int i=0;i<cfg.size();++i)
+        else for (int i=0;i<cfg.size();++i) {
             std::copy(ex.coefficient_adjoints.data()+static_cast<size_t>(i)*D,
                       ex.coefficient_adjoints.data()+static_cast<size_t>(i+1)*D,
                       ex.component_coefficient_adjoints.data()+(static_cast<size_t>(i)*readout_count+head)*D);
+            if (TensorMessageEnabled())
+                std::copy(ex.tensor_message_adjoints.data()+static_cast<size_t>(i)*TC,
+                          ex.tensor_message_adjoints.data()+static_cast<size_t>(i+1)*TC,
+                          ex.component_tensor_message_adjoints.data()
+                              +(static_cast<size_t>(i)*readout_count+head)*TC);
+        }
     }
     if (!reference) FinishAdaptiveRadialGateComponents(cfg,neighborhoods,need_forces,need_stress);
 }
@@ -410,6 +559,9 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
                                                 bool need_forces,bool need_stress) {
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int P=ScalarReadoutCoeffCount(),D=ex.rows,Q=ex.scalars,H=ex.harmonics;
+    const int TC=TensorMessageEnabled() ? TensorMessageComponentCount() : 0;
+    const int G=two_layer_gate_k_rank_;
+    const int Lmsg=TensorMessageEnabled() ? tensor_message_lmax_ : 0;
     const int basic_count=static_cast<int>(two_layer_gate_required_basic_indices_.size());
     const int gate_mu_count=static_cast<int>(two_layer_gate_required_mu_indices_.size());
     const int cached_moments=static_cast<int>(two_layer_gate_required_moment_indices_.size());
@@ -431,6 +583,28 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
         for (int q=0;q<Q;++q) {
             double* target=adj.data()+static_cast<size_t>(TwoLayerGateScalarMomentIndexUnchecked(q))*P;
             for (int p=0;p<P;++p) target[p]+=scalar_seeds[p*Q+q];
+        }
+        if (TensorMessageEnabled()) {
+            const double* Bmsg=regression_coeffs.data()+TensorMessageCoeffOffset();
+            const double* heads=ex.component_tensor_message_adjoints.data()
+                + static_cast<size_t>(atom)*P*TC;
+            for (int L=1; L<=Lmsg; ++L)
+                for (int o=0; o<outer_k_rank_; ++o)
+                    for (int m=-L; m<=L; ++m) {
+                        const int tc=TensorComponentLocal(L,o,m,outer_k_rank_);
+                        for (int g=0; g<G; ++g) {
+                            const int dense=tensor_message_gate_moment_dense_indices_[
+                                TensorGateDenseLocal(g,L,m,Lmsg)];
+                            const int moment=two_layer_gate_required_moment_indices_[dense];
+                            double* target=adj.data()+static_cast<size_t>(moment)*P;
+                            const size_t b=
+                                ((static_cast<size_t>(L-1)*outer_k_rank_+o)*G)+g;
+                            const double coeff=Bmsg[b];
+                            if (coeff==0.0) continue;
+                            for (int p=0; p<P; ++p)
+                                target[p]+=coeff*heads[p*TC+tc];
+                        }
+                    }
         }
         const double* cached=two_layer_gate_moment_values_cache_.data()+static_cast<size_t>(atom)*cached_moments;
         for (int k=0;k<cached_moments;++k) gate_values[two_layer_gate_required_moment_indices_[k]]=cached[k];
@@ -506,6 +680,10 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const int atoms=cfg.size(),D=ex.rows,Q=ex.scalars,H=ex.harmonics,R=p_RadialBasis->rb_size;
     const int B=(sh_l_max_+1)*outer_k_rank_;
+    const bool tensor_enabled=TensorMessageEnabled();
+    const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
+    const int G=tensor_enabled ? two_layer_gate_k_rank_ : 0;
+    const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
     const bool species_readout=UsesSpeciesReadout();
     const size_t edge_count=two_layer_edge_offsets_cache_.empty()
         ? 0 : two_layer_edge_offsets_cache_.back();
@@ -516,6 +694,9 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
         ERROR("adaptive radial mixed parameter gradient requires full radial derivative cache");
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     const double* weights=regression_coeffs.data()+AdaptiveRadialWeightOffset();
+    if (tensor_enabled)
+        std::fill(ex.tensor_message_adjoints.begin(),
+                  ex.tensor_message_adjoints.end(),0.0);
     std::vector<Vector3> direction;
     std::vector<double> scalar_t, moment_t;
     if (tangent) {
@@ -532,6 +713,33 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasTrans,atoms,D,Q,1.0,ex.scalar_tangents.data(),Q,weights,Q,0.0,ex.coefficient_tangents.data(),D);
         for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) ex.coefficient_tangents[static_cast<size_t>(i)*D+row]*=amplitude[row];
         ex.coefficient_tangent_adjoints.assign(static_cast<size_t>(atoms)*D,0.0);
+        if (tensor_enabled) {
+            ex.tensor_message_tangents.assign(static_cast<size_t>(atoms)*TC,0.0);
+            ex.tensor_message_tangent_adjoints.assign(static_cast<size_t>(atoms)*TC,0.0);
+            const double* Bmsg=regression_coeffs.data()+TensorMessageCoeffOffset();
+            for (int atom=0; atom<atoms; ++atom) {
+                const double* zt=ex.gate_moment_tangents.data()
+                    + static_cast<size_t>(atom)*alpha_moments_count;
+                double* ht=ex.tensor_message_tangents.data()
+                    + static_cast<size_t>(atom)*TC;
+                for (int L=1; L<=Lmsg; ++L)
+                    for (int o=0; o<outer_k_rank_; ++o)
+                        for (int m=-L; m<=L; ++m) {
+                            double value=0.0;
+                            for (int g=0; g<G; ++g) {
+                                const size_t b=
+                                    ((static_cast<size_t>(L-1)*outer_k_rank_+o)*G)+g;
+                                const int dense=tensor_message_gate_moment_dense_indices_[
+                                    TensorGateDenseLocal(g,L,m,Lmsg)];
+                                value+=Bmsg[b]*zt[two_layer_gate_required_moment_indices_[dense]];
+                            }
+                            ht[TensorComponentLocal(L,o,m,outer_k_rank_)] = value;
+                        }
+            }
+        }
+    } else if (tensor_enabled) {
+        ex.tensor_message_tangents.clear();
+        ex.tensor_message_tangent_adjoints.clear();
     }
     for (int i=0;i<atoms;++i) {
         const Neighborhood& nbh=neighborhoods[i];
@@ -575,6 +783,19 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             const double* ct=tangent ? ex.coefficient_tangents.data()+start : nullptr;
             double* ca=ex.coefficient_adjoints.data()+start;
             double* cat=tangent ? ex.coefficient_tangent_adjoints.data()+start : nullptr;
+            const double* hmsg=tensor_enabled
+                ? ex.tensor_messages.data()+static_cast<size_t>(nbh.inds[j])*TC
+                : nullptr;
+            const double* htmsg=(tensor_enabled && tangent
+                && !ex.tensor_message_tangents.empty())
+                ? ex.tensor_message_tangents.data()+static_cast<size_t>(nbh.inds[j])*TC
+                : nullptr;
+            double* ha=tensor_enabled
+                ? ex.tensor_message_adjoints.data()+static_cast<size_t>(nbh.inds[j])*TC
+                : nullptr;
+            double* hta=(tensor_enabled && tangent)
+                ? ex.tensor_message_tangent_adjoints.data()+static_cast<size_t>(nbh.inds[j])*TC
+                : nullptr;
             const double wr=tangent ? (direction[j][0]*nbh.vecs[j][0]+direction[j][1]*nbh.vecs[j][1]+direction[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
             for (int l=0;l<=sh_l_max_;++l)
                 for (int o=0;o<outer_k_rank_;++o) {
@@ -582,11 +803,31 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
                     double av=0,at=0,at_y=0;
                     for (int m=-l;m<=l;++m) {
                         const int h=l*l+l+m,node=ex.outer_nodes[o*H+h];
-                        av+=ex.adjoints[node]*y[h];
+                        double angular=y[h];
+                        double angular_t=0.0;
+                        int tc=-1;
+                        if (tensor_enabled && l>=1 && l<=Lmsg) {
+                            tc=TensorComponentLocal(l,o,m,outer_k_rank_);
+                            angular+=hmsg[tc];
+                            if (htmsg!=nullptr) angular_t+=htmsg[tc];
+                        }
+                        av+=ex.adjoints[node]*angular;
                         if (tangent) {
-                            at+=ex.tangent_adjoints[node]*y[h];
-                            double yt=0; for (int a=0;a<3;++a) yt+=dy[3*h+a]*direction[j][a];
+                            at+=ex.tangent_adjoints[node]*angular;
+                            double yt=angular_t;
+                            for (int a=0;a<3;++a) yt+=dy[3*h+a]*direction[j][a];
                             at_y+=ex.tangent_adjoints[node]*yt;
+                        }
+                        if (tensor_enabled && l>=1 && l<=Lmsg) {
+                            const double radial=ex.radial_values[edge*B+block];
+                            const double radial_t=tangent
+                                ? ex.radial_tangents[edge*B+block] : 0.0;
+                            const double vi=OuterTypeCoeff(type,mu);
+                            const double vj=OuterTypeCoeff(nbh.types[j],mu);
+                            ha[tc]+=vi*vj*(ex.adjoints[node]*radial
+                                           + (tangent ? ex.tangent_adjoints[node]*radial_t : 0.0));
+                            if (tangent)
+                                hta[tc]+=vi*vj*ex.tangent_adjoints[node]*radial;
                         }
                     }
                     av+=at_y;
@@ -643,12 +884,56 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,atoms,Q,D,1.0,ex.coefficient_tangent_adjoints.data(),D,weights,Q,0.0,ex.scalar_tangent_adjoints.data(),Q);
         }
     }
+    if (tensor_enabled) {
+        ex.tensor_gate_moment_adjoints.resize(alpha_moments_count);
+        if (tangent)
+            ex.tensor_gate_moment_tangent_adjoints.resize(alpha_moments_count);
+    }
+    const int cached_moments=static_cast<int>(two_layer_gate_required_moment_indices_.size());
+    const int tensor_offset=tensor_enabled ? TensorMessageCoeffOffset() : 0;
+    const double* Bmsg=tensor_enabled ? regression_coeffs.data()+tensor_offset : nullptr;
     for (int i=0;i<atoms;++i) {
+        if (tensor_enabled) {
+            std::fill(ex.tensor_gate_moment_adjoints.begin(),
+                      ex.tensor_gate_moment_adjoints.end(),0.0);
+            if (tangent)
+                std::fill(ex.tensor_gate_moment_tangent_adjoints.begin(),
+                          ex.tensor_gate_moment_tangent_adjoints.end(),0.0);
+            const double* z=two_layer_gate_moment_values_cache_.data()
+                + static_cast<size_t>(i)*cached_moments;
+            const double* zt=tangent ? ex.gate_moment_tangents.data()
+                + static_cast<size_t>(i)*alpha_moments_count : nullptr;
+            const double* ha=ex.tensor_message_adjoints.data()+static_cast<size_t>(i)*TC;
+            const double* hta=tangent ? ex.tensor_message_tangent_adjoints.data()
+                + static_cast<size_t>(i)*TC : nullptr;
+            for (int L=1; L<=Lmsg; ++L)
+                for (int o=0; o<outer_k_rank_; ++o)
+                    for (int g=0; g<G; ++g) {
+                        const int b=((L-1)*outer_k_rank_+o)*G+g;
+                        double bgrad=0.0;
+                        for (int m=-L; m<=L; ++m) {
+                            const int tc=TensorComponentLocal(L,o,m,outer_k_rank_);
+                            const int dense=tensor_message_gate_moment_dense_indices_[
+                                TensorGateDenseLocal(g,L,m,Lmsg)];
+                            const int moment=two_layer_gate_required_moment_indices_[dense];
+                            bgrad+=ha[tc]*z[dense];
+                            ex.tensor_gate_moment_adjoints[moment]+=Bmsg[b]*ha[tc];
+                            if (tangent) {
+                                bgrad+=hta[tc]*zt[moment];
+                                ex.tensor_gate_moment_tangent_adjoints[moment]+=Bmsg[b]*hta[tc];
+                            }
+                        }
+                        out[tensor_offset+b]+=bgrad;
+                    }
+        }
         if (tangent) EdgeDirections(neighborhoods[i],i,frc_weights,str_weights,direction);
         AccumulateTwoLayerGateScalarParamGradForScalarSeeds(neighborhoods[i],out,
             ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q,tangent ? direction.data() : nullptr,i,
             tangent ? ex.gate_moment_tangents.data()+static_cast<size_t>(i)*alpha_moments_count : nullptr,
-            tangent ? ex.scalar_tangent_adjoints.data()+static_cast<size_t>(i)*Q : nullptr);
+            tangent ? ex.scalar_tangent_adjoints.data()+static_cast<size_t>(i)*Q : nullptr,
+            nullptr,
+            tensor_enabled && tangent ? ex.tensor_gate_moment_tangent_adjoints.data() : nullptr,
+            tensor_enabled ? ex.tensor_gate_moment_adjoints.data() : nullptr);
     }
 }
 

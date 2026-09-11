@@ -1057,6 +1057,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--readout-mode should be shared or species.");
 	if (readout_mode == "species" && !radial_coefficient_gate)
 		ERROR("--readout-mode=species currently requires --superlinear-mode=radial-coefficient-gate.");
+	const int tensor_message_lmax =
+		StrictNonnegativeIntOpt(opts, "tensor-message-lmax", 0);
+	if (tensor_message_lmax > 2)
+		ERROR("--tensor-message-lmax currently supports only 0, 1, or 2.");
+	if (tensor_message_lmax > 0 && !radial_coefficient_gate)
+		ERROR("--tensor-message-lmax currently requires --superlinear-mode=radial-coefficient-gate.");
+	if (tensor_message_lmax > lmax)
+		ERROR("--tensor-message-lmax cannot exceed --l-max.");
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts,
 		"sh-factor-pruning", (pure_w_channelwise || radial_coefficient_gate)
 			? SHFactorPruning::SameK : SHFactorPruning::QTotal);
@@ -1366,8 +1374,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		outer_k_rank_enabled || two_layer_gate_k_rank_enabled
 		|| two_layer_gate_readout;
 	ofs << "version = "
-	    << (readout_mode == "species" ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")) << "\n";
+	    << (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
@@ -1493,14 +1501,16 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "outer_channel_mode = same-channel\n";
 			ofs << "outer_radial_mode = pure-matrix\n";
 		}
-		if (radial_coefficient_gate) {
-			ofs << "outer_channel_mode = "
-			    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
-			    << "\n";
-			ofs << "outer_radial_mode = adaptive-coefficients\n";
-			if (readout_mode == "species")
-				ofs << "readout_mode = species\n";
-		}
+			if (radial_coefficient_gate) {
+				ofs << "outer_channel_mode = "
+				    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
+				    << "\n";
+				ofs << "outer_radial_mode = adaptive-coefficients\n";
+				if (readout_mode == "species" || tensor_message_lmax > 0)
+					ofs << "readout_mode = " << readout_mode << "\n";
+				if (tensor_message_lmax > 0)
+					ofs << "tensor_message_lmax = " << tensor_message_lmax << "\n";
+			}
 		ofs << "outer_k_rank1_basic_begin = "
 		    << outer_rank_node_offset << "\n";
 		ofs << "outer_k_rank1_basic_count = "
@@ -1755,7 +1765,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "}\n";
 			ofs << "adaptive_radial_weight_count = "
 			    << adaptive_weights << "\n";
-			ofs << "adaptive_radial_weights = {";
+				ofs << "adaptive_radial_weights = {";
 			const double amplitude =
 				1.0 / std::sqrt(static_cast<double>(
 					std::max<size_t>(1, gate_scalar_indices.size())));
@@ -1768,6 +1778,29 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << sign * amplitude * ramp;
 			}
 			ofs << "}\n";
+			if (tensor_message_lmax > 0) {
+				const int tensor_count = CheckedGraphCount(
+					{static_cast<size_t>(tensor_message_lmax),
+					 static_cast<size_t>(outer_k_rank),
+					 static_cast<size_t>(two_layer_gate_k_rank)},
+					"Tensor message coefficient count");
+				ofs << "tensor_message_coeff_count = "
+				    << tensor_count << "\n";
+				ofs << "tensor_message_coeffs = {";
+				for (int i = 0; i < tensor_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 0.0;
+				}
+				ofs << "}\n";
+				ofs << "tensor_message_optimizer_scales = {";
+				for (int i = 0; i < tensor_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					ofs << 1.0;
+				}
+				ofs << "}\n";
+			}
 		}
 		if (two_layer_gate_readout) {
 				const int readout_count =

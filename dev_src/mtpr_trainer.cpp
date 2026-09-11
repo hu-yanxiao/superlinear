@@ -395,6 +395,9 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		static_cast<int>(sums.gate_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(MPI_IN_PLACE, sums.outer_scalar_sq.data(),
 		static_cast<int>(sums.outer_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+	if (model.TensorMessageEnabled())
+		MPI_Allreduce(MPI_IN_PLACE, sums.tensor_irrep_sq.data(),
+			static_cast<int>(sums.tensor_irrep_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(MPI_IN_PLACE, counts, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(MPI_IN_PLACE, &force_sq, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 #endif
@@ -420,6 +423,32 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		for (int q = 0; q < Q; ++q)
 			adaptive_pytorch_physical_scales[model.AdaptiveRadialWeightOffset() + row * Q + q] =
 				rms_scale(sums.gate_scalar_sq[q], counts[0]);
+	}
+	double tensor_scale_min = 1.0, tensor_scale_max = 1.0;
+	if (model.TensorMessageEnabled()) {
+		const int G = model.TwoLayerGateKRank();
+		const int O = model.OuterKRank();
+		const int Lmsg = model.TensorMessageLMax();
+		if (sums.tensor_irrep_sq.size() != static_cast<size_t>(Lmsg) * G)
+			ERROR("Tensor-message calibration has inconsistent irrep statistics");
+		std::vector<double> tensor_scales(model.TensorMessageCoeffCount(), 1.0);
+		tensor_scale_min = std::numeric_limits<double>::infinity();
+		tensor_scale_max = 0.0;
+		for (int l = 1; l <= Lmsg; ++l)
+			for (int g = 0; g < G; ++g) {
+				const double scale = rms_scale(
+					sums.tensor_irrep_sq[(l - 1) * G + g] / (2 * l + 1), counts[0]);
+				tensor_scale_min = std::min(tensor_scale_min, scale);
+				tensor_scale_max = std::max(tensor_scale_max, scale);
+				for (int o = 0; o < O; ++o) {
+					const int local = ((l - 1) * O + o) * G + g;
+					tensor_scales[local] = scale;
+					adaptive_pytorch_physical_scales[model.TensorMessageCoeffOffset() + local] = scale;
+				}
+			}
+		// Only change optimizer coordinates. Physical B, EFS and model
+		// derivatives stay untouched, including nonzero loaded models.
+		model.SetTensorMessageOptimizerScales(tensor_scales);
 	}
 	// Stored head * linear_mults is the physical exported moment coefficient.
 	// RMS and force scales are fixed during the optimization, never detached
@@ -488,6 +517,9 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " scalar_head_l2=1e-5 adaptive_response_l2=1e-4 radial_smooth=1e-6 grid=128"
 		          << " species_readout_bias="
 		          << (model.UsesSpeciesReadout() ? "frozen-gauge" : "trainable")
+		          << " tensor_message_lmax=" << model.TensorMessageLMax()
+		          << " tensor_irrep_scale_min=" << tensor_scale_min
+		          << " tensor_irrep_scale_max=" << tensor_scale_max
 		          << " std=" << std_scaling << " stdd=" << stdd_scaling
 		          << " preserve_physical=" << !fresh << std::endl;
 	}

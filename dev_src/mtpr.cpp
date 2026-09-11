@@ -1798,7 +1798,8 @@ int MLMTPR::TwoLayerGateEdgeL1WeightOffset() const
 		+ CheckedIntProduct(
 			static_cast<size_t>(AdaptiveRadialRowCount()),
 			static_cast<size_t>(TwoLayerGateScalarCount()),
-			"SUS2-SH adaptive radial weight count");
+			"SUS2-SH adaptive radial weight count")
+		+ TensorMessageCoeffCount();
 }
 
 int MLMTPR::AdaptiveRadialRowCount() const
@@ -1811,6 +1812,142 @@ int MLMTPR::AdaptiveRadialRowCount() const
 	if (count > static_cast<size_t>(std::numeric_limits<int>::max()))
 		ERROR("SUS2-SH adaptive radial coefficient row count exceeds supported index range");
 	return static_cast<int>(count);
+}
+
+int MLMTPR::TensorMessageCoeffCount() const
+{
+	if (!TensorMessageEnabled())
+		return 0;
+	if (!OuterUsesAdaptiveRadialCoefficients())
+		ERROR("SUS2-SH tensor message requires adaptive radial coefficients");
+	if (tensor_message_lmax_ < 0 || tensor_message_lmax_ > 2
+	    || tensor_message_lmax_ > sh_l_max_)
+		ERROR("SUS2-SH tensor_message_lmax is out of range");
+	if (outer_k_rank_ <= 0 || two_layer_gate_k_rank_ <= 0)
+		ERROR("SUS2-SH tensor message requires ranked outer and gate channels");
+	return CheckedIntProduct(
+		static_cast<size_t>(tensor_message_lmax_),
+		static_cast<size_t>(outer_k_rank_) * static_cast<size_t>(two_layer_gate_k_rank_),
+		"SUS2-SH tensor message coefficient count");
+}
+
+int MLMTPR::TensorMessageCoeffOffset() const
+{
+	return AdaptiveRadialWeightOffset()
+		+ CheckedIntProduct(
+			static_cast<size_t>(AdaptiveRadialRowCount()),
+			static_cast<size_t>(TwoLayerGateScalarCount()),
+			"SUS2-SH adaptive radial weight count");
+}
+
+int MLMTPR::TensorMessageCoeffIndex(int Lmsg, int outer_channel, int gate_channel) const
+{
+	if (!TensorMessageEnabled())
+		ERROR("SUS2-SH tensor message is not enabled");
+	if (Lmsg < 1 || Lmsg > tensor_message_lmax_)
+		ERROR("SUS2-SH tensor message L index is out of range");
+	if (outer_channel < 0 || outer_channel >= outer_k_rank_)
+		ERROR("SUS2-SH tensor message outer channel index is out of range");
+	if (gate_channel < 0 || gate_channel >= two_layer_gate_k_rank_)
+		ERROR("SUS2-SH tensor message gate channel index is out of range");
+	const size_t local =
+		((static_cast<size_t>(Lmsg - 1) * outer_k_rank_ + outer_channel)
+		 * two_layer_gate_k_rank_ + gate_channel);
+	if (local >= static_cast<size_t>(TensorMessageCoeffCount()))
+		ERROR("SUS2-SH tensor message coefficient index is out of range");
+	return TensorMessageCoeffOffset() + static_cast<int>(local);
+}
+
+int MLMTPR::TensorMessageComponentCount() const
+{
+	if (!TensorMessageEnabled())
+		return 0;
+	return CheckedIntProduct(
+		static_cast<size_t>(outer_k_rank_),
+		static_cast<size_t>(tensor_message_lmax_)
+			* static_cast<size_t>(tensor_message_lmax_ + 2),
+		"SUS2-SH tensor message component count");
+}
+
+int MLMTPR::TensorMessageComponentIndex(int Lmsg, int outer_channel, int m) const
+{
+	if (!TensorMessageEnabled())
+		ERROR("SUS2-SH tensor message is not enabled");
+	if (Lmsg < 1 || Lmsg > tensor_message_lmax_)
+		ERROR("SUS2-SH tensor message component L index is out of range");
+	if (outer_channel < 0 || outer_channel >= outer_k_rank_)
+		ERROR("SUS2-SH tensor message component outer channel index is out of range");
+	if (m < -Lmsg || m > Lmsg)
+		ERROR("SUS2-SH tensor message component m index is out of range");
+	const int prefix = Lmsg * Lmsg - 1;
+	const size_t local =
+		(static_cast<size_t>(prefix) * outer_k_rank_ + outer_channel * (2 * Lmsg + 1)
+		 + (m + Lmsg));
+	if (local >= static_cast<size_t>(TensorMessageComponentCount()))
+		ERROR("SUS2-SH tensor message component index is out of range");
+	return static_cast<int>(local);
+}
+
+double MLMTPR::TensorMessageCoeff(int Lmsg, int outer_channel, int gate_channel) const
+{
+	const int coeff_index = TensorMessageCoeffIndex(Lmsg, outer_channel, gate_channel);
+	if (coeff_index >= 0 && coeff_index < static_cast<int>(regression_coeffs.size()))
+		return regression_coeffs[coeff_index];
+	const int local = coeff_index - TensorMessageCoeffOffset();
+	if (local >= 0 && local < static_cast<int>(tensor_message_coeffs_.size()))
+		return tensor_message_coeffs_[local];
+	ERROR("SUS2-SH tensor message coefficient storage is inconsistent");
+	return 0.0;
+}
+
+double MLMTPR::TensorMessageOptimizerScale(int local) const
+{
+	if (local < 0 || local >= TensorMessageCoeffCount())
+		ERROR("SUS2-SH tensor message optimizer scale index is out of range");
+	if (tensor_message_optimizer_scales_.size()
+	    == static_cast<size_t>(TensorMessageCoeffCount()))
+		return tensor_message_optimizer_scales_[local];
+	return 1.0;
+}
+
+void MLMTPR::SetTensorMessageOptimizerScales(const std::vector<double>& per_coeff)
+{
+	if (per_coeff.size() != static_cast<size_t>(TensorMessageCoeffCount()))
+		ERROR("SUS2-SH tensor message optimizer scale count is inconsistent");
+	for (double scale : per_coeff)
+		if (!std::isfinite(scale) || scale <= 0.0)
+			ERROR("SUS2-SH tensor message optimizer scales must be positive and finite");
+	tensor_message_optimizer_scales_ = per_coeff;
+}
+
+void MLMTPR::AccumulateTensorMessageIrrepSquares(std::vector<double>& sums) const
+{
+	if (!TensorMessageEnabled()) return;
+	const int G = two_layer_gate_k_rank_, Lmsg = tensor_message_lmax_;
+	const int width = (Lmsg + 1) * 2 + 1;
+	const size_t cached = two_layer_gate_required_moment_indices_.size();
+	if (cached == 0 || two_layer_gate_moment_values_cache_.size() % cached != 0
+	    || tensor_message_gate_moment_dense_indices_.size()
+	       != static_cast<size_t>(G * Lmsg * width))
+		ERROR("SUS2-SH tensor message RMS requires a complete prepared gate cache");
+	if (sums.size() != static_cast<size_t>(Lmsg * G))
+		sums.assign(Lmsg * G, 0.0);
+	const size_t atoms = two_layer_gate_moment_values_cache_.size() / cached;
+	for (size_t atom = 0; atom < atoms; ++atom) {
+		const double* z = two_layer_gate_moment_values_cache_.data() + atom * cached;
+		for (int L = 1; L <= Lmsg; ++L)
+			for (int g = 0; g < G; ++g)
+				for (int m = -L; m <= L; ++m) {
+					const int dense = tensor_message_gate_moment_dense_indices_[
+						(g * Lmsg + L - 1) * width + m + Lmsg];
+					if (dense < 0 || static_cast<size_t>(dense) >= cached)
+						ERROR("SUS2-SH tensor message RMS cache index is invalid");
+					const double square = z[dense] * z[dense];
+					if (!std::isfinite(square))
+						ERROR("SUS2-SH tensor message RMS found non-finite moment square");
+					sums[(L - 1) * G + g] += square;
+				}
+	}
 }
 
 int MLMTPR::AdaptiveRadialAmplitudeOffset() const
@@ -2132,6 +2269,30 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
 	if (readout_mode_ == "species" && !adaptive)
 		ERROR("SUS2-SH species readout currently requires adaptive radial coefficients");
+	if (tensor_message_lmax_ < 0)
+		ERROR("SUS2-SH tensor_message_lmax should be non-negative");
+	if (tensor_message_lmax_ > 0) {
+		if (!adaptive)
+			ERROR("SUS2-SH tensor message requires adaptive radial coefficients");
+		if (tensor_message_lmax_ > 2)
+			ERROR("SUS2-SH tensor_message_lmax currently supports only 0, 1, or 2");
+		if (tensor_message_lmax_ > sh_l_max_)
+			ERROR("SUS2-SH tensor_message_lmax cannot exceed sh_l_max");
+		if (!TwoLayerGateKRankEnabled())
+			ERROR("SUS2-SH tensor message requires gate K-rank moments");
+		const int count = TensorMessageCoeffCount();
+		if (count <= 0)
+			ERROR("SUS2-SH tensor message coefficient metadata has inconsistent size");
+		if (!tensor_message_coeffs_.empty()
+		    && tensor_message_coeffs_.size() != static_cast<size_t>(count))
+			ERROR("SUS2-SH tensor message coefficient metadata has inconsistent size");
+		if (!tensor_message_optimizer_scales_.empty()
+		    && tensor_message_optimizer_scales_.size() != static_cast<size_t>(count))
+			ERROR("SUS2-SH tensor message optimizer-scale metadata has inconsistent size");
+		for (double scale : tensor_message_optimizer_scales_)
+			if (!std::isfinite(scale) || scale <= 0.0)
+				ERROR("SUS2-SH tensor message optimizer-scale metadata must be positive");
+	}
 	if (pure && outer_channel_mode_ != "same-channel")
 		ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
 	if (!pure && !adaptive && outer_channel_mode_ == "same-channel")
@@ -4156,6 +4317,10 @@ void MLMTPR::Load(const string& filename)
 	outer_channel_mode_ = "cross-channel";
 	outer_radial_mode_ = "legacy-plus-mixer";
 	readout_mode_ = "shared";
+	tensor_message_lmax_ = 0;
+	tensor_message_coeffs_.clear();
+	tensor_message_optimizer_scales_.clear();
+	tensor_message_gate_moment_dense_indices_.clear();
 
 	ifstream ifs(filename);
 	if (!ifs.is_open())
@@ -4182,6 +4347,35 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
+	bool readout_mode_seen = false;
+	// Reject misplaced/duplicate new semantics even when the legacy ordered
+	// parser would otherwise stop after the old coefficient fields. This scan
+	// is model-load only; normal evaluation never reparses the file.
+	const std::streampos metadata_start = ifs.tellg();
+	int tensor_lmax_fields = 0, tensor_count_fields = 0, tensor_coeff_fields = 0;
+	int tensor_scale_fields = 0, readout_fields = 0;
+	std::string metadata_line;
+	while (std::getline(ifs, metadata_line)) {
+		const size_t equals = metadata_line.find('=');
+		if (equals == std::string::npos) continue;
+		const std::string key = TrimCopy(metadata_line.substr(0, equals));
+		if (key == "readout_mode") ++readout_fields;
+		if (key.compare(0, 15, "tensor_message_") != 0) continue;
+		if (model_file_version != "1.4.0")
+			ERROR("SUS2-SH tensor message fields require model version 1.4.0");
+		if (key == "tensor_message_lmax") ++tensor_lmax_fields;
+		else if (key == "tensor_message_coeff_count") ++tensor_count_fields;
+		else if (key == "tensor_message_coeffs") ++tensor_coeff_fields;
+		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
+		else ERROR("SUS2-SH model contains an unknown tensor message field");
+	}
+	if (model_file_version == "1.4.0"
+	    && (tensor_lmax_fields != 1 || tensor_count_fields != 1
+		|| tensor_coeff_fields != 1 || tensor_scale_fields > 1 || readout_fields != 1))
+		ERROR("SUS2-SH model version 1.4.0 requires unique tensor message fields and explicit readout_mode");
+	ifs.clear();
+	ifs.seekg(metadata_start);
+	if (ifs.fail()) ERROR("Cannot seek while validating SUS2-SH model metadata");
 
 		// name/description reading block
 		ifs >> tmpstr;
@@ -4404,8 +4598,9 @@ void MLMTPR::Load(const string& filename)
 	if (is_sh_potential_
 	    && model_file_version != "1.1.0"
 	    && model_file_version != "1.2.0"
-	    && model_file_version != "1.3.0")
-		ERROR("SUS2-SH model version must be \"1.1.0\", \"1.2.0\", or \"1.3.0\"");
+	    && model_file_version != "1.3.0"
+	    && model_file_version != "1.4.0")
+		ERROR("SUS2-SH model version must be \"1.1.0\", \"1.2.0\", \"1.3.0\", or \"1.4.0\"");
 			if (is_sh_potential_)
 			{
 		if (tmpstr != "sh_l_max")
@@ -4904,6 +5099,15 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr == "readout_mode") {
 			ifs.ignore(2);
 			ifs >> readout_mode_;
+			readout_mode_seen = true;
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "tensor_message_lmax") {
+			ifs.ignore(2);
+			ifs >> tensor_message_lmax_;
+			if (ifs.fail() || tensor_message_lmax_ <= 0 || tensor_message_lmax_ > 2
+			    || tensor_message_lmax_ > sh_l_max_)
+				ERROR("SUS2-SH tensor_message_lmax must be 1 or 2 and not exceed sh_l_max");
 			ifs >> tmpstr;
 		}
 		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
@@ -5468,13 +5672,50 @@ void MLMTPR::Load(const string& filename)
 							ifs.ignore(1000, '\n');
 							if (!(ifs >> tmpstr))
 								tmpstr = "";
-						} else {
-							adaptive_radial_weight_optimizer_scales_.assign(
-								TwoLayerGateScalarCount(), 1.0);
+							} else {
+								adaptive_radial_weight_optimizer_scales_.assign(
+									TwoLayerGateScalarCount(), 1.0);
+							}
+							if (tmpstr == "tensor_message_coeff_count") {
+								if (!TensorMessageEnabled())
+									ERROR("SUS2-SH found tensor message coefficients without tensor_message_lmax");
+								if (model_file_version != "1.4.0")
+									ERROR("SUS2-SH tensor message coefficients require model version 1.4.0");
+								ifs.ignore(2);
+								int tensor_count = 0;
+								ifs >> tensor_count;
+								if (tensor_count != TensorMessageCoeffCount())
+									ERROR("SUS2-SH tensor message coefficient count is inconsistent");
+								ifs >> tmpstr;
+								if (tmpstr != "tensor_message_coeffs")
+									ERROR("SUS2-SH tensor message model is missing coefficients");
+								ReadDoubleListExact(
+									ifs,
+									tensor_message_coeffs_,
+									tensor_count,
+									"tensor_message_coeffs");
+								ifs.ignore(1000, '\n');
+								if (!(ifs >> tmpstr))
+									tmpstr = "";
+								if (tmpstr == "tensor_message_optimizer_scales") {
+									ReadDoubleListExact(
+										ifs,
+										tensor_message_optimizer_scales_,
+										tensor_count,
+										"tensor_message_optimizer_scales");
+									ifs.ignore(1000, '\n');
+									if (!(ifs >> tmpstr))
+										tmpstr = "";
+								} else {
+									tensor_message_optimizer_scales_.assign(tensor_count, 1.0);
+								}
+								ValidateOuterModeConfiguration();
+							} else if (TensorMessageEnabled()) {
+								ERROR("SUS2-SH tensor message model is missing tensor_message_coeff_count");
+							}
+						} else if (OuterUsesAdaptiveRadialCoefficients()) {
+							ERROR("SUS2-SH adaptive radial coefficient model is missing adaptive radial arrays");
 						}
-					} else if (OuterUsesAdaptiveRadialCoefficients()) {
-						ERROR("SUS2-SH adaptive radial coefficient model is missing adaptive radial arrays");
-					}
 				if (tmpstr == "two_layer_gate_readout_enabled") {
 				ifs.ignore(2);
 				ifs >> bool_token;
@@ -5802,8 +6043,20 @@ void MLMTPR::Load(const string& filename)
 			ValidateOuterModeConfiguration();
 			if (model_file_version == "1.3.0" && readout_mode_ != "species")
 				ERROR("SUS2-SH model version 1.3.0 requires readout_mode = species");
-			if (readout_mode_ == "species" && model_file_version != "1.3.0")
-				ERROR("SUS2-SH species readout requires model version 1.3.0");
+			if (readout_mode_ == "species"
+			    && model_file_version != "1.3.0"
+			    && model_file_version != "1.4.0")
+				ERROR("SUS2-SH species readout requires model version 1.3.0 or 1.4.0");
+			if (model_file_version == "1.4.0") {
+				if (!readout_mode_seen)
+					ERROR("SUS2-SH model version 1.4.0 requires explicit readout_mode");
+				if (tensor_message_lmax_ <= 0)
+					ERROR("SUS2-SH model version 1.4.0 requires tensor_message_lmax > 0");
+				if (readout_mode_ != "shared" && readout_mode_ != "species")
+					ERROR("SUS2-SH model version 1.4.0 requires explicit readout_mode");
+			} else if (tensor_message_lmax_ != 0) {
+				ERROR("SUS2-SH tensor message requires model version 1.4.0");
+			}
 			if (OuterKRankEnabled() && outer_k_rank_ == 1
 			    && !OuterUsesPureRadialMatrix() && !OuterUsesAdaptiveRadialCoefficients()) {
 			// A rank-1 K contraction has no independent matrix degree of
@@ -6294,8 +6547,8 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (UsesSpeciesReadout() ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")) << '\n';
+	    << (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -6463,12 +6716,14 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
-		if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
-			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
-			ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-			if (UsesSpeciesReadout())
-				ofs << "readout_mode = species\n";
-		}
+			if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
+				ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
+				if (UsesSpeciesReadout() || TensorMessageEnabled())
+					ofs << "readout_mode = " << readout_mode_ << '\n';
+				if (TensorMessageEnabled())
+					ofs << "tensor_message_lmax = " << tensor_message_lmax_ << '\n';
+			}
 		ofs << "outer_k_rank1_basic_begin = " << outer_k_rank1_basic_begin_ << '\n';
 		ofs << "outer_k_rank1_basic_count = " << outer_k_rank1_basic_count_ << '\n';
 		ofs << "outer_k_rank1_product_begin = " << outer_k_rank1_product_begin_ << '\n';
@@ -6708,14 +6963,33 @@ void MLMTPR::Save(const string& filename)
 						ofs << AdaptiveRadialAmplitudeOptimizerScale(row);
 					}
 					ofs << "}\n";
-					ofs << "adaptive_radial_weight_optimizer_scales = {";
-					for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
-						if (q > 0)
-							ofs << ", ";
-						ofs << AdaptiveRadialWeightOptimizerScale(q);
+						ofs << "adaptive_radial_weight_optimizer_scales = {";
+						for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+							if (q > 0)
+								ofs << ", ";
+							ofs << AdaptiveRadialWeightOptimizerScale(q);
+						}
+						ofs << "}\n";
+						if (TensorMessageEnabled()) {
+							const int tensor_count = TensorMessageCoeffCount();
+							ofs << "tensor_message_coeff_count = "
+							    << tensor_count << '\n';
+							ofs << "tensor_message_coeffs = {";
+							for (int i = 0; i < tensor_count; ++i) {
+								if (i > 0)
+									ofs << ", ";
+								ofs << regression_coeffs[TensorMessageCoeffOffset() + i];
+							}
+							ofs << "}\n";
+							ofs << "tensor_message_optimizer_scales = {";
+							for (int i = 0; i < tensor_count; ++i) {
+								if (i > 0)
+									ofs << ", ";
+								ofs << TensorMessageOptimizerScale(i);
+							}
+							ofs << "}\n";
+						}
 					}
-					ofs << "}\n";
-				}
 				if (TwoLayerGateReadoutEnabled()) {
 				const int readout_count = TwoLayerGateReadoutCoeffCount();
 			if (readout_count != TwoLayerGateScalarCount())
@@ -10622,9 +10896,8 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 	                           bool fixed_center_readout_columns)
 {
 	if (OuterUsesAdaptiveRadialCoefficients()) {
-		if (fixed_center_readout_columns)
-			ERROR("SUS2-SH adaptive radial coefficients do not support fixed-center readout component columns");
-		CalcAdaptiveRadialComponents(cfg, neighborhoods, need_forces, need_stress);
+		CalcAdaptiveRadialComponents(cfg, neighborhoods, need_forces, need_stress,
+		                            fixed_center_readout_columns);
 		return;
 	}
 	int n = LinearEquationCount();
@@ -10905,9 +11178,8 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 	                         bool fixed_center_readout_columns)
 {
 	if (OuterUsesAdaptiveRadialCoefficients()) {
-		if (fixed_center_readout_columns)
-			ERROR("SUS2-SH adaptive radial coefficients do not support fixed-center readout component columns");
-		CalcAdaptiveRadialComponents(cfg, neighborhoods, false, false);
+		CalcAdaptiveRadialComponents(cfg, neighborhoods, false, false,
+		                            fixed_center_readout_columns);
 		return;
 	}
 	int n = LinearEquationCount();
@@ -11705,13 +11977,30 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 				ERROR("SUS2-SH two-layer gate scalar moment is out of range");
 			two_layer_gate_scalar_moment_indices_[q] = moment;
 		}
-	} else if (two_layer_gate_scalar_moment_indices_.size()
-	           != two_layer_gate_scalar_indices_.size()) {
-		ERROR("SUS2-SH separate gate graph moment metadata has inconsistent sizes");
-	}
+		} else if (two_layer_gate_scalar_moment_indices_.size()
+		           != two_layer_gate_scalar_indices_.size()) {
+			ERROR("SUS2-SH separate gate graph moment metadata has inconsistent sizes");
+		}
+		if (TensorMessageEnabled()) {
+			if (!TwoLayerGateKRankEnabled())
+				ERROR("SUS2-SH tensor message requires gate K-rank moments");
+			if (tensor_message_lmax_ > sh_l_max_)
+				ERROR("SUS2-SH tensor_message_lmax cannot exceed sh_l_max");
+			if (two_layer_gate_required_moments_.size()
+			    != static_cast<size_t>(alpha_moments_count))
+				two_layer_gate_required_moments_.assign(alpha_moments_count, 0);
+			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
+				for (int l = 1; l <= tensor_message_lmax_; ++l)
+					for (int m = -l; m <= l; ++m) {
+						const int moment = TwoLayerGateKRankBasicIndex(g, l, m);
+						if (moment < 0 || moment >= alpha_moments_count)
+							ERROR("SUS2-SH tensor message gate moment is out of range");
+						two_layer_gate_required_moments_[moment] = 1;
+					}
+		}
 
-	BuildGateLayerProductProgram(
-		two_layer_gate_scalar_indices_,
+		BuildGateLayerProductProgram(
+			two_layer_gate_scalar_indices_,
 		&two_layer_gate_scalar_moment_indices_,
 		two_layer_gate_required_moments_,
 		two_layer_gate_required_moment_indices_,
@@ -11732,11 +12021,11 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 			    || product_index >= outer_k_rank1_product_begin_)
 				ERROR("SUS2-SH outer K-rank gate product escaped the preserved raw graph");
 	}
-	if (TwoLayerGateEdgeL1Enabled()) {
-		for (int source = 0; source < TwoLayerGateEdgeL1SourceCount(); ++source) {
-			const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
-			for (int m = 0; m < 3; ++m)
-				two_layer_gate_required_moments_[base + m] = 1;
+		if (TwoLayerGateEdgeL1Enabled()) {
+			for (int source = 0; source < TwoLayerGateEdgeL1SourceCount(); ++source) {
+				const int base = TwoLayerGateEdgeL1SourceMomentIndex(source);
+				for (int m = 0; m < 3; ++m)
+					two_layer_gate_required_moments_[base + m] = 1;
 		}
 		BuildGateLayerProductProgram(
 			std::vector<int>(),
@@ -11746,11 +12035,37 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 			two_layer_gate_required_basic_indices_,
 			two_layer_gate_required_basic_dense_mu_indices_,
 			two_layer_gate_required_product_indices_,
-			two_layer_gate_required_mu_indices_,
-			two_layer_gate_mu_dense_index_,
-			two_layer_gate_required_radial_eval_blocks_);
+				two_layer_gate_required_mu_indices_,
+				two_layer_gate_mu_dense_index_,
+				two_layer_gate_required_radial_eval_blocks_);
+		}
+		tensor_message_gate_moment_dense_indices_.clear();
+		if (TensorMessageEnabled()) {
+			tensor_message_gate_moment_dense_indices_.assign(
+				static_cast<size_t>(two_layer_gate_k_rank_)
+				* static_cast<size_t>(tensor_message_lmax_)
+				* static_cast<size_t>((tensor_message_lmax_ + 1) * 2 + 1),
+				-1);
+			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
+				for (int l = 1; l <= tensor_message_lmax_; ++l)
+					for (int m = -l; m <= l; ++m) {
+						const int moment = TwoLayerGateKRankBasicIndex(g, l, m);
+						const std::vector<int>::const_iterator it =
+							std::find(two_layer_gate_required_moment_indices_.begin(),
+							          two_layer_gate_required_moment_indices_.end(),
+							          moment);
+						if (it == two_layer_gate_required_moment_indices_.end())
+							ERROR("SUS2-SH tensor message moment was not cached");
+						const size_t local =
+							((static_cast<size_t>(g) * tensor_message_lmax_
+							  + static_cast<size_t>(l - 1))
+							 * static_cast<size_t>((tensor_message_lmax_ + 1) * 2 + 1))
+							+ static_cast<size_t>(m + tensor_message_lmax_);
+						tensor_message_gate_moment_dense_indices_[local] =
+							static_cast<int>(it - two_layer_gate_required_moment_indices_.begin());
+					}
+		}
 	}
-}
 
 void MLMTPR::BuildSecondLayerGateProductProgram()
 {

@@ -515,9 +515,10 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"body4-l-max",
 		"body5-l-max",
 		"body6-l-max",
-		"sh-factor-pruning",
-		"readout-mode",
-		"write-sh-scalar-info",
+			"sh-factor-pruning",
+			"readout-mode",
+			"tensor-message-lmax",
+			"write-sh-scalar-info",
 		"cutoff",
 		"max-dist",
 		"min-dist",
@@ -2433,12 +2434,18 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	        || ((requested_superlinear_mode == "radial-coefficient-gate")
 	            != mtpr.OuterUsesAdaptiveRadialCoefficients())))
 		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
-	if (!opts["readout-mode"].empty()) {
-		if (opts["readout-mode"] != "shared" && opts["readout-mode"] != "species")
-			ERROR("--readout-mode should be shared or species");
-		if (opts["readout-mode"] != mtpr.ReadoutMode())
-			ERROR("--readout-mode must match the loaded model; use the explicit conversion command instead of changing it during resume");
-	}
+		if (!opts["readout-mode"].empty()) {
+			if (opts["readout-mode"] != "shared" && opts["readout-mode"] != "species")
+				ERROR("--readout-mode should be shared or species");
+			if (opts["readout-mode"] != mtpr.ReadoutMode())
+				ERROR("--readout-mode must match the loaded model; use the explicit conversion command instead of changing it during resume");
+		}
+		if (!opts["tensor-message-lmax"].empty()) {
+			const int requested_tensor_message_lmax =
+				ParseOptionalNonnegativeInteger(opts, "tensor-message-lmax");
+			if (requested_tensor_message_lmax != mtpr.TensorMessageLMax())
+				ERROR("--tensor-message-lmax must match the loaded model; recreate or explicitly convert topology instead of changing it during resume");
+		}
 	if (mtpr.OuterUsesPureRadialMatrix()
 	    || mtpr.OuterUsesAdaptiveRadialCoefficients()) {
 		const std::string loaded_outer_factor_pruning =
