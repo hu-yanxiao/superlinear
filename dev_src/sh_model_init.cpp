@@ -156,6 +156,16 @@ bool HasOpt(const std::map<std::string, std::string>& opts, const std::string& n
 	return it != opts.end() && !it->second.empty();
 }
 
+bool BoolOpt(const std::map<std::string, std::string>& opts, const std::string& name, bool fallback)
+{
+	const auto found = opts.find(name);
+	if (found == opts.end()) return fallback;
+	if (found->second.empty() || found->second == "true" || found->second == "1") return true;
+	if (found->second == "false" || found->second == "0") return false;
+	ERROR("--" + name + " must be true or false");
+	return fallback;
+}
+
 std::string CanonicalRadialCutoffType(const std::string& value)
 {
 	if (value == "legacy" || value == "quadratic")
@@ -661,9 +671,9 @@ public:
 		return stored;
 	}
 
-	void Build()
+	void Build(int minimum_l = 0)
 	{
-		for (int l = lmax_; l >= 0; --l) {
+		for (int l = lmax_; l >= minimum_l; --l) {
 			for (int k = kmax_ - 1; k >= 0; --k) {
 				QIndex q;
 				q.l = l;
@@ -1025,6 +1035,158 @@ public:
 
 } // namespace
 
+JointReadoutTopology BuildJointReadoutTopology(int l_max, int body_order,
+                                               const std::vector<int>& body_l_max)
+{
+    if (l_max < 1 || l_max > 6 || body_order < 2 || body_order > 6
+        || body_l_max.size() != 7)
+        ERROR("SUS2-SH joint readout requires l_max >= 1 and complete outer body metadata");
+    for (int b = 2; b <= (body_order >= 6 ? 6 : 5); ++b)
+        if (body_l_max[b] < 0 || body_l_max[b] > l_max)
+            ERROR("SUS2-SH joint readout body_l_max is invalid");
+    SHGraphBuilder::CGCache cache;
+    SHGraphBuilder builder(l_max, 2, SHFactorPruning::QTotal, &cache);
+    builder.Build(1); // Exclude l=0 leaves, not just their numerical values.
+    builder.AddAllBasics();
+    builder.AddScalars(body_order, body_l_max);
+    JointReadoutTopology result;
+    result.l_max = l_max; result.body_order = body_order;
+    result.body_l_max = body_l_max; result.moments_count = builder.node_count_;
+    for (const BasicIndex& b : builder.basic_) result.basic.push_back({{b.k, b.l, b.m}});
+    for (const Product& p : builder.products_)
+        result.products.push_back({p.left, p.right, p.target, p.coeff});
+    result.scalar_mapping = builder.scalars_;
+    for (const ScalarSpec& s : builder.scalar_infos_)
+        result.scalar_info.push_back({{s.body_order, s.q0, s.q1, s.q2, s.q3, s.q4, s.intermediate_l}});
+    return result;
+}
+
+void WriteJointReadoutSection(std::ostream& out, const JointReadoutTopology& g,
+                             const std::vector<double>& coefficients,
+                             const std::vector<double>& scales)
+{
+    out << "joint_readout_enabled = true\n"
+        << "joint_readout_l_max = " << g.l_max << '\n'
+        << "joint_readout_body_order = " << g.body_order << '\n'
+        << "joint_readout_body_l_max = {";
+    for (int b = 2; b <= (g.body_order >= 6 ? 6 : 5); ++b)
+        out << (b == 2 ? "" : ", ") << g.body_l_max[b];
+    out << "}\njoint_readout_alpha_moments_count = " << g.moments_count
+        << "\njoint_readout_alpha_index_basic_count = " << g.basic.size()
+        << "\njoint_readout_alpha_index_basic = {";
+    for (size_t i = 0; i < g.basic.size(); ++i) {
+        const auto& b = g.basic[i];
+        out << (i ? ", " : "") << '{' << b[0] << ", " << b[1] << ", " << b[2] << '}';
+    }
+    out << "}\njoint_readout_sh_product_count = " << g.products.size()
+        << "\njoint_readout_sh_products = {";
+    for (size_t i = 0; i < g.products.size(); ++i) {
+        const auto& p = g.products[i];
+        out << (i ? ", " : "") << '{' << p.left << ", " << p.right << ", " << p.target << ", " << p.coeff << '}';
+    }
+    out << "}\njoint_readout_scalar_count = " << g.scalar_mapping.size()
+        << "\njoint_readout_scalar_mapping = {";
+    for (size_t i = 0; i < g.scalar_mapping.size(); ++i)
+        out << (i ? ", " : "") << g.scalar_mapping[i];
+    out << "}\njoint_readout_scalar_info_count = " << g.scalar_info.size()
+        << "\njoint_readout_scalar_info = {";
+    for (size_t i = 0; i < g.scalar_info.size(); ++i) {
+        out << (i ? ", {" : "{");
+        for (int j = 0; j < 7; ++j) out << (j ? ", " : "") << g.scalar_info[i][j];
+        out << '}';
+    }
+    out << "}\njoint_readout_coeff_count = " << coefficients.size()
+        << "\njoint_readout_coeffs = {";
+    for (size_t i = 0; i < coefficients.size(); ++i) out << (i ? ", " : "") << coefficients[i];
+    out << "}\njoint_readout_optimizer_scales = {";
+    for (size_t i = 0; i < scales.size(); ++i) out << (i ? ", " : "") << scales[i];
+    out << "}\n";
+}
+
+void ReadJointReadoutSection(std::istream& in, JointReadoutTopology& g,
+                            std::vector<double>& coefficients, std::vector<double>& scales,
+                            int species_count, bool species_readout,
+                            int l_max, int body_order, const std::vector<int>& body_l_max)
+{
+    // Compare a serialized graph to the canonical graph. This prevents an
+    // arbitrary/malformed invariant graph from silently changing semantics.
+    const JointReadoutTopology expected = BuildJointReadoutTopology(l_max, body_order, body_l_max);
+    auto character = [&](char wanted) {
+        char found = 0; if (!(in >> found) || found != wanted)
+            ERROR("SUS2-SH malformed joint readout list or assignment");
+    };
+    auto field = [&](const char* wanted) {
+        std::string name; if (!(in >> name) || name != wanted)
+            ERROR(std::string("SUS2-SH joint readout missing ordered field ") + wanted);
+        character('=');
+    };
+    auto integer = [&](int wanted) {
+        int value = -1; if (!(in >> value) || value != wanted)
+            ERROR("SUS2-SH joint readout graph/count metadata differs from canonical graph");
+    };
+    auto finite = [&]() {
+        double value = 0.0; if (!(in >> value) || !std::isfinite(value))
+            ERROR("SUS2-SH joint readout coefficient is not finite");
+        return value;
+    };
+    character('='); std::string enabled;
+    if (!(in >> enabled) || enabled != "true") ERROR("SUS2-SH joint readout field must be true");
+    field("joint_readout_l_max"); integer(l_max);
+    field("joint_readout_body_order"); integer(body_order);
+    field("joint_readout_body_l_max"); character('{');
+    for (int b = 2; b <= (body_order >= 6 ? 6 : 5); ++b) {
+        if (b != 2) character(','); integer(body_l_max[b]);
+    }
+    character('}');
+    field("joint_readout_alpha_moments_count"); integer(expected.moments_count);
+    field("joint_readout_alpha_index_basic_count"); integer(expected.basic.size());
+    field("joint_readout_alpha_index_basic"); character('{');
+    for (size_t i = 0; i < expected.basic.size(); ++i) {
+        if (i) character(','); character('{');
+        for (int j = 0; j < 3; ++j) { if (j) character(','); integer(expected.basic[i][j]); }
+        character('}');
+    }
+    character('}');
+    field("joint_readout_sh_product_count"); integer(expected.products.size());
+    field("joint_readout_sh_products"); character('{');
+    g = expected;
+    for (size_t i = 0; i < expected.products.size(); ++i) {
+        if (i) character(','); character('{'); const auto& p = expected.products[i];
+        integer(p.left); character(','); integer(p.right); character(','); integer(p.target); character(',');
+        const double c = finite();
+        if (std::abs(c - p.coeff) > 2e-13 * std::max(1.0, std::abs(p.coeff)))
+            ERROR("SUS2-SH joint readout coupling differs from the canonical CG coefficient");
+        g.products[i].coeff = c; character('}');
+    }
+    character('}');
+    field("joint_readout_scalar_count"); integer(expected.scalar_mapping.size());
+    field("joint_readout_scalar_mapping"); character('{');
+    for (size_t i = 0; i < expected.scalar_mapping.size(); ++i) {
+        if (i) character(','); integer(expected.scalar_mapping[i]);
+    }
+    character('}');
+    field("joint_readout_scalar_info_count"); integer(expected.scalar_info.size());
+    field("joint_readout_scalar_info"); character('{');
+    for (size_t i = 0; i < expected.scalar_info.size(); ++i) {
+        if (i) character(','); character('{');
+        for (int j = 0; j < 7; ++j) { if (j) character(','); integer(expected.scalar_info[i][j]); }
+        character('}');
+    }
+    character('}');
+    const size_t count = expected.scalar_mapping.size() * (species_readout ? species_count : 1);
+    if (count > static_cast<size_t>(std::numeric_limits<int>::max())) ERROR("Joint readout count overflow");
+    field("joint_readout_coeff_count"); integer(count);
+    field("joint_readout_coeffs"); character('{'); coefficients.resize(count);
+    for (size_t i = 0; i < count; ++i) { if (i) character(','); coefficients[i] = finite(); }
+    character('}');
+    field("joint_readout_optimizer_scales"); character('{'); scales.resize(expected.scalar_mapping.size());
+    for (size_t i = 0; i < scales.size(); ++i) {
+        if (i) character(','); scales[i] = finite();
+        if (scales[i] <= 0.0) ERROR("SUS2-SH joint readout optimizer scales must be positive");
+    }
+    character('}');
+}
+
 void WriteSphericalHarmonicModel(const std::string& filename,
                                  const std::map<std::string, std::string>& opts)
 {
@@ -1053,6 +1215,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool radial_coefficient_gate =
 		superlinear_mode == "radial-coefficient-gate";
 	const std::string readout_mode = StringOpt(opts, "readout-mode", "shared");
+	const bool joint_readout = BoolOpt(opts, "joint-readout", false);
+	if (joint_readout && (!radial_coefficient_gate || lmax < 1))
+		ERROR("--joint-readout requires adaptive radial coefficients with l-max >= 1");
 	if (readout_mode != "shared" && readout_mode != "species")
 		ERROR("--readout-mode should be shared or species.");
 	if (readout_mode == "species" && !radial_coefficient_gate)
@@ -1383,8 +1548,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		outer_k_rank_enabled || two_layer_gate_k_rank_enabled
 		|| two_layer_gate_readout;
 	ofs << "version = "
-	    << (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))) << "\n";
+	    << (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
@@ -1515,14 +1680,20 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
 				    << "\n";
 				ofs << "outer_radial_mode = adaptive-coefficients\n";
-				if (readout_mode == "species" || tensor_message_lmax > 0 || adaptive_extended)
+				if (readout_mode == "species" || tensor_message_lmax > 0 || adaptive_extended || joint_readout)
 					ofs << "readout_mode = " << readout_mode << "\n";
-				if (adaptive_extended) {
+				if (adaptive_extended || joint_readout) {
 					ofs << "adaptive_radial_projection = " << adaptive_projection << "\n";
 					ofs << "adaptive_radial_amplitude_mode = " << adaptive_amplitude_mode << "\n";
 				}
-				if (tensor_message_lmax > 0 || adaptive_extended)
+				if (tensor_message_lmax > 0 || adaptive_extended || joint_readout)
 					ofs << "tensor_message_lmax = " << tensor_message_lmax << "\n";
+				if (joint_readout) {
+					const auto joint = BuildJointReadoutTopology(lmax, body_order, body_lmax);
+					WriteJointReadoutSection(ofs, joint,
+						std::vector<double>(joint.scalar_mapping.size() * (readout_mode == "species" ? species_count : 1), 0.0),
+						std::vector<double>(joint.scalar_mapping.size(), 1.0));
+				}
 			}
 		ofs << "outer_k_rank1_basic_begin = "
 		    << outer_rank_node_offset << "\n";

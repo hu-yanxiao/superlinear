@@ -210,6 +210,19 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
         ex.tensor_messages.clear();
         ex.tensor_message_adjoints.clear();
     }
+    if (JointReadoutEnabled()) {
+        const int count = joint_readout_graph_.moments_count;
+        const int cached = static_cast<int>(two_layer_gate_required_moment_indices_.size());
+        if (two_layer_gate_moment_values_cache_.size() != static_cast<size_t>(atoms)*cached
+            || joint_readout_gate_dense_indices_.size() != static_cast<size_t>(two_layer_gate_k_rank_)*ex.harmonics)
+            ERROR("SUS2-SH joint readout requires all post-rank gate primitive values");
+        ex.joint_values.resize(count); ex.joint_adjoints.resize(count);
+        if (parameters) { ex.joint_tangents.resize(count); ex.joint_tangent_adjoints.resize(count); }
+        if (derivatives) ex.joint_gate_adjoints.assign(static_cast<size_t>(atoms)*two_layer_gate_k_rank_*ex.harmonics, 0.0);
+        else ex.joint_gate_adjoints.clear();
+        if (parameters) ex.joint_gate_tangent_adjoints.assign(static_cast<size_t>(atoms)*two_layer_gate_k_rank_*ex.harmonics, 0.0);
+        else ex.joint_gate_tangent_adjoints.clear();
+    }
 }
 
 void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
@@ -285,6 +298,82 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
         const SHProduct& t=sh_products_[p];
         ex.values[t.target]+=t.coeff*ex.values[t.left]*ex.values[t.right];
         if (tangent) ex.tangents[t.target]+=t.coeff*(ex.tangents[t.left]*ex.values[t.right]+ex.values[t.left]*ex.tangents[t.right]);
+    }
+    if (JointReadoutEnabled()) ForwardJointReadout(atom,tangent);
+}
+
+void MLMTPR::ForwardJointReadout(int atom, bool tangent) {
+    AdaptiveRadialExecution& ex=adaptive_radial_execution_;
+    const int H=ex.harmonics,G=two_layer_gate_k_rank_,O=outer_k_rank_;
+    const int cached=static_cast<int>(two_layer_gate_required_moment_indices_.size());
+    const double* z=two_layer_gate_moment_values_cache_.data()+static_cast<size_t>(atom)*cached;
+    const double* zt=tangent ? ex.gate_moment_tangents.data()+static_cast<size_t>(atom)*alpha_moments_count : nullptr;
+    std::fill(ex.joint_values.begin(),ex.joint_values.end(),0.0);
+    if (tangent) std::fill(ex.joint_tangents.begin(),ex.joint_tangents.end(),0.0);
+    for (size_t i=0;i<joint_readout_graph_.basic.size();++i) {
+        const auto& b=joint_readout_graph_.basic[i];
+        const int h=b[1]*b[1]+b[1]+b[2];
+        double v=0.0,t=0.0;
+        if (b[0]==0) {
+            for (int o=0;o<O;++o) {
+                const int node=ex.outer_nodes[o*H+h];
+                v+=ex.values[node]; if(tangent) t+=ex.tangents[node];
+            }
+            v/=O; t/=O;
+        } else {
+            for (int g=0;g<G;++g) {
+                const int dense=joint_readout_gate_dense_indices_[g*H+h];
+                v+=z[dense]; if(tangent) t+=zt[two_layer_gate_required_moment_indices_[dense]];
+            }
+            v/=G; t/=G;
+        }
+        ex.joint_values[i]=v; if(tangent) ex.joint_tangents[i]=t;
+    }
+    for (const auto& p:joint_readout_graph_.products) {
+        ex.joint_values[p.target]+=p.coeff*ex.joint_values[p.left]*ex.joint_values[p.right];
+        if(tangent) ex.joint_tangents[p.target]+=p.coeff*(ex.joint_tangents[p.left]*ex.joint_values[p.right]+ex.joint_values[p.left]*ex.joint_tangents[p.right]);
+    }
+}
+
+void MLMTPR::AccumulateJointReadoutScalarSquares(std::vector<double>& sums) const {
+    if (!JointReadoutEnabled()) return;
+    if (sums.empty()) sums.assign(JointReadoutScalarCount(),0.0);
+    if (static_cast<int>(sums.size())!=JointReadoutScalarCount()) ERROR("Joint readout RMS size mismatch");
+    for (int q=0;q<JointReadoutScalarCount();++q) {
+        const double value=adaptive_radial_execution_.joint_values[joint_readout_graph_.scalar_mapping[q]];
+        if(!std::isfinite(value) || !std::isfinite(value*value) || !std::isfinite(sums[q]+value*value))
+            ERROR("SUS2-SH joint readout fixed-RMS calibration encountered a non-finite feature square");
+        sums[q]+=value*value;
+    }
+}
+
+void MLMTPR::ReverseJointReadout(int atom, bool tangent) {
+    AdaptiveRadialExecution& ex=adaptive_radial_execution_;
+    for (int i=static_cast<int>(joint_readout_graph_.products.size())-1;i>=0;--i) {
+        const auto& p=joint_readout_graph_.products[i];
+        const double a=p.coeff*ex.joint_adjoints[p.target];
+        const double at=tangent ? p.coeff*ex.joint_tangent_adjoints[p.target] : 0.0;
+        ex.joint_adjoints[p.left]+=a*ex.joint_values[p.right]+(tangent ? at*ex.joint_tangents[p.right] : 0.0);
+        ex.joint_adjoints[p.right]+=a*ex.joint_values[p.left]+(tangent ? at*ex.joint_tangents[p.left] : 0.0);
+        if(tangent) {
+            ex.joint_tangent_adjoints[p.left]+=at*ex.joint_values[p.right];
+            ex.joint_tangent_adjoints[p.right]+=at*ex.joint_values[p.left];
+        }
+    }
+    const int H=ex.harmonics,G=two_layer_gate_k_rank_,O=outer_k_rank_;
+    const size_t start=static_cast<size_t>(atom)*G*H;
+    for(size_t i=0;i<joint_readout_graph_.basic.size();++i) {
+        const auto& b=joint_readout_graph_.basic[i]; const int h=b[1]*b[1]+b[1]+b[2];
+        const double inv=1.0/(b[0]==0 ? O : G);
+        const double a=ex.joint_adjoints[i]*inv;
+        const double at=tangent ? ex.joint_tangent_adjoints[i]*inv : 0.0;
+        if(b[0]==0) for(int o=0;o<O;++o) {
+            const int node=ex.outer_nodes[o*H+h]; ex.adjoints[node]+=a;
+            if(tangent) ex.tangent_adjoints[node]+=at;
+        } else for(int g=0;g<G;++g) {
+            ex.joint_gate_adjoints[start+g*H+h]+=a;
+            if(tangent) ex.joint_gate_tangent_adjoints[start+g*H+h]+=at;
+        }
     }
 }
 
@@ -402,18 +491,26 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
         cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,atoms,Q,P,1.0,
                     seeds,P,regression_coeffs.data()+AdaptiveRadialWeightOffset(),Q,
                     0.0,ex.scalar_adjoints.data(),Q);
-    if (tensor_enabled)
+    if (tensor_enabled || JointReadoutEnabled())
         ex.tensor_gate_moment_adjoints.resize(alpha_moments_count);
     else
         ex.tensor_gate_moment_adjoints.clear();
     std::vector<Vector3> derivatives;
     for (int i=0;i<atoms;++i) {
         const Neighborhood& nbh=neighborhoods[i];
+        if (tensor_enabled || JointReadoutEnabled()) {
+            std::fill(ex.tensor_gate_moment_adjoints.begin(),ex.tensor_gate_moment_adjoints.end(),0.0);
+        }
+        if (JointReadoutEnabled()) {
+            const size_t start=static_cast<size_t>(i)*G*ex.harmonics;
+            for(int g=0;g<G;++g) for(int h=1;h<ex.harmonics;++h) {
+                const int dense=joint_readout_gate_dense_indices_[g*ex.harmonics+h];
+                ex.tensor_gate_moment_adjoints[two_layer_gate_required_moment_indices_[dense]]+=ex.joint_gate_adjoints[start+g*ex.harmonics+h];
+            }
+        }
         if (tensor_enabled) {
             const double* ha=ex.tensor_message_adjoints.data()
                 + static_cast<size_t>(i)*TC;
-            std::fill(ex.tensor_gate_moment_adjoints.begin(),
-                      ex.tensor_gate_moment_adjoints.end(),0.0);
             double* raw=ex.tensor_gate_moment_adjoints.data();
             for (int L=1; L<=Lmsg; ++L)
                 for (int o=0; o<outer_k_rank_; ++o)
@@ -433,7 +530,7 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
         CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
             nbh,derivatives,i,
             ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q,
-            tensor_enabled
+            (tensor_enabled || JointReadoutEnabled())
                 ? ex.tensor_gate_moment_adjoints.data()
                 : nullptr);
         for (int j=0;j<nbh.count;++j) {
@@ -476,10 +573,20 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
 	            if (need_derivatives) ex.adjoints[node]+=weight;
             max_linear[q]=std::max(max_linear[q],std::abs(coeff*ex.values[node]));
         }
+        if (JointReadoutEnabled()) {
+            if (need_derivatives) std::fill(ex.joint_adjoints.begin(),ex.joint_adjoints.end(),0.0);
+            for (int q=0;q<JointReadoutScalarCount();++q) {
+                const int node=joint_readout_graph_.scalar_mapping[q];
+                const double weight=(species_readout ? 1.0 : center)*regression_coeffs[JointReadoutCoeffIndex(type,q)];
+                scalar_energy+=weight*ex.joint_values[node];
+                if(need_derivatives) ex.joint_adjoints[node]+=weight;
+            }
+        }
         cfg.cal_se0[i]=scalar_energy;
         cfg.cal_se[i]=regression_coeffs[type]+center+scalar_energy;
         cfg.energy+=cfg.cal_se[i];
         if (need_derivatives) {
+            if(JointReadoutEnabled()) ReverseJointReadout(i,false);
             ReverseAdaptiveRadialGraph(false);
             AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i);
         }
@@ -525,15 +632,22 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
     const bool include_center=fixed_center_readout_columns && !species_readout;
     const int readout_count=ScalarReadoutCoeffCount();
     ex.site_values.resize(static_cast<size_t>(cfg.size())*alpha_moments_count);
+    if(JointReadoutEnabled()) ex.joint_site_values.resize(static_cast<size_t>(cfg.size())*joint_readout_graph_.moments_count);
     for (int i=0;i<cfg.size();++i) {
         ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
         std::copy(ex.values.begin(),ex.values.end(),ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count);
+        if(JointReadoutEnabled()) std::copy(ex.joint_values.begin(),ex.joint_values.end(),
+            ex.joint_site_values.data()+static_cast<size_t>(i)*joint_readout_graph_.moments_count);
         const int type=neighborhoods[i].my_type;
         const double center=include_center ? linear_coeffs[type] : 1.0;
         energy_cmpnts[type]+=1.0;
         for (int q=0;q<alpha_scalar_moments;++q) {
             const int column=species_count+(species_readout ? type*alpha_scalar_moments+q : q);
             energy_cmpnts[column]+=center*ex.values[alpha_moment_mapping[q]];
+        }
+        for(int q=0;q<JointReadoutScalarCount();++q) {
+            const int column=JointReadoutLinearColumnOffset()+(species_readout ? type*JointReadoutScalarCount() : 0)+q;
+            energy_cmpnts[column]+=center*ex.joint_values[joint_readout_graph_.scalar_mapping[q]];
         }
     }
     if (!derivatives) return;
@@ -584,6 +698,30 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
         }
     }
     if (!reference) FinishAdaptiveRadialGateComponents(cfg,neighborhoods,need_forces,need_stress);
+    // Auxiliary columns share the cached physical edge contractions. Their
+    // direct gate-primitive seed is kept independent of the main scalar GEMM.
+    const int JP=JointReadoutScalarCount(),JN=joint_readout_graph_.moments_count;
+    for(int head=0;head<JointReadoutCoeffCount();++head) {
+        const int type_filter=species_readout ? head/JP : -1,q=head%JP;
+        const int column=JointReadoutLinearColumnOffset()+head;
+        std::fill(ex.coefficient_adjoints.begin(),ex.coefficient_adjoints.end(),0.0);
+        std::fill(ex.tensor_message_adjoints.begin(),ex.tensor_message_adjoints.end(),0.0);
+        std::fill(ex.joint_gate_adjoints.begin(),ex.joint_gate_adjoints.end(),0.0);
+        for(int i=0;i<cfg.size();++i) {
+            if(type_filter>=0 && neighborhoods[i].my_type!=type_filter) continue;
+            std::copy(ex.site_values.data()+static_cast<size_t>(i)*alpha_moments_count,
+                      ex.site_values.data()+static_cast<size_t>(i+1)*alpha_moments_count,ex.values.begin());
+            std::copy(ex.joint_site_values.data()+static_cast<size_t>(i)*JN,
+                      ex.joint_site_values.data()+static_cast<size_t>(i+1)*JN,ex.joint_values.begin());
+            std::fill(ex.adjoints.begin(),ex.adjoints.end(),0.0);
+            std::fill(ex.joint_adjoints.begin(),ex.joint_adjoints.end(),0.0);
+            ex.joint_adjoints[joint_readout_graph_.scalar_mapping[q]]=include_center ? linear_coeffs[neighborhoods[i].my_type] : 1.0;
+            ReverseJointReadout(i,false);
+            ReverseAdaptiveRadialGraph(false);
+            AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i,column,need_forces,need_stress);
+        }
+        FinishAdaptiveRadialGateForces(cfg,neighborhoods,column,need_forces,need_stress);
+    }
 }
 
 void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighborhoods& neighborhoods,
@@ -815,6 +953,21 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
 	                if (tangent) ex.tangent_adjoints[node]+=center*head;
             }
         }
+        if(JointReadoutEnabled()) {
+            std::fill(ex.joint_adjoints.begin(),ex.joint_adjoints.end(),0.0);
+            if(tangent) std::fill(ex.joint_tangent_adjoints.begin(),ex.joint_tangent_adjoints.end(),0.0);
+            for(int q=0;q<JointReadoutScalarCount();++q) {
+                const int node=joint_readout_graph_.scalar_mapping[q],index=JointReadoutCoeffIndex(type,q);
+                const double head=regression_coeffs[index];
+                const double feature=ene_weight[i]*ex.joint_values[node]+(tangent ? ex.joint_tangents[node] : 0.0);
+                const double factor=species_readout ? 1.0 : center;
+                out[index]+=factor*feature;
+                if(!species_readout) center_grad+=head*feature;
+                ex.joint_adjoints[node]+=ene_weight[i]*factor*head;
+                if(tangent) ex.joint_tangent_adjoints[node]+=factor*head;
+            }
+            ReverseJointReadout(i,tangent);
+        }
         out[LinearCoeffOffset()+type]+=center_grad;
         ReverseAdaptiveRadialGraph(tangent);
         for (int j=0;j<nbh.count;++j) {
@@ -931,7 +1084,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,atoms,Q,projection_rows,1.0,tangent_seeds,projection_rows,weights,Q,0.0,ex.scalar_tangent_adjoints.data(),Q);
         }
     }
-    if (tensor_enabled) {
+    if (tensor_enabled || JointReadoutEnabled()) {
         ex.tensor_gate_moment_adjoints.resize(alpha_moments_count);
         if (tangent)
             ex.tensor_gate_moment_tangent_adjoints.resize(alpha_moments_count);
@@ -940,12 +1093,24 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
     const int tensor_offset=tensor_enabled ? TensorMessageCoeffOffset() : 0;
     const double* Bmsg=tensor_enabled ? regression_coeffs.data()+tensor_offset : nullptr;
     for (int i=0;i<atoms;++i) {
-        if (tensor_enabled) {
+        if (tensor_enabled || JointReadoutEnabled()) {
             std::fill(ex.tensor_gate_moment_adjoints.begin(),
                       ex.tensor_gate_moment_adjoints.end(),0.0);
             if (tangent)
                 std::fill(ex.tensor_gate_moment_tangent_adjoints.begin(),
                           ex.tensor_gate_moment_tangent_adjoints.end(),0.0);
+        }
+        if(JointReadoutEnabled()) {
+            const int JG=two_layer_gate_k_rank_;
+            const size_t start=static_cast<size_t>(i)*JG*H;
+            for(int g=0;g<JG;++g) for(int h=1;h<H;++h) {
+                const int dense=joint_readout_gate_dense_indices_[g*H+h];
+                const int moment=two_layer_gate_required_moment_indices_[dense];
+                ex.tensor_gate_moment_adjoints[moment]+=ex.joint_gate_adjoints[start+g*H+h];
+                if(tangent) ex.tensor_gate_moment_tangent_adjoints[moment]+=ex.joint_gate_tangent_adjoints[start+g*H+h];
+            }
+        }
+        if (tensor_enabled) {
             const double* z=two_layer_gate_moment_values_cache_.data()
                 + static_cast<size_t>(i)*cached_moments;
             const double* zt=tangent ? ex.gate_moment_tangents.data()
@@ -979,8 +1144,8 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             tangent ? ex.gate_moment_tangents.data()+static_cast<size_t>(i)*alpha_moments_count : nullptr,
             tangent ? ex.scalar_tangent_adjoints.data()+static_cast<size_t>(i)*Q : nullptr,
             nullptr,
-            tensor_enabled && tangent ? ex.tensor_gate_moment_tangent_adjoints.data() : nullptr,
-            tensor_enabled ? ex.tensor_gate_moment_adjoints.data() : nullptr);
+            (tensor_enabled || JointReadoutEnabled()) && tangent ? ex.tensor_gate_moment_tangent_adjoints.data() : nullptr,
+            (tensor_enabled || JointReadoutEnabled()) ? ex.tensor_gate_moment_adjoints.data() : nullptr);
     }
 }
 

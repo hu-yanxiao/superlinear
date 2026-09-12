@@ -14,6 +14,7 @@
 #define MLIP_MTPR_H
 #include "pure_w_execution.h"
 #include "adaptive_radial_execution.h"
+#include "sh_model_init.h"
 
 struct BasicIndices {
         std::vector<int> comp0, comp1, comp2, comp3;
@@ -99,6 +100,11 @@ protected:
 		std::vector<double> tensor_message_coeffs_;
 		std::vector<double> tensor_message_optimizer_scales_;
 		std::vector<int> tensor_message_gate_moment_dense_indices_;
+		bool joint_readout_enabled_ = false;
+		JointReadoutTopology joint_readout_graph_;
+		std::vector<double> joint_readout_coeffs_, joint_readout_optimizer_scales_;
+		// Compact [g, harmonic] lookup, constructed once after gate closure.
+		std::vector<int> joint_readout_gate_dense_indices_;
 	int outer_k_rank1_basic_begin_ = 0;
 	int outer_k_rank1_basic_count_ = 0;
 	int outer_k_rank1_product_begin_ = 0;
@@ -260,6 +266,8 @@ protected:
 	                               int atom,
 	                               const std::vector<Vector3>* direction = nullptr);
 	void ReverseAdaptiveRadialGraph(bool tangent);
+	void ForwardJointReadout(int atom, bool tangent);
+	void ReverseJointReadout(int atom, bool tangent);
 	void ReduceAdaptiveRadialCoefficientAdjoints(bool tangent);
 	void AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
 	                                        const Neighborhood& nbh,
@@ -1034,6 +1042,16 @@ public:
 						int ScalarReadoutCoeffIndex(int type, int scalar_index) const;
 						double ScalarReadoutCoeff(int type, int scalar_index) const;
 						void ConvertSharedReadoutToSpeciesReadout();
+		bool JointReadoutEnabled() const { return joint_readout_enabled_; }
+		int JointReadoutScalarCount() const { return joint_readout_enabled_ ? static_cast<int>(joint_readout_graph_.scalar_mapping.size()) : 0; }
+		int JointReadoutCoeffCount() const;
+		int JointReadoutCoeffOffset() const;
+		int JointReadoutLinearColumnOffset() const;
+		int JointReadoutCoeffIndex(int type, int scalar) const;
+		void EnableJointReadout();
+		void SetJointReadoutOptimizerScales(const std::vector<double>& scales);
+		const std::vector<double>& JointReadoutOptimizerScales() const { return joint_readout_optimizer_scales_; }
+		void AccumulateJointReadoutScalarSquares(std::vector<double>& sums) const;
 						bool OuterKRankUsesDirectRadial() const {
 							return outer_k_rank_ == 1 && outer_k_rank1_direct_radial_;
 						}
@@ -1139,6 +1157,7 @@ public:
 				std::vector<double> gate_scalar_sq;
 				std::vector<double> outer_scalar_sq;
 				std::vector<double> tensor_irrep_sq;
+				std::vector<double> joint_scalar_sq;
 				std::uint64_t gate_samples = 0;
 				std::uint64_t outer_samples = 0;
 			};
@@ -1352,6 +1371,11 @@ public:
 							const int outer_k_rank1_weight_count = OuterKRank1WeightCount();
 						const int linear_size = LinearCoeffCount();
 					std::vector<double> old_coeffs = regression_coeffs;
+					if (JointReadoutEnabled() && static_cast<int>(old_coeffs.size())
+					    == JointReadoutCoeffOffset() + JointReadoutCoeffCount()) {
+						joint_readout_coeffs_.assign(old_coeffs.begin() + JointReadoutCoeffOffset(), old_coeffs.end());
+						old_coeffs.resize(JointReadoutCoeffOffset());
+					}
 					if (static_cast<int>(old_coeffs.size()) < base_nonlinear_size)
 						ERROR("DistributeCoeffs found an inconsistent nonlinear coefficient block");
 								const int new_gate_scaling_offset = base_nonlinear_size + gate_radial_count;
@@ -1927,6 +1951,15 @@ public:
 			for (int i = 0; i < (int)linear_coeffs.size(); i++)
 				regression_coeffs[radial_size + i] = linear_coeffs[i];
 
+		// The auxiliary head is physically independent of the original linear
+		// block. Keep the old linear count/index chart unchanged.
+		if (JointReadoutEnabled()) {
+			const int off = JointReadoutCoeffOffset(), count = JointReadoutCoeffCount();
+			if (static_cast<int>(joint_readout_coeffs_.size()) != count)
+				ERROR("SUS2-SH joint readout coefficient storage is inconsistent");
+			regression_coeffs.resize(off + count);
+			std::copy(joint_readout_coeffs_.begin(), joint_readout_coeffs_.end(), regression_coeffs.begin() + off);
+		}
 		linear_mults.resize(alpha_scalar_moments);
 		max_linear.resize(alpha_scalar_moments);
 

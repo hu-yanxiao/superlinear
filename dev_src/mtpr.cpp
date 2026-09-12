@@ -2439,6 +2439,47 @@ int MLMTPR::LinearCoeffCount() const
 	return species_count + ScalarReadoutCoeffCount();
 }
 
+int MLMTPR::JointReadoutCoeffCount() const
+{
+	return CheckedIntProduct(static_cast<size_t>(JointReadoutScalarCount()),
+		static_cast<size_t>(UsesSpeciesReadout() ? species_count : 1), "Joint readout coefficient count");
+}
+int MLMTPR::JointReadoutCoeffOffset() const { return LinearCoeffOffset() + LinearCoeffCount(); }
+int MLMTPR::JointReadoutLinearColumnOffset() const
+{ return LinearCoeffCount() + TwoLayerResidualE0CoeffCount() + TwoLayerGateReadoutCoeffCount(); }
+int MLMTPR::JointReadoutCoeffIndex(int type, int scalar) const
+{
+	if (type < 0 || type >= species_count || scalar < 0 || scalar >= JointReadoutScalarCount())
+		ERROR("SUS2-SH joint readout index out of range");
+	return JointReadoutCoeffOffset() + (UsesSpeciesReadout() ? type * JointReadoutScalarCount() : 0) + scalar;
+}
+void MLMTPR::SetJointReadoutOptimizerScales(const std::vector<double>& scales)
+{
+	if (static_cast<int>(scales.size()) != JointReadoutScalarCount())
+		ERROR("SUS2-SH joint readout optimizer scale count mismatch");
+	for (double x : scales) if (!std::isfinite(x) || x <= 0.0)
+		ERROR("SUS2-SH joint readout optimizer scales must be positive and finite");
+	joint_readout_optimizer_scales_ = scales;
+}
+void MLMTPR::EnableJointReadout()
+{
+	if (JointReadoutEnabled()) return;
+	if (!OuterUsesAdaptiveRadialCoefficients() || !TwoLayerGateKRankEnabled() || sh_l_max_ < 1)
+		ERROR("SUS2-SH joint readout requires adaptive radial coefficients and l_max >= 1");
+	if (static_cast<int>(regression_coeffs.size()) != JointReadoutCoeffOffset())
+		ERROR("SUS2-SH joint readout enable found inconsistent old coefficient storage");
+	joint_readout_graph_ = BuildJointReadoutTopology(sh_l_max_, sh_body_order_, sh_body_l_max_);
+	joint_readout_enabled_ = true;
+	joint_readout_coeffs_.assign(JointReadoutCoeffCount(), 0.0);
+	joint_readout_optimizer_scales_.assign(JointReadoutScalarCount(), 1.0);
+	regression_coeffs.insert(regression_coeffs.end(), joint_readout_coeffs_.begin(), joint_readout_coeffs_.end());
+	// No reinitialization or redistribution of the pre-existing physical model.
+	BuildTwoLayerGateProductProgram();
+	ResizeLinearComponentStorage();
+	ClearTwoLayerEdgePrimitiveCache();
+	adaptive_radial_execution_.reusable_full_cache = false;
+}
+
 int MLMTPR::ScalarReadoutCoeffCount() const
 {
 	if (alpha_scalar_moments <= 0)
@@ -2485,7 +2526,7 @@ void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 		ERROR("Model already uses species readout");
 	if (readout_mode_ != "shared")
 		ERROR("SUS2-SH readout_mode should be shared or species");
-	const int old_linear_count = species_count + alpha_scalar_moments;
+	const int old_linear_count = species_count + alpha_scalar_moments + JointReadoutCoeffCount();
 	const int old_linear_offset = LinearCoeffOffset();
 	if (static_cast<int>(regression_coeffs.size()) != CoeffCount())
 		ERROR("Shared readout conversion found incomplete regression coefficients");
@@ -2494,7 +2535,7 @@ void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 		ERROR("Shared readout conversion found inconsistent coefficient layout");
 	std::vector<double> converted(
 		static_cast<size_t>(species_count)
-		+ static_cast<size_t>(species_count) * alpha_scalar_moments,
+		+ static_cast<size_t>(species_count) * (alpha_scalar_moments + JointReadoutScalarCount()),
 		0.0);
 	for (int type = 0; type < species_count; ++type)
 		converted[type] = regression_coeffs[old_linear_offset + type];
@@ -2503,6 +2544,9 @@ void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 		for (int q = 0; q < alpha_scalar_moments; ++q)
 			converted[species_count + type * alpha_scalar_moments + q] =
 				center * regression_coeffs[old_linear_offset + species_count + q];
+		for (int q = 0; q < JointReadoutScalarCount(); ++q)
+			converted[species_count + species_count * alpha_scalar_moments + type * JointReadoutScalarCount() + q] =
+				center * regression_coeffs[old_linear_offset + species_count + alpha_scalar_moments + q];
 	}
 	const std::vector<double> prefix(regression_coeffs.begin(),
 	                                regression_coeffs.begin() + old_linear_offset);
@@ -2510,12 +2554,16 @@ void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 	regression_coeffs = prefix;
 	regression_coeffs.insert(regression_coeffs.end(), converted.begin(), converted.end());
 	linear_coeffs.swap(converted);
+	if (JointReadoutEnabled()) {
+		joint_readout_coeffs_.assign(regression_coeffs.begin() + JointReadoutCoeffOffset(), regression_coeffs.end());
+		linear_coeffs.resize(LinearCoeffCount());
+	}
 }
 
 int MLMTPR::LinearEquationCount() const
 {
 	return LinearCoeffCount() + TwoLayerResidualE0CoeffCount()
-	     + TwoLayerGateReadoutCoeffCount();
+	     + TwoLayerGateReadoutCoeffCount() + JointReadoutCoeffCount();
 }
 
 int MLMTPR::TwoLayerGateRadialCoeffIndex(int mu, int xi) const
@@ -4354,6 +4402,10 @@ void MLMTPR::Load(const string& filename)
 	tensor_message_coeffs_.clear();
 	tensor_message_optimizer_scales_.clear();
 	tensor_message_gate_moment_dense_indices_.clear();
+	joint_readout_enabled_ = false;
+	joint_readout_graph_ = JointReadoutTopology();
+	joint_readout_coeffs_.clear(); joint_readout_optimizer_scales_.clear();
+	joint_readout_gate_dense_indices_.clear();
 
 	ifstream ifs(filename);
 	if (!ifs.is_open())
@@ -4380,7 +4432,8 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
-	const bool adaptive_v15 = model_file_version == "1.5.0";
+	const bool joint_v16 = model_file_version == "1.6.0";
+	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
 	bool readout_mode_seen = false;
 	bool projection_seen = false, amplitude_mode_seen = false, tensor_lmax_seen = false;
 	bool amplitude_scales_seen = false, weight_scales_seen = false, tensor_scales_seen = false;
@@ -4395,11 +4448,16 @@ void MLMTPR::Load(const string& filename)
 	int tensor_lmax_fields = 0, tensor_count_fields = 0, tensor_coeff_fields = 0;
 	int tensor_scale_fields = 0, readout_fields = 0;
 	std::map<std::string,int> adaptive_fields;
+	std::map<std::string,int> joint_fields;
 	std::string metadata_line;
 	while (std::getline(ifs, metadata_line)) {
 		const size_t equals = metadata_line.find('=');
 		if (equals == std::string::npos) continue;
 		const std::string key = TrimCopy(metadata_line.substr(0, equals));
+		if (key.compare(0, 14, "joint_readout_") == 0) {
+			if (!joint_v16) ERROR("SUS2-SH joint readout fields require model version 1.6.0");
+			if (++joint_fields[key] != 1) ERROR("SUS2-SH duplicate joint readout field");
+		}
 		if (key == "readout_mode") ++readout_fields;
 		if (key == "adaptive_radial_projection" || key == "adaptive_radial_amplitude_mode") {
 			if (!adaptive_v15) ERROR("SUS2-SH adaptive radial layout metadata requires version 1.5.0");
@@ -4437,6 +4495,8 @@ void MLMTPR::Load(const string& filename)
 	}
 	ifs.clear();
 	ifs.seekg(metadata_start);
+	if (joint_v16 && joint_fields.size() != 16)
+		ERROR("SUS2-SH version 1.6.0 requires complete unique joint readout metadata");
 	if (ifs.fail()) ERROR("Cannot seek while validating SUS2-SH model metadata");
 
 		// name/description reading block
@@ -5183,6 +5243,15 @@ void MLMTPR::Load(const string& filename)
 			if (ifs.fail() || tensor_message_lmax_ < (adaptive_v15 ? 0 : 1) || tensor_message_lmax_ > 2
 			    || tensor_message_lmax_ > sh_l_max_)
 				ERROR("SUS2-SH tensor_message_lmax must be 0/1/2 (0 requires v1.5) and not exceed sh_l_max");
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "joint_readout_enabled") {
+			if (!joint_v16 || !OuterUsesAdaptiveRadialCoefficients())
+				ERROR("SUS2-SH joint readout requires version 1.6.0 and adaptive radial coefficients");
+			ReadJointReadoutSection(ifs, joint_readout_graph_, joint_readout_coeffs_,
+				joint_readout_optimizer_scales_, species_count, UsesSpeciesReadout(),
+				sh_l_max_, sh_body_order_, sh_body_l_max_);
+			joint_readout_enabled_ = true;
 			ifs >> tmpstr;
 		}
 		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
@@ -6300,6 +6369,7 @@ void MLMTPR::Load(const string& filename)
 				ERROR("SUS2-SH version 1.5.0 has misplaced optimizer-scale metadata");
 		}
 		MemAlloc();
+		if (joint_v16 && !JointReadoutEnabled()) ERROR("SUS2-SH version 1.6.0 joint readout block is misplaced");
 		DistributeCoeffs();
 }
 
@@ -6639,8 +6709,8 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))) << '\n';
+	    << (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -6811,14 +6881,21 @@ void MLMTPR::Save(const string& filename)
 			if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
 				ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
 				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-				if (UsesSpeciesReadout() || TensorMessageEnabled() || AdaptiveRadialExtendedLayout())
+				if (UsesSpeciesReadout() || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "readout_mode = " << readout_mode_ << '\n';
-				if (AdaptiveRadialExtendedLayout()) {
+				if (AdaptiveRadialExtendedLayout() || JointReadoutEnabled()) {
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
 					ofs << "adaptive_radial_amplitude_mode = " << adaptive_radial_amplitude_mode_ << '\n';
 				}
-				if (TensorMessageEnabled() || AdaptiveRadialExtendedLayout())
+				if (TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "tensor_message_lmax = " << tensor_message_lmax_ << '\n';
+				if (JointReadoutEnabled()) {
+					const int off = JointReadoutCoeffOffset();
+					WriteJointReadoutSection(ofs, joint_readout_graph_,
+						std::vector<double>(regression_coeffs.begin() + off,
+							regression_coeffs.begin() + off + JointReadoutCoeffCount()),
+						joint_readout_optimizer_scales_);
+				}
 			}
 		ofs << "outer_k_rank1_basic_begin = " << outer_k_rank1_basic_begin_ << '\n';
 		ofs << "outer_k_rank1_basic_count = " << outer_k_rank1_basic_count_ << '\n';
@@ -12077,7 +12154,7 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 		           != two_layer_gate_scalar_indices_.size()) {
 			ERROR("SUS2-SH separate gate graph moment metadata has inconsistent sizes");
 		}
-		if (TensorMessageEnabled()) {
+		if (TensorMessageEnabled() || JointReadoutEnabled()) {
 			if (!TwoLayerGateKRankEnabled())
 				ERROR("SUS2-SH tensor message requires gate K-rank moments");
 			if (tensor_message_lmax_ > sh_l_max_)
@@ -12086,7 +12163,7 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 			    != static_cast<size_t>(alpha_moments_count))
 				two_layer_gate_required_moments_.assign(alpha_moments_count, 0);
 			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
-				for (int l = 1; l <= tensor_message_lmax_; ++l)
+				for (int l = 1; l <= (JointReadoutEnabled() ? sh_l_max_ : tensor_message_lmax_); ++l)
 					for (int m = -l; m <= l; ++m) {
 						const int moment = TwoLayerGateKRankBasicIndex(g, l, m);
 						if (moment < 0 || moment >= alpha_moments_count)
@@ -12136,6 +12213,21 @@ void MLMTPR::BuildTwoLayerGateProductProgram()
 				two_layer_gate_required_radial_eval_blocks_);
 		}
 		tensor_message_gate_moment_dense_indices_.clear();
+		joint_readout_gate_dense_indices_.clear();
+		if (JointReadoutEnabled()) {
+			const int harmonics = (sh_l_max_ + 1) * (sh_l_max_ + 1);
+			joint_readout_gate_dense_indices_.assign(two_layer_gate_k_rank_ * harmonics, -1);
+			std::vector<int> dense_by_moment(alpha_moments_count, -1);
+			for (size_t d = 0; d < two_layer_gate_required_moment_indices_.size(); ++d)
+				dense_by_moment[two_layer_gate_required_moment_indices_[d]] = d;
+			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
+				for (int l = 1; l <= sh_l_max_; ++l)
+					for (int m = -l; m <= l; ++m) {
+						const int dense = dense_by_moment[TwoLayerGateKRankBasicIndex(g,l,m)];
+						if (dense < 0) ERROR("SUS2-SH joint readout post-rank gate moment was not cached");
+						joint_readout_gate_dense_indices_[g * harmonics + l*l+l+m] = dense;
+					}
+		}
 		if (TensorMessageEnabled()) {
 			tensor_message_gate_moment_dense_indices_.assign(
 				static_cast<size_t>(two_layer_gate_k_rank_)
@@ -13584,6 +13676,16 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 			if (out_penalty_grad_accumulator != nullptr)
 				(*out_penalty_grad_accumulator)[coeff_index] +=
 					2.0 * weight * value;
+		}
+	}
+	if (head_coeff != 0.0 && JointReadoutCoeffCount() > 0) {
+		const double weight = head_coeff / JointReadoutCoeffCount();
+		for (int q = 0; q < JointReadoutCoeffCount(); ++q) {
+			const int index = JointReadoutCoeffOffset() + q;
+			const double value = regression_coeffs[index];
+			out_penalty_accumulator += weight * value * value;
+			if (out_penalty_grad_accumulator != nullptr)
+				(*out_penalty_grad_accumulator)[index] += 2.0 * weight * value;
 		}
 	}
 

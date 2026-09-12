@@ -126,6 +126,12 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 		sums.gate_scalar_sq.assign(Q, 0.0);
 	if (sums.outer_scalar_sq.size() != static_cast<std::size_t>(alpha_scalar_moments))
 		sums.outer_scalar_sq.assign(alpha_scalar_moments, 0.0);
+	if (JointReadoutEnabled()) {
+		if (sums.joint_scalar_sq.size() != static_cast<std::size_t>(JointReadoutScalarCount()))
+			sums.joint_scalar_sq.assign(JointReadoutScalarCount(), 0.0);
+	} else {
+		sums.joint_scalar_sq.clear();
+	}
 	if (TensorMessageEnabled()) {
 		const std::size_t irreps = static_cast<std::size_t>(tensor_message_lmax_)
 			* static_cast<std::size_t>(two_layer_gate_k_rank_);
@@ -170,6 +176,8 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 					ERROR("Adaptive radial normalization statistics found non-finite outer scalar");
 				sums.outer_scalar_sq[q] += value * value;
 			}
+			if (JointReadoutEnabled())
+				AccumulateJointReadoutScalarSquares(sums.joint_scalar_sq);
 			++sums.outer_samples;
 		}
 	}

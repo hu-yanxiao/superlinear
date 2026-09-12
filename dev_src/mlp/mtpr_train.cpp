@@ -517,6 +517,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"body6-l-max",
 			"sh-factor-pruning",
 			"readout-mode",
+			"joint-readout",
 			"adaptive-radial-projection",
 			"adaptive-radial-amplitude-mode",
 			"tensor-message-lmax",
@@ -2441,6 +2442,13 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				ERROR("--readout-mode should be shared or species");
 			if (opts["readout-mode"] != mtpr.ReadoutMode())
 				ERROR("--readout-mode must match the loaded model; use the explicit conversion command instead of changing it during resume");
+		}
+		if (opts.find("joint-readout") != opts.end() && !opts["joint-readout"].empty()) {
+			const std::string value = opts["joint-readout"];
+			if (value == "true" || value == "1") mtpr.EnableJointReadout();
+			else if (value == "false" || value == "0") {
+				if (mtpr.JointReadoutEnabled()) ERROR("--joint-readout=false cannot remove a trained head during resume");
+			} else ERROR("--joint-readout must be true or false");
 		}
 		if (!opts["adaptive-radial-projection"].empty()
 		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()

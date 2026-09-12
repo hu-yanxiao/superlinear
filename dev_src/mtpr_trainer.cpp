@@ -395,6 +395,9 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		static_cast<int>(sums.gate_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 	MPI_Allreduce(MPI_IN_PLACE, sums.outer_scalar_sq.data(),
 		static_cast<int>(sums.outer_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+	if (model.JointReadoutEnabled() && !sums.joint_scalar_sq.empty())
+		MPI_Allreduce(MPI_IN_PLACE, sums.joint_scalar_sq.data(),
+			static_cast<int>(sums.joint_scalar_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 	if (model.TensorMessageEnabled())
 		MPI_Allreduce(MPI_IN_PLACE, sums.tensor_irrep_sq.data(),
 			static_cast<int>(sums.tensor_irrep_sq.size()), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -462,6 +465,28 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		adaptive_pytorch_physical_scales[head + local] =
 			output_scale * rms_scale(sums.outer_scalar_sq[q], counts[1]) / std::abs(mult);
 	}
+	double joint_scale_min = 1.0, joint_scale_max = 1.0;
+	if (model.JointReadoutEnabled()) {
+		const int J = model.JointReadoutScalarCount();
+		if (J < 0 || sums.joint_scalar_sq.size() != static_cast<std::size_t>(J))
+			ERROR("Joint-readout calibration has inconsistent scalar statistics");
+		std::vector<double> joint_scales(J, 1.0);
+		if (J > 0) {
+			joint_scale_min = std::numeric_limits<double>::infinity();
+			joint_scale_max = 0.0;
+		}
+		for (int q = 0; q < J; ++q) {
+			joint_scales[q] = output_scale * rms_scale(sums.joint_scalar_sq[q], counts[1]);
+			joint_scale_min = std::min(joint_scale_min, joint_scales[q]);
+			joint_scale_max = std::max(joint_scale_max, joint_scales[q]);
+		}
+		for (int local = 0; local < model.JointReadoutCoeffCount(); ++local)
+			adaptive_pytorch_physical_scales[model.JointReadoutCoeffOffset() + local] =
+				joint_scales[local % J];
+		// d_joint = output_scale * D_joint * theta_joint. This is an
+		// optimizer-coordinate change only: neither physical head changes.
+		model.SetJointReadoutOptimizerScales(joint_scales);
+	}
 	if (fresh) {
 		const std::vector<double>& local_qr = composition.Matrix();
 		std::vector<double> stacked(rank == 0 ? local_qr.size() * world_size : 0);
@@ -494,6 +519,9 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 						* adaptive_pytorch_physical_scales[head + local]
 						* (model.linear_mults[q] > 0.0 ? 1.0 : -1.0);
 				}
+				// No additional RNG draws and no perturbation of the old head.
+				for (int local = 0; local < model.JointReadoutCoeffCount(); ++local)
+					model.Coeff()[model.JointReadoutCoeffOffset() + local] = 0.0;
 				std::cout << "[adaptive-pytorch-composition] configs=" << counts[3]
 				          << " rank=" << fit.rank << " e0=";
 				for (double e0 : fit.e0) std::cout << " " << std::setprecision(17) << e0;
@@ -522,6 +550,10 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " tensor_message_lmax=" << model.TensorMessageLMax()
 		          << " tensor_irrep_scale_min=" << tensor_scale_min
 		          << " tensor_irrep_scale_max=" << tensor_scale_max
+		          << " joint_readout=" << model.JointReadoutEnabled()
+		          << " joint_scalar_count=" << model.JointReadoutScalarCount()
+		          << " joint_optimizer_scale_min=" << joint_scale_min
+		          << " joint_optimizer_scale_max=" << joint_scale_max
 		          << " std=" << std_scaling << " stdd=" << stdd_scaling
 		          << " preserve_physical=" << !fresh << std::endl;
 	}
@@ -794,6 +826,9 @@ bool MTPR_trainer::CoeffActiveForStage(int coeff_index) const
 
 double MTPR_trainer::LinearColumnCurrentCoeff(int column) const
 {
+	const int joint_local = column - p_mlmtpr->JointReadoutLinearColumnOffset();
+	if (joint_local >= 0 && joint_local < p_mlmtpr->JointReadoutCoeffCount())
+		return p_mlmtpr->Coeff()[p_mlmtpr->JointReadoutCoeffOffset() + joint_local];
 	const int linear_count = p_mlmtpr->LinearCoeffCount();
 	const int linear_begin = p_mlmtpr->LinearCoeffOffset();
 	if (column < linear_count) {
@@ -1068,6 +1103,13 @@ void MTPR_trainer::SolveSLAE()
 		const int q = p_mlmtpr->UsesSpeciesReadout()
 			? local % p_mlmtpr->alpha_scalar_moments : local;
 		p_mlmtpr->regression_coeffs[i] /= p_mlmtpr->linear_mults[q] * 1.0;
+	}
+	const int joint_column_begin = p_mlmtpr->JointReadoutLinearColumnOffset();
+	for (int active_index = 0; active_index < n; ++active_index) {
+		const int local = linear_solve_columns_[active_index] - joint_column_begin;
+		if (local >= 0 && local < p_mlmtpr->JointReadoutCoeffCount())
+			p_mlmtpr->Coeff()[p_mlmtpr->JointReadoutCoeffOffset() + local] =
+				quad_opt_vec[active_index];
 	}
 	p_mlmtpr->LinCoeff();
 
@@ -1568,6 +1610,8 @@ void MTPR_trainer::TrainLinear(int prank,
 		const int readout_count = p_mlmtpr->TwoLayerGateReadoutCoeffCount();
 		const int readout_begin =
 			p_mlmtpr->TwoLayerGateReadoutLinearColumnOffset();
+		const int joint_begin = p_mlmtpr->JointReadoutLinearColumnOffset();
+		const int joint_count = p_mlmtpr->JointReadoutCoeffCount();
 		const double global_scale = static_cast<double>(global_cfg_count)
 			* scalar_head_l2_regularization;
 		for (int active_index = 0; active_index < n; ++active_index) {
@@ -1584,6 +1628,11 @@ void MTPR_trainer::TrainLinear(int prank,
 			           && column < readout_begin + readout_count) {
 				ridge = global_scale / static_cast<double>(readout_count);
 				readout_ridge_diagonal = ridge;
+			} else if (joint_count > 0 && column >= joint_begin
+			           && column < joint_begin + joint_count) {
+				// Independent mean-L2: adding a zero joint head must not
+				// weaken the regularization on the original scalar head.
+				ridge = global_scale / static_cast<double>(joint_count);
 			}
 			quad_opt_matr[active_index * n + active_index] += ridge;
 		}
@@ -2429,7 +2478,6 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	int n = p_mlip->CoeffCount();
 	double *x = p_mlip->Coeff();
 
-	int nlin = p_mlmtpr->LinearCoeffCount();
 	const bool use_lbfgs_optimizer = optimizer_kind == "lbfgs";
 	const bool use_radial_weight_norm = radial_parameterization == "weight-norm";
 	const bool use_pytorch_coordinates =
@@ -2828,6 +2876,10 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			"scalar-head",
 			linear_begin + p_mlmtpr->species_count,
 			p_mlmtpr->ScalarReadoutCoeffCount());
+		add_coordinate_normalization_block(
+			"joint-readout-head",
+			p_mlmtpr->JointReadoutCoeffOffset(),
+			p_mlmtpr->JointReadoutCoeffCount());
 		add_coordinate_normalization_block(
 			"residual-e0-head",
 			p_mlmtpr->TwoLayerResidualE0CoeffOffset(),
@@ -3781,6 +3833,14 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			for (int q = 0; q < readout_count; ++q)
 				diagonal[readout_begin + q] += curvature;
 		}
+		if (scalar_head_l2_regularization != 0.0
+		    && p_mlmtpr->JointReadoutCoeffCount() > 0) {
+			const int count = p_mlmtpr->JointReadoutCoeffCount();
+			const double curvature = 2.0 * scalar_head_l2_regularization
+				/ static_cast<double>(count);
+			for (int q = 0; q < count; ++q)
+				diagonal[p_mlmtpr->JointReadoutCoeffOffset() + q] += curvature;
+		}
 		if (p_mlmtpr->TwoLayerGateUsesBodyLinearCombo()) {
 			const int scalar_count = p_mlmtpr->TwoLayerGateWeightCount();
 			if (gate_scalar_l2_regularization != 0.0
@@ -3931,8 +3991,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 				return value / (mult * mult);
 			}
 		}
-		const int linear_moment_begin = n - nlin + p_mlmtpr->species_count;
-		if (full_idx >= linear_moment_begin && full_idx < n) {
+		const int linear_moment_begin = p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count;
+		const int linear_moment_end = linear_moment_begin + p_mlmtpr->ScalarReadoutCoeffCount();
+		if (full_idx >= linear_moment_begin && full_idx < linear_moment_end) {
 			const int local = full_idx - linear_moment_begin;
 			const int q = p_mlmtpr->UsesSpeciesReadout()
 				? local % p_mlmtpr->alpha_scalar_moments : local;
@@ -3977,7 +4038,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	};
 	refresh_inv_hess_diag();
 	optimizer_set_inv_hess_diag(inv_hess_diag);
-	const int species_coeff_begin = n - nlin;
+	const int species_coeff_begin = p_mlmtpr->LinearCoeffOffset();
 	std::vector<int> species_coeff_active_indices;
 	for (int i = 0; i < p_mlmtpr->species_count; ++i) {
 		const int active_idx = full_to_active_index[species_coeff_begin + i];
@@ -4435,7 +4496,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			bool linear_refresh_applied = false;
 			const bool random_perturb_applied = (max_shift != 0.0);
 			if (prank == 0) {
-				for (int i = 0; i < n - nlin; i++) {
+				for (int i = 0; i < p_mlmtpr->LinearCoeffOffset(); i++) {
 					if (full_to_active_index[i] < 0)
 						continue;
 					if (p_mlmtpr->IsRadialFirstCoeff(i)) {

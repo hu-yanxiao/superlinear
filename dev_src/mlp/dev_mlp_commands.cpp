@@ -1330,6 +1330,9 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 
 double LinearEquationCurrentCoeff(const MLMTPR& mtpr, int column)
 {
+	if (column >= mtpr.JointReadoutLinearColumnOffset()
+	    && column < mtpr.JointReadoutLinearColumnOffset() + mtpr.JointReadoutCoeffCount())
+		return mtpr.regression_coeffs[mtpr.JointReadoutCoeffOffset() + column - mtpr.JointReadoutLinearColumnOffset()];
 	const int linear_count = mtpr.LinearCoeffCount();
 	const int linear_begin = mtpr.LinearCoeffOffset();
 	if (column < linear_count) {
@@ -1649,6 +1652,19 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 #endif
 	} END_COMMAND;
 
+	BEGIN_COMMAND("enable-joint-readout-dev",
+		"adds a zero initialized joint invariant readout without changing any old parameter",
+		"mlp-sus2 enable-joint-readout-dev input.mtp output.mtp\n"
+	) {
+		if (args.size() != 2) ERROR("enable-joint-readout-dev requires input and output models");
+		if (mpi_rank == 0) {
+			MLMTPR mtpr(args[0]); mtpr.EnableJointReadout(); mtpr.Save(args[1]);
+		}
+#ifdef MLIP_MPI
+		MPI_Barrier(MPI_COMM_WORLD);
+#endif
+	} END_COMMAND;
+
 	BEGIN_COMMAND("enable-two-layer-gate-radial-mixing-dev",
 		"enables zero-initialized full radial mixing on a ranked two-layer gate model",
 		"mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.mtp output.mtp\n"
@@ -1756,6 +1772,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialWeightCount()
 				          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
 				          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
+				          << " joint_readout_begin=" << mtpr.JointReadoutCoeffOffset()
+				          << " joint_readout_end=" << mtpr.JointReadoutCoeffOffset() + mtpr.JointReadoutCoeffCount()
 					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 					          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 					          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -1866,6 +1884,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialWeightCount()
 			          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
 			          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
+			          << " joint_readout_begin=" << mtpr.JointReadoutCoeffOffset()
+			          << " joint_readout_end=" << mtpr.JointReadoutCoeffOffset() + mtpr.JointReadoutCoeffCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
 				          << " gate_edge_l1_end=" << mtpr.TwoLayerGateEdgeL1WeightOffset() + mtpr.TwoLayerGateEdgeL1WeightCount()
 				          << " second_gate_radial_begin=" << mtpr.SecondLayerGateRadialCoeffOffset()
@@ -2566,6 +2586,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
 						"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
 						"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
+						"         --joint-readout (independent l>=1 K=2 joint gate/outer invariant head; default=off),\n"
 						"         --adaptive-radial-projection=full|shared-n (default=full; shared-n is a rank-one radial response),\n"
 						"         --adaptive-radial-amplitude-mode=shared|species (default=shared; species is source-neighbor j),\n"
 						"         --tensor-message-lmax=0|1|2 (adaptive radial coefficient gate only; default=0),\n"

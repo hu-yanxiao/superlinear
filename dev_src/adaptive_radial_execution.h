@@ -23,6 +23,10 @@ struct AdaptiveRadialExecution {
     std::vector<double> tensor_gate_moment_adjoints;
     std::vector<double> tensor_gate_moment_tangent_adjoints;
     std::vector<double> component_tensor_message_adjoints;
+    std::vector<double> joint_values, joint_tangents, joint_adjoints, joint_tangent_adjoints;
+    // Atom-major compact [g,harmonic] seeds for the direct pre-scalar branch.
+    std::vector<double> joint_gate_adjoints, joint_gate_tangent_adjoints;
+    std::vector<double> joint_site_values;
     std::vector<double> values, tangents, adjoints, tangent_adjoints;
     std::vector<double> radial_values, radial_derivatives, radial_tangents;
     std::vector<double> site_values;
