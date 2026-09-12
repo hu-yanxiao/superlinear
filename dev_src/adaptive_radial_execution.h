@@ -10,6 +10,9 @@ struct AdaptiveRadialExecution {
     bool derivatives = false;
     bool parameters = false;
     int rows = 0, scalars = 0, radial_stride = 0, harmonics = 0;
+    int projection_rows = 0;
+    std::vector<int> amplitude_offsets;
+    std::vector<double> signal_tangents, signal_adjoints, signal_tangent_adjoints;
     std::vector<int> outer_nodes;
     std::vector<double> signals, coefficients, coefficient_tangents;
     std::vector<double> coefficient_adjoints, coefficient_tangent_adjoints;

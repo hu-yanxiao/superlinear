@@ -517,6 +517,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 		"body6-l-max",
 			"sh-factor-pruning",
 			"readout-mode",
+			"adaptive-radial-projection",
+			"adaptive-radial-amplitude-mode",
 			"tensor-message-lmax",
 			"write-sh-scalar-info",
 		"cutoff",
@@ -2440,6 +2442,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			if (opts["readout-mode"] != mtpr.ReadoutMode())
 				ERROR("--readout-mode must match the loaded model; use the explicit conversion command instead of changing it during resume");
 		}
+		if (!opts["adaptive-radial-projection"].empty()
+		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
+		        || opts["adaptive-radial-projection"] != mtpr.AdaptiveRadialProjection()))
+			ERROR("--adaptive-radial-projection must match the loaded adaptive model; full to shared-n is not an exact general conversion");
+		if (!opts["adaptive-radial-amplitude-mode"].empty()
+		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
+		        || opts["adaptive-radial-amplitude-mode"] != mtpr.AdaptiveRadialAmplitudeMode()))
+			ERROR("--adaptive-radial-amplitude-mode must match the loaded adaptive model");
 		if (!opts["tensor-message-lmax"].empty()) {
 			const int requested_tensor_message_lmax =
 				ParseOptionalNonnegativeInteger(opts, "tensor-message-lmax");

@@ -414,12 +414,12 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		? std::max(1.0e-12, std::min(1.0e6, force_rms)) : 1.0;
 	adaptive_pytorch_physical_scales.assign(model.CoeffCount(), 1.0);
 	const int Q = model.TwoLayerGateScalarCount();
-	const int D = model.AdaptiveRadialRowCount();
 	const int P = model.alpha_scalar_moments;
 	const int readout_count = model.ScalarReadoutCoeffCount();
-	for (int row = 0; row < D; ++row) {
+	for (int row = 0; row < model.AdaptiveRadialAmplitudeCount(); ++row)
 		adaptive_pytorch_physical_scales[model.AdaptiveRadialAmplitudeOffset() + row] =
 			model.AdaptiveRadialAmplitudeOptimizerScale(row);
+	for (int row = 0; row < model.AdaptiveRadialProjectionRowCount(); ++row) {
 		for (int q = 0; q < Q; ++q)
 			adaptive_pytorch_physical_scales[model.AdaptiveRadialWeightOffset() + row * Q + q] =
 				rms_scale(sums.gate_scalar_sq[q], counts[0]);
@@ -514,6 +514,8 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " force_rms=" << std::setprecision(17) << force_rms
 		          << " readout_output_scale=" << output_scale
 		          << " radial_parameterization=weight-norm"
+		          << " adaptive_radial_projection=" << model.AdaptiveRadialProjection()
+		          << " adaptive_radial_amplitude_mode=" << model.AdaptiveRadialAmplitudeMode()
 		          << " scalar_head_l2=1e-5 adaptive_response_l2=1e-4 radial_smooth=1e-6 grid=128"
 		          << " species_readout_bias="
 		          << (model.UsesSpeciesReadout() ? "frozen-gauge" : "trainable")
@@ -3287,7 +3289,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			}
 			if (p_mlmtpr->OuterUsesAdaptiveRadialCoefficients()) {
 				const int amp_begin = p_mlmtpr->AdaptiveRadialAmplitudeOffset();
-				const int row_count = p_mlmtpr->AdaptiveRadialRowCount();
+				const int row_count = p_mlmtpr->AdaptiveRadialAmplitudeCount();
 				const int weight_begin = p_mlmtpr->AdaptiveRadialWeightOffset();
 				const int scalar_count = p_mlmtpr->TwoLayerGateScalarCount();
 				for (int row = 0; row < row_count; ++row) {
@@ -3302,7 +3304,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 					coordinate_scale_by_full[full_idx] = 1.0 / physical_scale;
 					coordinate_reference_by_full[full_idx] = x[full_idx];
 				}
-				for (int row = 0; row < row_count; ++row) {
+				for (int row = 0; row < p_mlmtpr->AdaptiveRadialProjectionRowCount(); ++row) {
 					for (int q = 0; q < scalar_count; ++q) {
 						const int full_idx = weight_begin + row * scalar_count + q;
 						if (full_idx < 0 || full_idx >= n

@@ -197,13 +197,12 @@ public:
 				mtpr->AdaptiveRadialAmplitudeOffset();
 			const int adaptive_radial_amplitude_end =
 				adaptive_radial_amplitude_begin
-				+ mtpr->AdaptiveRadialRowCount();
+				+ mtpr->AdaptiveRadialAmplitudeCount();
 			const int adaptive_radial_weight_begin =
 				mtpr->AdaptiveRadialWeightOffset();
 			const int adaptive_radial_weight_end =
 				adaptive_radial_weight_begin
-				+ mtpr->AdaptiveRadialRowCount()
-				* mtpr->TwoLayerGateScalarCount();
+				+ mtpr->AdaptiveRadialWeightCount();
 				const int gate_edge_l1_begin = mtpr->TwoLayerGateEdgeL1WeightOffset();
 				const int gate_edge_l1_end =
 					gate_edge_l1_begin + mtpr->TwoLayerGateEdgeL1WeightCount();
@@ -1508,11 +1507,11 @@ std::string DescribeMTPRCoeffIndex(const MLMTPR& mtpr, int index)
 		return "two_layer_gate_radial_mixing_coeff";
 	if (index >= mtpr.AdaptiveRadialAmplitudeOffset()
 	    && index < mtpr.AdaptiveRadialAmplitudeOffset()
-	        + mtpr.AdaptiveRadialRowCount())
+	        + mtpr.AdaptiveRadialAmplitudeCount())
 		return "adaptive_radial_amplitude";
 	if (index >= mtpr.AdaptiveRadialWeightOffset()
 	    && index < mtpr.AdaptiveRadialWeightOffset()
-	        + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount())
+	        + mtpr.AdaptiveRadialWeightCount())
 		return "adaptive_radial_weight";
 	if (index >= mtpr.TensorMessageCoeffOffset()
 	    && index < mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount())
@@ -1752,9 +1751,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
 				          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
 				          << " adaptive_radial_amplitude_begin=" << mtpr.AdaptiveRadialAmplitudeOffset()
-				          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
+				          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialAmplitudeCount()
 				          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
-				          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
+				          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialWeightCount()
 				          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
 				          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
 					          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
@@ -1862,9 +1861,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			          << " gate_radial_mixing_begin=" << mtpr.TwoLayerGateRadialMixingCoeffOffset()
 			          << " gate_radial_mixing_end=" << mtpr.TwoLayerGateRadialMixingCoeffOffset() + mtpr.TwoLayerGateRadialMixingCoeffCount()
 			          << " adaptive_radial_amplitude_begin=" << mtpr.AdaptiveRadialAmplitudeOffset()
-			          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialRowCount()
+			          << " adaptive_radial_amplitude_end=" << mtpr.AdaptiveRadialAmplitudeOffset() + mtpr.AdaptiveRadialAmplitudeCount()
 			          << " adaptive_radial_weight_begin=" << mtpr.AdaptiveRadialWeightOffset()
-			          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialRowCount() * mtpr.TwoLayerGateScalarCount()
+			          << " adaptive_radial_weight_end=" << mtpr.AdaptiveRadialWeightOffset() + mtpr.AdaptiveRadialWeightCount()
 			          << " tensor_message_begin=" << mtpr.TensorMessageCoeffOffset()
 			          << " tensor_message_end=" << mtpr.TensorMessageCoeffOffset() + mtpr.TensorMessageCoeffCount()
 				          << " gate_edge_l1_begin=" << mtpr.TwoLayerGateEdgeL1WeightOffset()
@@ -2567,6 +2566,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
 						"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
 						"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
+						"         --adaptive-radial-projection=full|shared-n (default=full; shared-n is a rank-one radial response),\n"
+						"         --adaptive-radial-amplitude-mode=shared|species (default=shared; species is source-neighbor j),\n"
 						"         --tensor-message-lmax=0|1|2 (adaptive radial coefficient gate only; default=0),\n"
 						"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total; adaptive/pure default=same-k), --write-sh-scalar-info,\n"

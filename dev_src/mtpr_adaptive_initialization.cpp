@@ -196,6 +196,8 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 
 	ValidateOuterModeConfiguration();
 	const int D = AdaptiveRadialRowCount();
+	const int projection_rows = AdaptiveRadialProjectionRowCount();
+	const int amplitude_count = AdaptiveRadialAmplitudeCount();
 	const int Q = TwoLayerGateScalarCount();
 	const int R = p_RadialBasis->rb_size;
 	const int blocks = (sh_l_max_ + 1) * outer_k_rank_;
@@ -252,11 +254,11 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 	double* amplitudes = regression_coeffs.data() + AdaptiveRadialAmplitudeOffset();
 	double* weights = regression_coeffs.data() + AdaptiveRadialWeightOffset();
 	const double inv_sqrt_q = 1.0 / std::sqrt(static_cast<double>(Q));
-	for (int row = 0; row < D; ++row) {
-		amplitudes[row] = 1.0;
+	std::fill(amplitudes, amplitudes + amplitude_count, 1.0);
+	for (int row = 0; row < projection_rows; ++row) {
 		for (int q = 0; q < Q; ++q)
 			weights[static_cast<size_t>(row) * Q + q] =
-				CenteredUnit(seed, row, q) * inv_sqrt_q
+				CenteredUnit(seed, AdaptiveRadialSharedN() ? row * R : row, q) * inv_sqrt_q
 				* adaptive_radial_weight_optimizer_scales_[q];
 	}
 
@@ -282,7 +284,7 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 				const double* rb = two_layer_edge_radial_vals_cache_.data()
 					+ edge * adaptive_radial_execution_.radial_stride;
 				const double* signal = adaptive_radial_execution_.signals.data()
-					+ static_cast<size_t>(nbh.inds[j]) * D;
+					+ static_cast<size_t>(nbh.inds[j]) * projection_rows;
 				for (int l = 0; l <= sh_l_max_; ++l) {
 					for (int o = 0; o < outer_k_rank_; ++o) {
 						const int block = l * outer_k_rank_ + o;
@@ -295,7 +297,7 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 						double response = 0.0;
 						for (int n = 0; n < R; ++n) {
 							base += c[n] * rb[rb_start + n];
-							response += signal[row0 + n] * rb[rb_start + n];
+							response += signal[AdaptiveRadialSharedN() ? block : row0 + n] * rb[rb_start + n];
 						}
 						base_sq[block] += base * base;
 						response_sq[block] += response * response;
@@ -343,8 +345,9 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 				a /= response_rms;
 			a = std::max(1.0e-12, std::min(1.0e12, a));
 			UpdateRange(a, initial_a_min, initial_a_max);
-			for (int n = 0; n < R; ++n)
-				amplitudes[row0 + n] = a;
+			for (int type = 0; type < (AdaptiveRadialSpeciesAmplitude() ? species_count : 1); ++type)
+				for (int n = 0; n < R; ++n)
+					amplitudes[type * D + row0 + n] = a;
 		}
 	}
 
@@ -412,15 +415,16 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 				+ RadialCoeffOffset() + mu * RadialCoeffBlockSize();
 			for (int n = 0; n < R; ++n) {
 				c[n] *= factor;
-				amplitudes[block * R + n] *= factor;
+				for (int type = 0; type < (AdaptiveRadialSpeciesAmplitude() ? species_count : 1); ++type)
+					amplitudes[type * D + block * R + n] *= factor;
 			}
 		}
 	}
 
-	adaptive_radial_amplitudes_.assign(amplitudes, amplitudes + D);
-	adaptive_radial_weights_.assign(weights, weights + static_cast<size_t>(D) * Q);
-	adaptive_radial_amplitude_optimizer_scales_.assign(D, 1.0);
-	for (int row = 0; row < D; ++row)
+	adaptive_radial_amplitudes_.assign(amplitudes, amplitudes + amplitude_count);
+	adaptive_radial_weights_.assign(weights, weights + static_cast<size_t>(projection_rows) * Q);
+	adaptive_radial_amplitude_optimizer_scales_.assign(amplitude_count, 1.0);
+	for (int row = 0; row < amplitude_count; ++row)
 		adaptive_radial_amplitude_optimizer_scales_[row] =
 			std::max(1.0e-12, std::abs(amplitudes[row]));
 

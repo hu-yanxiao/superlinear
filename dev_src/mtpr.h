@@ -93,6 +93,8 @@ protected:
 		std::string outer_channel_mode_ = "cross-channel";
 		std::string outer_radial_mode_ = "legacy-plus-mixer";
 		std::string readout_mode_ = "shared";
+		std::string adaptive_radial_projection_ = "full";
+		std::string adaptive_radial_amplitude_mode_ = "shared";
 		int tensor_message_lmax_ = 0;
 		std::vector<double> tensor_message_coeffs_;
 		std::vector<double> tensor_message_optimizer_scales_;
@@ -258,6 +260,7 @@ protected:
 	                               int atom,
 	                               const std::vector<Vector3>* direction = nullptr);
 	void ReverseAdaptiveRadialGraph(bool tangent);
+	void ReduceAdaptiveRadialCoefficientAdjoints(bool tangent);
 	void AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
 	                                        const Neighborhood& nbh,
 	                                        int atom,
@@ -1113,12 +1116,22 @@ public:
 			int TwoLayerGateRadialMixingCoeffIndex(int l, int outer_channel, int k_channel, int xi) const;
 			double TwoLayerGateRadialMixingCoeff(int l, int outer_channel, int k_channel, int xi) const;
 			int AdaptiveRadialRowCount() const;
+			int AdaptiveRadialProjectionRowCount() const;
+			int AdaptiveRadialAmplitudeCount() const;
+			int AdaptiveRadialWeightCount() const;
+			const std::string& AdaptiveRadialProjection() const { return adaptive_radial_projection_; }
+			const std::string& AdaptiveRadialAmplitudeMode() const { return adaptive_radial_amplitude_mode_; }
+			bool AdaptiveRadialSharedN() const { return adaptive_radial_projection_ == "shared-n"; }
+			bool AdaptiveRadialSpeciesAmplitude() const { return adaptive_radial_amplitude_mode_ == "species"; }
+			bool AdaptiveRadialExtendedLayout() const { return AdaptiveRadialSharedN() || AdaptiveRadialSpeciesAmplitude(); }
+			int AdaptiveRadialAmplitudeLocal(int type, int row) const;
+			int AdaptiveRadialProjectionRow(int row) const;
 			int AdaptiveRadialAmplitudeOffset() const;
 			int AdaptiveRadialWeightOffset() const;
 			int AdaptiveRadialRowIndex(int l, int o, int n) const;
-			int AdaptiveRadialAmplitudeIndex(int l, int o, int n) const;
+			int AdaptiveRadialAmplitudeIndex(int l, int o, int n, int type = 0) const;
 			int AdaptiveRadialWeightIndex(int l, int o, int n, int q) const;
-			double AdaptiveRadialAmplitude(int l, int o, int n) const;
+			double AdaptiveRadialAmplitude(int l, int o, int n, int type = 0) const;
 			double AdaptiveRadialWeight(int l, int o, int n, int q) const;
 			double AdaptiveRadialAmplitudeOptimizerScale(int row) const;
 			double AdaptiveRadialWeightOptimizerScale(int q) const;
@@ -1315,10 +1328,9 @@ public:
 							const int gate_radial_mixing_count =
 								TwoLayerGateRadialMixingCoeffCount();
 							const int adaptive_radial_row_count =
-								AdaptiveRadialRowCount();
+								AdaptiveRadialAmplitudeCount();
 							const size_t adaptive_radial_weight_count_size =
-								static_cast<size_t>(adaptive_radial_row_count)
-								* static_cast<size_t>(TwoLayerGateScalarCount());
+								static_cast<size_t>(AdaptiveRadialWeightCount());
 							if (adaptive_radial_weight_count_size
 							    > static_cast<size_t>(std::numeric_limits<int>::max()))
 								ERROR("SUS2-SH adaptive radial weight count exceeds supported index range");
