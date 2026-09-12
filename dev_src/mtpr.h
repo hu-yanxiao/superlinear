@@ -101,6 +101,9 @@ protected:
 		std::vector<double> tensor_message_optimizer_scales_;
 		std::vector<int> tensor_message_gate_moment_dense_indices_;
 		bool joint_readout_enabled_ = false;
+		// Runtime-only: a newly enabled head can be calibrated once in this
+		// training invocation. Loaded fixed charts are never inferred from S=1.
+		bool joint_readout_needs_calibration_ = false;
 		JointReadoutTopology joint_readout_graph_;
 		std::vector<double> joint_readout_coeffs_, joint_readout_optimizer_scales_;
 		// Compact [g, harmonic] lookup, constructed once after gate closure.
@@ -1050,6 +1053,8 @@ public:
 		int JointReadoutCoeffIndex(int type, int scalar) const;
 		void EnableJointReadout();
 		void SetJointReadoutOptimizerScales(const std::vector<double>& scales);
+		double JointReadoutOptimizerScale(int scalar) const;
+		bool JointReadoutNeedsCalibration() const { return joint_readout_needs_calibration_; }
 		const std::vector<double>& JointReadoutOptimizerScales() const { return joint_readout_optimizer_scales_; }
 		void AccumulateJointReadoutScalarSquares(std::vector<double>& sums) const;
 						bool OuterKRankUsesDirectRadial() const {
@@ -1166,7 +1171,8 @@ public:
 			void AccumulateAdaptiveRadialNormalizationSums(
 				std::vector<Configuration>& training_set,
 				const std::vector<Neighborhoods>* training_neighborhoods,
-				AdaptiveRadialNormalizationSums& sums);
+				AdaptiveRadialNormalizationSums& sums,
+				bool collect_joint_statistics = true);
 			void InitializeAdaptiveRadialFromData(
 				std::vector<Configuration>& training_set,
 				const std::vector<Neighborhoods>* training_neighborhoods = nullptr,

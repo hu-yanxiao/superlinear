@@ -108,7 +108,8 @@ void AllreduceInPlace(unsigned long long& value)
 void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 	std::vector<Configuration>& training_set,
 	const std::vector<Neighborhoods>* training_neighborhoods,
-	MLMTPR::AdaptiveRadialNormalizationSums& sums)
+	MLMTPR::AdaptiveRadialNormalizationSums& sums,
+	bool collect_joint_statistics)
 {
 	if (!OuterUsesAdaptiveRadialCoefficients())
 		ERROR("Adaptive radial normalization statistics require adaptive-coefficients outer mode");
@@ -126,7 +127,7 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 		sums.gate_scalar_sq.assign(Q, 0.0);
 	if (sums.outer_scalar_sq.size() != static_cast<std::size_t>(alpha_scalar_moments))
 		sums.outer_scalar_sq.assign(alpha_scalar_moments, 0.0);
-	if (JointReadoutEnabled()) {
+	if (JointReadoutEnabled() && collect_joint_statistics) {
 		if (sums.joint_scalar_sq.size() != static_cast<std::size_t>(JointReadoutScalarCount()))
 			sums.joint_scalar_sq.assign(JointReadoutScalarCount(), 0.0);
 	} else {
@@ -176,7 +177,7 @@ void MLMTPR::AccumulateAdaptiveRadialNormalizationSums(
 					ERROR("Adaptive radial normalization statistics found non-finite outer scalar");
 				sums.outer_scalar_sq[q] += value * value;
 			}
-			if (JointReadoutEnabled())
+			if (JointReadoutEnabled() && collect_joint_statistics)
 				AccumulateJointReadoutScalarSquares(sums.joint_scalar_sq);
 			++sums.outer_samples;
 		}

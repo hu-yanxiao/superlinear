@@ -97,11 +97,37 @@ the additional head to zero. It therefore preserves energy, forces and virial
 before training, while the new head has trainable feature gradients. Removing
 an existing head implicitly during resume is rejected.
 
-The fixed-RMS training chart adds independent positive joint factors. Stored
-physical coefficients obey `d_joint = output_scale * D_joint * theta_joint`.
-Changing this optimizer chart does not change the physical head. The joint
-head's physical-coefficient L2 is averaged separately and added to the old
-head penalty, so adding features does not dilute the old penalty.
+The fixed-RMS training chart adds independent positive joint factors
+`S[p] = output_scale * D_joint[p]`. Stored physical coefficients obey
+`C_joint[p] = S[p] * q_joint[p]`. Only the new joint head is regularized in
+this fixed optimizer chart:
+
+```
+R_joint = lambda / N_joint * sum (C_joint / S)^2
+dR_joint/dC_joint = 2 * lambda / N_joint * C_joint / S^2
+```
+
+For a species readout, each species uses the same per-scalar S, and N_joint
+counts all species/scalar coefficients. The joint term is averaged separately
+and added to the unchanged original physical-head penalty, so adding features
+does not dilute the original penalty. Linear-solve ridge and physical-coordinate
+Hessian terms use the same `1/S^2` factors.
+
+S is fixed during training and saved in `joint_readout_optimizer_scales`.
+Fresh initialization, or enabling joint readout directly within the current
+`train old.mtp ... --joint-readout` invocation, calibrates it from the data.
+Loading a joint-enabled checkpoint preserves its saved S rather than silently
+recalibrating it from the new dataset or current features. Changing S while
+keeping physical C fixed preserves energy, forces and virial but generally
+changes R_joint; it is therefore a change to the optimization prior, not merely
+a harmless reparameterization of the full training objective.
+
+The standalone `enable-joint-readout-dev` command has no dataset and writes an
+uncalibrated unit chart, S=1, with C=0. Loading that output retains its explicit
+unit chart; the loader does not guess calibration state from whether all
+scales equal 1. For data-calibrated initialization, prefer direct
+`train old.mtp train.cfg --joint-readout` (optionally with `--max-iter=0`) or
+the fresh topology/initialization examples above.
 
 ## File and execution contract
 

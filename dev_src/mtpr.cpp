@@ -2460,6 +2460,17 @@ void MLMTPR::SetJointReadoutOptimizerScales(const std::vector<double>& scales)
 	for (double x : scales) if (!std::isfinite(x) || x <= 0.0)
 		ERROR("SUS2-SH joint readout optimizer scales must be positive and finite");
 	joint_readout_optimizer_scales_ = scales;
+	joint_readout_needs_calibration_ = false;
+}
+double MLMTPR::JointReadoutOptimizerScale(int scalar) const
+{
+	if (scalar < 0 || scalar >= JointReadoutScalarCount()
+	    || static_cast<int>(joint_readout_optimizer_scales_.size()) != JointReadoutScalarCount())
+		ERROR("SUS2-SH joint readout optimizer-scale index or metadata size is inconsistent");
+	const double scale = joint_readout_optimizer_scales_[scalar];
+	if (!std::isfinite(scale) || scale <= 0.0)
+		ERROR("SUS2-SH joint readout optimizer scale must be positive and finite");
+	return scale;
 }
 void MLMTPR::EnableJointReadout()
 {
@@ -2470,6 +2481,7 @@ void MLMTPR::EnableJointReadout()
 		ERROR("SUS2-SH joint readout enable found inconsistent old coefficient storage");
 	joint_readout_graph_ = BuildJointReadoutTopology(sh_l_max_, sh_body_order_, sh_body_l_max_);
 	joint_readout_enabled_ = true;
+	joint_readout_needs_calibration_ = true;
 	joint_readout_coeffs_.assign(JointReadoutCoeffCount(), 0.0);
 	joint_readout_optimizer_scales_.assign(JointReadoutScalarCount(), 1.0);
 	regression_coeffs.insert(regression_coeffs.end(), joint_readout_coeffs_.begin(), joint_readout_coeffs_.end());
@@ -4403,6 +4415,7 @@ void MLMTPR::Load(const string& filename)
 	tensor_message_optimizer_scales_.clear();
 	tensor_message_gate_moment_dense_indices_.clear();
 	joint_readout_enabled_ = false;
+	joint_readout_needs_calibration_ = false;
 	joint_readout_graph_ = JointReadoutTopology();
 	joint_readout_coeffs_.clear(); joint_readout_optimizer_scales_.clear();
 	joint_readout_gate_dense_indices_.clear();
@@ -13682,10 +13695,14 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 		const double weight = head_coeff / JointReadoutCoeffCount();
 		for (int q = 0; q < JointReadoutCoeffCount(); ++q) {
 			const int index = JointReadoutCoeffOffset() + q;
-			const double value = regression_coeffs[index];
+			const double scale = JointReadoutOptimizerScale(q % JointReadoutScalarCount());
+			// Only the auxiliary head uses the saved fixed optimizer chart:
+			// C = S*q, R_joint = lambda*mean(q^2). The original head remains
+			// physically regularized exactly as before this optional branch.
+			const double value = regression_coeffs[index] / scale;
 			out_penalty_accumulator += weight * value * value;
 			if (out_penalty_grad_accumulator != nullptr)
-				(*out_penalty_grad_accumulator)[index] += 2.0 * weight * value;
+				(*out_penalty_grad_accumulator)[index] += 2.0 * weight * value / scale;
 		}
 	}
 

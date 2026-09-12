@@ -348,13 +348,15 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		ERROR("Fixed PyTorch training calibration requires an adaptive radial model");
 	MLMTPR& model = *p_mlmtpr;
 	const int species = model.species_count;
+	const bool calibrate_joint = model.JointReadoutEnabled()
+		&& (fresh || model.JointReadoutNeedsCalibration());
 	MLMTPR::AdaptiveRadialNormalizationSums sums;
 	sus2::adaptive_pytorch_composition::StreamingQR composition(species);
 	double force_sq = 0.0;
 	unsigned long long counts[4] = {0, 0, 0, 0};
 	int failed = 0;
 	try {
-		model.AccumulateAdaptiveRadialNormalizationSums(configurations, neighborhoods, sums);
+		model.AccumulateAdaptiveRadialNormalizationSums(configurations, neighborhoods, sums, calibrate_joint);
 		counts[0] = sums.gate_samples;
 		counts[1] = sums.outer_samples;
 		for (const Configuration& cfg : configurations) {
@@ -468,7 +470,7 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 	double joint_scale_min = 1.0, joint_scale_max = 1.0;
 	if (model.JointReadoutEnabled()) {
 		const int J = model.JointReadoutScalarCount();
-		if (J < 0 || sums.joint_scalar_sq.size() != static_cast<std::size_t>(J))
+		if (J < 0 || (calibrate_joint && sums.joint_scalar_sq.size() != static_cast<std::size_t>(J)))
 			ERROR("Joint-readout calibration has inconsistent scalar statistics");
 		std::vector<double> joint_scales(J, 1.0);
 		if (J > 0) {
@@ -476,15 +478,19 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 			joint_scale_max = 0.0;
 		}
 		for (int q = 0; q < J; ++q) {
-			joint_scales[q] = output_scale * rms_scale(sums.joint_scalar_sq[q], counts[1]);
+			joint_scales[q] = calibrate_joint
+				? output_scale * rms_scale(sums.joint_scalar_sq[q], counts[1])
+				: model.JointReadoutOptimizerScale(q);
 			joint_scale_min = std::min(joint_scale_min, joint_scales[q]);
 			joint_scale_max = std::max(joint_scale_max, joint_scales[q]);
 		}
 		for (int local = 0; local < model.JointReadoutCoeffCount(); ++local)
 			adaptive_pytorch_physical_scales[model.JointReadoutCoeffOffset() + local] =
 				joint_scales[local % J];
-		// d_joint = output_scale * D_joint * theta_joint. This is an
-		// optimizer-coordinate change only: neither physical head changes.
+		// C_joint = S_joint * theta_joint. S is also the fixed joint L2
+		// prior, so a loaded model must retain it even if its features/data
+		// have changed. Only fresh or newly enabled heads are calibrated.
+		// This never changes the physical coefficients or predictions.
 		model.SetJointReadoutOptimizerScales(joint_scales);
 	}
 	if (fresh) {
@@ -552,6 +558,8 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " tensor_irrep_scale_max=" << tensor_scale_max
 		          << " joint_readout=" << model.JointReadoutEnabled()
 		          << " joint_scalar_count=" << model.JointReadoutScalarCount()
+		          << " joint_head_l2=optimizer-chart"
+		          << " joint_chart=" << (calibrate_joint ? "calibrated" : "saved")
 		          << " joint_optimizer_scale_min=" << joint_scale_min
 		          << " joint_optimizer_scale_max=" << joint_scale_max
 		          << " std=" << std_scaling << " stdd=" << stdd_scaling
@@ -1630,9 +1638,11 @@ void MTPR_trainer::TrainLinear(int prank,
 				readout_ridge_diagonal = ridge;
 			} else if (joint_count > 0 && column >= joint_begin
 			           && column < joint_begin + joint_count) {
-				// Independent mean-L2: adding a zero joint head must not
-				// weaken the regularization on the original scalar head.
-				ridge = global_scale / static_cast<double>(joint_count);
+				// The solve variable is physical C, while the independent
+				// joint prior is lambda*mean((C/S)^2) in its saved chart.
+				const double scale = p_mlmtpr->JointReadoutOptimizerScale(
+					(column - joint_begin) % p_mlmtpr->JointReadoutScalarCount());
+				ridge = global_scale / static_cast<double>(joint_count) / scale / scale;
 			}
 			quad_opt_matr[active_index * n + active_index] += ridge;
 		}
@@ -3838,8 +3848,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			const int count = p_mlmtpr->JointReadoutCoeffCount();
 			const double curvature = 2.0 * scalar_head_l2_regularization
 				/ static_cast<double>(count);
-			for (int q = 0; q < count; ++q)
-				diagonal[p_mlmtpr->JointReadoutCoeffOffset() + q] += curvature;
+			for (int q = 0; q < count; ++q) {
+				const double scale = p_mlmtpr->JointReadoutOptimizerScale(
+					q % p_mlmtpr->JointReadoutScalarCount());
+				diagonal[p_mlmtpr->JointReadoutCoeffOffset() + q] += curvature / scale / scale;
+			}
 		}
 		if (p_mlmtpr->TwoLayerGateUsesBodyLinearCombo()) {
 			const int scalar_count = p_mlmtpr->TwoLayerGateWeightCount();
