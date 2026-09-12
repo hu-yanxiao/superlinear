@@ -31,9 +31,59 @@ unchanged; the linear-equation API has additional joint columns.
 
 ## Creation and upgrade
 
-Add `--joint-readout` to `init-sh` or inline `train train.cfg --init-sh`.
-Fresh initialization preserves the original main initialization and gives the
-joint head zero coefficients without consuming additional random draws.
+Joint readout requires `--superlinear-mode=radial-coefficient-gate` and
+`--l-max` at least 1. The following two-element example uses K8/G4/O8,
+crossed gate, same-k outer, shared-n projection and source-species amplitudes.
+Choose the species count and model settings to match your dataset. Run fresh
+examples in a new working directory so existing training outputs are retained.
+
+Generate the topology independently, then perform data-dependent
+initialization without any optimizer updates:
+
+```bash
+mlp-sus2 init-sh joint.topology.mtp \
+  --superlinear-mode=radial-coefficient-gate --joint-readout \
+  --species-count=2 --l-max=3 --k-max=8 \
+  --body-order=6 --body-l-max=3,3,3,2,1 \
+  --two-layer-gate-k-rank=4 --two-layer-gate-body-order=4 \
+  --two-layer-gate-factor-pruning=q-total --outer-k-rank=8 \
+  --sh-factor-pruning=same-k --scaling-map=K \
+  --cutoff=6.5 --radial-basis-size=10 \
+  --adaptive-radial-projection=shared-n \
+  --adaptive-radial-amplitude-mode=species --readout-mode=shared
+mlp-sus2 train joint.topology.mtp train.cfg \
+  --init-params=same --init-random-seed=20260912 \
+  --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 \
+  --max-iter=0 --trained-pot-name=joint.initialized.mtp
+```
+
+The equivalent inline topology creation and initialization is:
+
+```bash
+mlp-sus2 train train.cfg --init-sh \
+  --inline-sh-model=joint-inline.topology.mtp \
+  --superlinear-mode=radial-coefficient-gate --joint-readout \
+  --species-count=2 --l-max=3 --k-max=8 \
+  --body-order=6 --body-l-max=3,3,3,2,1 \
+  --two-layer-gate-k-rank=4 --two-layer-gate-body-order=4 \
+  --two-layer-gate-factor-pruning=q-total --outer-k-rank=8 \
+  --sh-factor-pruning=same-k --scaling-map=K \
+  --cutoff=6.5 --radial-basis-size=10 \
+  --adaptive-radial-projection=shared-n \
+  --adaptive-radial-amplitude-mode=species --readout-mode=shared \
+  --init-params=same --init-random-seed=20260912 \
+  --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 \
+  --max-iter=0 --trained-pot-name=joint-inline.initialized.mtp
+```
+
+Inline mode accepts exactly one positional argument, `train.cfg`; do not add
+a positional model filename. If `--inline-sh-model` already exists, it is
+reused instead of creating a fresh topology. Use a new path for a fresh run.
+`init-sh` alone does not perform data-dependent RMS calibration. The
+`train ... --max-iter=0` calls above do that initialization; choose a positive
+step limit to continue directly into training. Fresh initialization preserves
+the original main initialization and gives the joint head zero coefficients
+without consuming additional random draws.
 
 For an existing adaptive model:
 
@@ -70,5 +120,11 @@ the direct gate-primitive path is not detached. Linear component columns reuse
 the cached graph values and physical radial contractions.
 
 Server numerical qualification is required before release; this document does
-not assert unrun test or performance results. The separate GPUMD interface is
-not automatically compatible with version 1.6.0.
+not assert unrun test or performance results.
+
+The current GPUMD-superlinear interface supports model versions only through
+1.5.0. It does not implement joint readout and explicitly rejects a 1.6.0 model
+before evaluation. Do not manually downgrade the version header or remove
+joint metadata to bypass this check: that would discard part of the trained
+energy model. Joint-readout models require a separately implemented and
+qualified GPUMD update before GPU molecular dynamics can use them.
