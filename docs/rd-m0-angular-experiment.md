@@ -1,4 +1,24 @@
-# RD m0 angular backend experiment
+# RD m0 angular backend
+
+## Maintained-branch integration, 2026-09-14
+
+The RD implementation and its qualification tools are merged into the maintained
+`codex/radial-coefficient-gate` branch. `ry` remains the default; this promotion
+does not change model mathematics, initialization, optimizer settings or MTP
+format. Use the regular installed executable with an explicit selection:
+
+```sh
+SUS2_SH_ANGULAR_BACKEND=rd-m0 /work/phy-weigw/app/superlinear/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg --no-loss
+```
+
+PyTorch carries the equivalent opt-in feature on `codex/adaptive-radial-pytorch`.
+Its accepted values are only `ry` and `rd-m0`. Native `hybrid`/`ry-new` are
+retained for diagnostics and must not be exported into a PyTorch invocation.
+GPUMD source integration and binary acceptance are separate: its unresolved
+FP32 finite-difference checks are not certified by this native promotion.
+The experiment paths and measurements below are retained historical evidence.
+
+## Original experiment contract
 
 This branch adds optional C++ angular execution backends for the current
 `radial-coefficient-gate` superlinear model. It does not add parameters or
@@ -98,7 +118,7 @@ The full `rd-m0` experiment intentionally keeps physical angular cache views as
 well as raw D/dD. Its extra angular storage is H doubles per edge in values-only
 mode or 4H doubles per edge with derivatives, H=(lmax+1)^2. Mathematical
 equivalence alone does not imply a speedup; performance needs measurement.
-GPUMD and production installed binaries are not changed by this branch. The
+The original experiment did not change GPUMD or production installed binaries. The
 [separate PyTorch implementation branch](https://github.com/hu-yanxiao/SUS2-SH-PyTorch/tree/codex/rd-m0-angular-experiment)
 is not part of this native implementation or its validation claims. Its own
 qualification is independent. Its snapshot `0de63a3` passed 45 CPU/CUDA

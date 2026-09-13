@@ -13,6 +13,12 @@ The maintained phy-weigw entry points are installed under
 `/work/phy-weigw/app/superlinear/`. GPUMD support is maintained in the separate
 `hu-yanxiao/GPUMD-superlinear` repository; adaptive LAMMPS support is not claimed.
 
+RD angular execution is available on this maintained branch. Set
+`SUS2_SH_ANGULAR_BACKEND=rd-m0` before initialization, training or inference;
+unset it (or select `ry`) for the unchanged default. Existing models need no
+conversion. Native-only `ry-new` and `hybrid` remain diagnostic alternatives,
+not PyTorch/GPUMD selectors. See [RD execution and validation](docs/rd-m0-angular-experiment.md).
+
 ## Inherited pure-W and release3 reference
 
 The inherited superlinear branch, `codex/pure-w-channelwise`, adds a
