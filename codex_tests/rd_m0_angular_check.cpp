@@ -4,7 +4,7 @@
 // SUS2_SH_ANGULAR_BACKEND=ry ./rd_m0_check --expect-ry
 // SUS2_SH_ANGULAR_BACKEND=rd-m0 ./rd_m0_check --expect-rd-m0
 // SUS2_SH_ANGULAR_BACKEND=invalid ./rd_m0_check --expect-invalid-env
-#include "dev_src/rd_m0_angular.h"
+#include "rd_m0_angular.h"
 
 #include <algorithm>
 #include <array>
