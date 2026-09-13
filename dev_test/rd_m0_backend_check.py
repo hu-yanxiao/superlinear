@@ -329,9 +329,12 @@ class Check:
                 *ZERO_REG, f"--coeff-start={begin}", f"--coeff-end={min(end, begin + 2)}",
                 "--displacement=5e-6", f"--abs-tolerance={FD_ATOL}", f"--rel-tolerance={FD_RTOL}",
                 backend="rd-m0", calculation=True)
-        # Isolate F and virial: mixed E/F/S can conceal a missing force chain.
+        # Isolate E, F and virial: the energy-only objective exercises the
+        # values-only forward/cache path; mixed E/F/S can conceal a missing
+        # force chain. Keep the same nonzero blocks and strict FD refinement.
         isolated = record["isolated_objectives"] = {}
-        for observable, weights in (("force", [0., 1., 0.]), ("virial", [0., 0., 1.])):
+        for observable, weights in (("energy", [1., 0., 0.]),
+                                    ("force", [0., 1., 0.]), ("virial", [0., 0., 1.])):
             isolated[observable] = {}
             for key in ("gate_k_rank", "adaptive_radial_weight", "tensor_message", "joint_readout"):
                 begin, end = ranges[key]
