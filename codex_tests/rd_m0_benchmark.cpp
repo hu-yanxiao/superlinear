@@ -294,7 +294,9 @@ void Run(int argc, char** argv)
     const int repeats=Integer(argv[5],"repeats",1);
     const int warmup=Integer(argv[6],"warmup_passes",1);
     const bool gradient=mode=="gradient";
-    const char* backend=RDM0Angular::Enabled() ? "rd-m0" : "ry";
+    // Enabled() denotes raw-D reduction only; the physical-Y ablations
+    // ry-new/hybrid must retain their own labels in the timing evidence.
+    const char* backend=RDM0Angular::BackendName();
     MLMTPR model(argv[1]);
     if (model.CoeffCount()<=0) throw std::runtime_error("model has no coefficients");
     const std::vector<double> coefficients(model.Coeff(),model.Coeff()+model.CoeffCount());
