@@ -728,6 +728,10 @@ public:
 			std::vector<size_t> two_layer_edge_offsets_cache_;
 			std::vector<double> two_layer_edge_sh_values_cache_;
 			std::vector<double> two_layer_edge_sh_ders_cache_;
+			// Optional experimental angular representation. The established SH
+			// caches remain physical Y/dY for auxiliary and reverse consumers.
+			std::vector<double> two_layer_edge_rd_m0_values_cache_;
+			std::vector<double> two_layer_edge_rd_m0_ders_cache_;
 			std::vector<double> two_layer_edge_radial_vals_cache_;
 			std::vector<double> two_layer_edge_radial_ders_cache_;
 			std::vector<double> two_layer_edge_radial_mixing_kernel_cache_;

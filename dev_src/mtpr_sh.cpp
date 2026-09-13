@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "mtpr.h"
+#include "rd_m0_angular.h"
 
 #ifdef MLIP_INTEL_MKL
 #	include <mkl_cblas.h>
@@ -893,12 +894,41 @@ void EvalComplexSHValuesOnly(const Vector3& rvec,
 	AddSHPolynomialValueOnly(4, 4, 0.1875 * std::sqrt(35.0 / (2.0 * kPi)), u4, r, values);
 }
 
+// Independently evaluate the rotation column, retaining physical SH views for
+// all established reverse/auxiliary consumers. No evaluation of Y followed by
+// division is used to construct D. Raw D is optionally retained for RD sums.
+void EvalRDM0Physical(const Vector3& rvec, double r, int lmax,
+                     double* values, double* ders,
+                     double* raw_values = nullptr, double* raw_ders = nullptr)
+{
+	double scratch[kMaxSHComponents];
+	double derivative_scratch[3 * kMaxSHComponents];
+	double* d = raw_values == nullptr ? scratch : raw_values;
+	double* dd = ders == nullptr ? nullptr
+		: (raw_ders == nullptr ? derivative_scratch : raw_ders);
+	const double xyz[3] = {rvec[0], rvec[1], rvec[2]};
+	RDM0Angular::Eval(xyz, r, lmax, d, dd);
+	for (int l = 0; l <= lmax; ++l) {
+		const double pole = RDM0Angular::PoleValue(l);
+		for (int h = l*l; h < (l+1)*(l+1); ++h) {
+			values[h] = pole * d[h];
+			if (ders != nullptr)
+				for (int a = 0; a < 3; ++a)
+					ders[3*h+a] = pole * dd[3*h+a];
+		}
+	}
+}
+
 void EvalRealSH(const Vector3& rvec,
                 double r,
                 int lmax,
                 double* values,
                 double* ders)
 {
+	if (RDM0Angular::Enabled()) {
+		EvalRDM0Physical(rvec, r, lmax, values, ders);
+		return;
+	}
 	if (lmax > 4) {
 		EvalRealSHFromSolid(rvec, r, lmax, values, ders);
 		return;
@@ -975,6 +1005,10 @@ void EvalRealSHValuesOnly(const Vector3& rvec,
                           int lmax,
                           double* values)
 {
+	if (RDM0Angular::Enabled()) {
+		EvalRDM0Physical(rvec, r, lmax, values, nullptr);
+		return;
+	}
 	if (lmax > 4) {
 		EvalRealSHValuesOnlyFromSolid(rvec, r, lmax, values);
 		return;
@@ -2113,6 +2147,11 @@ bool MLMTPR::HasTwoLayerEdgePrimitiveCache(int cache_atom_index,
 	if (two_layer_edge_sh_values_cache_.size() < expected_sh_size
 	    || two_layer_edge_mu_vals_cache_.size() < expected_mu_size)
 		return false;
+	if (RDM0Angular::Enabled()
+	    && (two_layer_edge_rd_m0_values_cache_.size() < expected_sh_size
+	        || (need_derivatives
+	            && two_layer_edge_rd_m0_ders_cache_.size() < 3*expected_sh_size)))
+		return false;
 	if (need_derivatives
 	    && (two_layer_edge_sh_ders_cache_.size()
 	            < expected_sh_size * static_cast<size_t>(3)
@@ -2351,6 +2390,11 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 		pure_w_execution_.pack_seconds = SHAccumProfileNow()-pack_start;
 
 	two_layer_edge_sh_values_cache_.resize(edge_count * sh_count);
+	if (RDM0Angular::Enabled()) {
+		two_layer_edge_rd_m0_values_cache_.resize(edge_count * sh_count);
+		if (need_derivatives)
+			two_layer_edge_rd_m0_ders_cache_.resize(edge_count * 3 * sh_count);
+	}
 	if (store_outer_mu_cache)
 		two_layer_edge_mu_vals_cache_.resize(edge_count * mu_stride);
 	else
@@ -2587,8 +2631,14 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 					+ edge * radial_mixing_kernel_stride
 				: nullptr;
 
-				if (need_derivatives)
-					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			if (RDM0Angular::Enabled())
+				EvalRDM0Physical(rvec, r, sh_l_max_, sh_values, sh_ders,
+					two_layer_edge_rd_m0_values_cache_.data() + edge * sh_count,
+					need_derivatives
+						? two_layer_edge_rd_m0_ders_cache_.data() + edge * 3 * sh_count
+						: nullptr);
+			else if (need_derivatives)
+				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 			else
 				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
 
@@ -2855,12 +2905,23 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						? two_layer_gate_required_basic_dense_mu_indices_[bi]
 						: mu;
 				const int sh_index = basic_sh_index_cache_[basic_index];
+				const double angular = RDM0Angular::Enabled()
+					? two_layer_edge_rd_m0_values_cache_[edge * sh_count + sh_index]
+					: sh_values[sh_index];
 				moment_vals[basic_index] +=
-					type_scale * gate_mu_values[mu_index] * sh_values[sh_index];
+					type_scale * gate_mu_values[mu_index] * angular;
 				}
 			}
 			}
 				if (prepare_moment_values_from_cache) {
+					// Finish the complete neighbor RD sum before applying Y_l0(z).
+					// Channel contraction and every scalar/product graph see the
+					// original physical h, so their adjoints retain their meaning.
+					if (RDM0Angular::Enabled())
+						for (int bi : two_layer_gate_required_basic_indices_) {
+							const int l = alpha_index_basic_.comp1[bi];
+							moment_vals[bi] *= RDM0Angular::PoleValue(l);
+						}
 					ContractTwoLayerGateKRankValues(moment_vals);
 					for (int product_index : two_layer_gate_required_product_indices_) {
 						const SHProduct& product = sh_products_[product_index];
@@ -5122,6 +5183,7 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 	for (int moment_index : two_layer_gate_required_moment_indices_)
 		moment_vals[moment_index] = 0.0;
 	double sh_values[kMaxSHComponents];
+	double rd_values[kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
 	const int radial_coeff_base = C + 2 * C * C * K_;
@@ -5139,11 +5201,15 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
 		const double* sh_values_use = sh_values;
+		const double* angular_values_use = sh_values;
 		const double* radial_values_use = radial_values.data();
 		if (use_edge_cache) {
 			const size_t edge = TwoLayerEdgePrimitiveOffset(cache_atom_index, j);
 			sh_values_use =
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
+			angular_values_use = RDM0Angular::Enabled()
+				? two_layer_edge_rd_m0_values_cache_.data() + edge * sh_count
+				: sh_values_use;
 			radial_values_use =
 				(use_gate_radial
 					? two_layer_edge_gate_mu_vals_cache_.data()
@@ -5151,7 +5217,11 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 				+ edge * static_cast<size_t>(
 					use_gate_radial ? gate_mu_stride : mu_stride);
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		if (RDM0Angular::Enabled()) {
+			EvalRDM0Physical(rvec, r, sh_l_max_, sh_values, nullptr, rd_values);
+			angular_values_use = rd_values;
+		} else
+			EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -5218,10 +5288,15 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 					: mu;
 			const int sh_index = basic_sh_index_cache_[basic_index];
 			moment_vals[basic_index] +=
-				type_scale * radial_values_use[mu_index] * sh_values_use[sh_index];
+				type_scale * radial_values_use[mu_index] * angular_values_use[sh_index];
 		}
 	}
 
+	if (RDM0Angular::Enabled())
+		for (int bi : two_layer_gate_required_basic_indices_) {
+			const int l = alpha_index_basic_.comp1[bi];
+			moment_vals[bi] *= RDM0Angular::PoleValue(l);
+		}
 	ContractTwoLayerGateKRankValues(moment_vals);
 	for (int product_index : two_layer_gate_required_product_indices_) {
 		const SHProduct& product = sh_products_[product_index];
@@ -6873,6 +6948,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		std::vector<double>& gate_scalar_ders)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
+	const bool rd_m0 = RDM0Angular::Enabled();
 	if (sh_l_max_ < 0 || sh_l_max_ > kMaxSHL)
 		ERROR("SUS2-SH evaluator currently supports sh_l_max in [0,6].");
 	if (two_layer_gate_required_moments_.empty()
@@ -6895,6 +6971,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
+	double rd_values[kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = basis_radial_ders_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
@@ -6907,7 +6984,10 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		const double r = nbh.dists[j];
 		const double inv_r = 1.0 / r;
 		const int type_outer = nbh.types[j];
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		if (rd_m0)
+			EvalRDM0Physical(rvec, r, sh_l_max_, sh_values, sh_ders, rd_values);
+		else
+			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -6978,7 +7058,8 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 			const double radial_value = radial_values[mu];
 			const double radial_der = radial_derivatives[mu];
 			const double y = sh_values[sh_index];
-			moment_vals[basic_index] += type_scale * radial_value * y;
+			const double angular = rd_m0 ? rd_values[sh_index] : y;
+			moment_vals[basic_index] += type_scale * radial_value * angular;
 			for (int a = 0; a < 3; ++a) {
 				const double dy = sh_ders[sh_der_index + a];
 				moment_der[a * moment_stride + basic_index] +=
@@ -6987,6 +7068,13 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		}
 	}
 
+	// Values use a delayed RD reduction. The coordinate derivatives above
+	// already use physical Y/dY, so scale only the accumulated values here.
+	if (rd_m0)
+		for (int basic_index : two_layer_gate_required_basic_indices_) {
+			const int l = alpha_index_basic_.comp1[basic_index];
+			moment_vals[basic_index] *= RDM0Angular::PoleValue(l);
+		}
 	ContractTwoLayerGateKRankValues(moment_vals);
 	if (TwoLayerGateKRankEnabled()) {
 		for (int j = 0; j < nbh.count; ++j) {
@@ -9882,6 +9970,8 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			loaded_moment_cache = true;
 		}
 	}
+	const bool rd_m0 = RDM0Angular::Enabled();
+	const bool reduce_rd_values = rd_m0 && !loaded_moment_cache;
 	grad_dloss_dsenders_.assign(alpha_moments_count, 0.0);
 	const int C = species_count;
 	const int R = p_RadialBasis->rb_size;
@@ -9893,6 +9983,7 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 
 	double sh_values[kMaxSHComponents];
 	double sh_ders[3 * kMaxSHComponents];
+	double rd_values[kMaxSHComponents];
 	std::vector<double>& rb_vals = radial_vals_buffer_;
 	std::vector<double>& rb_ders = basis_radial_ders_buffer_;
 	std::vector<double>& radial_values = grad_mu_contract_vals_;
@@ -9913,6 +10004,7 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 		const int type_outer = nbh.types[j];
 		const double* sh_values_use = sh_values;
 		const double* sh_ders_use = sh_ders;
+		const double* angular_values_use = sh_values;
 		const double* radial_values_use = radial_values.data();
 		const double* radial_derivatives_use = radial_derivatives.data();
 		if (use_edge_cache) {
@@ -9921,6 +10013,9 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 				two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			sh_ders_use =
 				two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
+			angular_values_use = reduce_rd_values
+				? two_layer_edge_rd_m0_values_cache_.data() + edge * sh_count
+				: sh_values_use;
 			radial_values_use =
 				(use_gate_radial
 					? two_layer_edge_gate_mu_vals_cache_.data()
@@ -9934,7 +10029,12 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 				+ edge * static_cast<size_t>(
 					use_gate_radial ? gate_mu_stride : mu_stride);
 		} else {
-			if (has_direction)
+			if (rd_m0) {
+				EvalRDM0Physical(rvec, r, sh_l_max_, sh_values,
+					has_direction ? sh_ders : nullptr,
+					reduce_rd_values ? rd_values : nullptr);
+				if (reduce_rd_values) angular_values_use = rd_values;
+			} else if (has_direction)
 				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
 			else
 				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
@@ -10022,7 +10122,8 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			const double radial_value = radial_values_use[mu_index];
 			const double y = sh_values_use[sh_index];
 				if (!loaded_moment_cache)
-					moment_vals[basic_index] += type_scale * radial_value * y;
+					moment_vals[basic_index] += type_scale * radial_value
+						* angular_values_use[sh_index];
 				if (has_direction) {
 					const double radial_der = radial_derivatives_use[mu_index];
 					double directional_derivative = 0.0;
@@ -10044,6 +10145,14 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 			}
 		}
 
+	// Cached moments are already physical. Only a newly reduced value buffer
+	// needs p_l; directional derivatives (including second-gate tangents)
+	// were accumulated with physical Y/dY and must not be scaled again.
+	if (reduce_rd_values)
+		for (int basic_index : two_layer_gate_required_basic_indices_) {
+			const int l = alpha_index_basic_.comp1[basic_index];
+			moment_vals[basic_index] *= RDM0Angular::PoleValue(l);
+		}
 	ContractTwoLayerGateKRankValues(moment_vals);
 	ContractTwoLayerGateKRankValues(grad_dloss_dsenders_.data());
 	for (int product_index : two_layer_gate_required_product_indices_) {

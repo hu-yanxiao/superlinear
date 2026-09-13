@@ -2,11 +2,16 @@
  * differentiation of the E/F/virial training objective. */
 #include "mtpr.h"
 #include "adaptive_radial_execution.h"
+#include "rd_m0_angular.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <iostream>
 #include <limits>
+#ifdef MLIP_MPI
+#include <mpi.h>
+#endif
 #ifdef MLIP_INTEL_MKL
 #include <mkl_cblas.h>
 #else
@@ -14,6 +19,20 @@
 #endif
 
 namespace {
+void ReportRDM0Angular(int lmax) {
+    static const bool reported=[lmax]() {
+#ifdef MLIP_MPI
+        int rank=0;
+        MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+        if (rank!=0) return true;
+#endif
+        std::cout << "[RDM0_ANGULAR] backend=rd-m0 lmax=" << lmax
+                  << " gate_reduce=RD_then_Yl0 outer_reduce=RD_then_Yl0"
+                  << " physical_aux_cache=1" << std::endl;
+        return true;
+    }();
+    (void)reported;
+}
 bool ReferenceComponents() {
     const char* value=std::getenv("SUS2_SH_ADAPTIVE_COMPONENTS");
     if (value==nullptr || std::strcmp(value,"batched")==0) return false;
@@ -74,10 +93,21 @@ size_t TensorGateDenseLocal(int gate_channel, int Lmsg, int m, int tensor_lmax) 
 void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
                                   bool derivatives, bool parameters) {
     AdaptiveRadialExecution& ex = adaptive_radial_execution_;
+    const bool rd_m0=RDM0Angular::Enabled();
+    if (rd_m0) ReportRDM0Angular(sh_l_max_);
     bool reuse=parameters && ex.reusable_full_cache && two_layer_edge_cache_ready_
         && two_layer_edge_cache_has_param_derivatives_
         && ex.cached_scaling==scaling && ex.cached_coefficients==regression_coeffs
         && two_layer_edge_cache_atom_count_==neighborhoods.size();
+    if (reuse && rd_m0) {
+        // A copied/reused physical-Y cache alone does not supply raw D.
+        const size_t raw_count=two_layer_edge_offsets_cache_.empty() ? 0
+            : two_layer_edge_offsets_cache_.back()
+                *static_cast<size_t>((sh_l_max_+1)*(sh_l_max_+1));
+        reuse=!two_layer_edge_offsets_cache_.empty()
+            && two_layer_edge_rd_m0_values_cache_.size()==raw_count
+            && (!derivatives || two_layer_edge_rd_m0_ders_cache_.size()==3*raw_count);
+    }
     size_t geometry_cursor=0,metadata_cursor=0;
     if (reuse) for (int i=0;i<neighborhoods.size() && reuse;++i) {
         const Neighborhood& nbh=neighborhoods[i];
@@ -158,6 +188,11 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
         ex.tangent_adjoints.resize(alpha_moments_count);
     }
     const size_t edges=two_layer_edge_offsets_cache_.back();
+    if (rd_m0
+        && (two_layer_edge_rd_m0_values_cache_.size()!=edges*ex.harmonics
+            || (derivatives
+                && two_layer_edge_rd_m0_ders_cache_.size()!=edges*3*ex.harmonics)))
+        ERROR("adaptive RD_m0 angular cache has inconsistent size");
     ex.radial_values.resize(edges*B);
     if (derivatives) ex.radial_derivatives.resize(edges*B);
     if (parameters) ex.radial_tangents.resize(edges*B);
@@ -234,6 +269,11 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
     const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
     const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
     const bool tangent=direction!=nullptr;
+    const bool rd_m0=RDM0Angular::Enabled();
+    const std::vector<double>& angular_values=rd_m0
+        ? two_layer_edge_rd_m0_values_cache_ : two_layer_edge_sh_values_cache_;
+    const std::vector<double>& angular_ders=rd_m0
+        ? two_layer_edge_rd_m0_ders_cache_ : two_layer_edge_sh_ders_cache_;
     const size_t edge_count=two_layer_edge_offsets_cache_.empty()
         ? 0 : two_layer_edge_offsets_cache_.back();
     const int radial_der_stride=ex.derivatives
@@ -246,8 +286,8 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
     if (tangent) std::fill(ex.tangents.begin(),ex.tangents.end(),0.0);
     for (int j=0; j<nbh.count; ++j) {
         const size_t edge=two_layer_edge_offsets_cache_[atom]+j;
-        const double* y=two_layer_edge_sh_values_cache_.data()+edge*H;
-        const double* dy=ex.derivatives ? two_layer_edge_sh_ders_cache_.data()+edge*3*H : nullptr;
+        const double* y=angular_values.data()+edge*H;
+        const double* dy=ex.derivatives ? angular_ders.data()+edge*3*H : nullptr;
         const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
         const double* dr=ex.derivatives ? two_layer_edge_radial_ders_cache_.data()+edge*radial_der_stride : nullptr;
         const double* c=ex.coefficients.data()+static_cast<size_t>(nbh.inds[j])*D;
@@ -260,7 +300,9 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
             ? ex.tensor_message_tangents.data()+static_cast<size_t>(nbh.inds[j])*TC
             : nullptr;
         const double wr=tangent ? ((*direction)[j][0]*nbh.vecs[j][0]+(*direction)[j][1]*nbh.vecs[j][1]+(*direction)[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
-        for (int l=0; l<=sh_l_max_; ++l)
+        for (int l=0; l<=sh_l_max_; ++l) {
+            const double pole=(rd_m0 && tensor_enabled && l>=1 && l<=Lmsg)
+                ? RDM0Angular::PoleValue(l) : 1.0;
             for (int o=0; o<outer_k_rank_; ++o) {
                 const int block=l*outer_k_rank_+o,row=block*R,mu=o*(sh_l_max_+1)+l;
                 const int rb_start=mu_to_radial_eval_block_[mu]*R;
@@ -282,8 +324,15 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                     double angular_t=0.0;
                     if (tensor_enabled && l>=1 && l<=Lmsg) {
                         const int tc=TensorComponentLocal(l,o,m,outer_k_rank_);
-                        angular+=hmsg[tc];
-                        if (htmsg!=nullptr) angular_t+=htmsg[tc];
+                        if (rd_m0) {
+                            // H is physical: p_l*(D + H/p_l) = Y + H.
+                            // Raw D itself is evaluated independently, never Y/p_l.
+                            angular+=hmsg[tc]/pole;
+                            if (htmsg!=nullptr) angular_t+=htmsg[tc]/pole;
+                        } else {
+                            angular+=hmsg[tc];
+                            if (htmsg!=nullptr) angular_t+=htmsg[tc];
+                        }
                     }
                     ex.values[node]+=species*value*angular;
                     if (tangent) {
@@ -293,6 +342,21 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                     }
                 }
             }
+        }
+    }
+    if (rd_m0) {
+        // Restore physical primitive values and their directional tangents
+        // after the neighbor reduction, before any CG products/joint readout.
+        // All reverse consumers retain physical Y/dY and need no extra scale.
+        for (int l=0; l<=sh_l_max_; ++l) {
+            const double pole=RDM0Angular::PoleValue(l);
+            for (int o=0; o<outer_k_rank_; ++o)
+                for (int m=-l; m<=l; ++m) {
+                    const int node=ex.outer_nodes[o*H+l*l+l+m];
+                    ex.values[node]*=pole;
+                    if (tangent) ex.tangents[node]*=pole;
+                }
+        }
     }
     for (size_t p=static_cast<size_t>(OuterKRank1ProductStart());p<sh_products_.size();++p) {
         const SHProduct& t=sh_products_[p];
