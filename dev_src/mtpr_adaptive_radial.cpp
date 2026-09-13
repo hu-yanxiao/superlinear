@@ -33,6 +33,24 @@ void ReportRDM0Angular(int lmax) {
     }();
     (void)reported;
 }
+void ReportPhysicalAngular(int lmax) {
+    static const bool reported=[lmax]() {
+#ifdef MLIP_MPI
+        int rank=0;
+        MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+        if (rank!=0) return true;
+#endif
+        std::cout << "[ANGULAR_BACKEND] backend=" << RDM0Angular::BackendName()
+                  << " lmax=" << lmax
+                  << " value_kernel="
+                  << (RDM0Angular::PhysicalKernelEnabled(false) ? "rd-m0" : "ry")
+                  << " derivative_kernel=rd-m0"
+                  << " gate_reduce=RY outer_reduce=RY raw_d_cache=0"
+                  << " physical_aux_cache=1" << std::endl;
+        return true;
+    }();
+    (void)reported;
+}
 bool ReferenceComponents() {
     const char* value=std::getenv("SUS2_SH_ADAPTIVE_COMPONENTS");
     if (value==nullptr || std::strcmp(value,"batched")==0) return false;
@@ -95,6 +113,8 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
     AdaptiveRadialExecution& ex = adaptive_radial_execution_;
     const bool rd_m0=RDM0Angular::Enabled();
     if (rd_m0) ReportRDM0Angular(sh_l_max_);
+    else if (RDM0Angular::SelectedBackend()!=RDM0Angular::Backend::RY)
+        ReportPhysicalAngular(sh_l_max_);
     bool reuse=parameters && ex.reusable_full_cache && two_layer_edge_cache_ready_
         && two_layer_edge_cache_has_param_derivatives_
         && ex.cached_scaling==scaling && ex.cached_coefficients==regression_coeffs

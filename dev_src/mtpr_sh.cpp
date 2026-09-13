@@ -901,11 +901,12 @@ void EvalRDM0Physical(const Vector3& rvec, double r, int lmax,
                      double* values, double* ders,
                      double* raw_values = nullptr, double* raw_ders = nullptr)
 {
-	double scratch[kMaxSHComponents];
-	double derivative_scratch[3 * kMaxSHComponents];
-	double* d = raw_values == nullptr ? scratch : raw_values;
+	// Physical-only consumers can reuse their final buffers as the recurrence
+	// workspace. Scale only AFTER Eval has completed all recurrence/derivative
+	// dependencies; the full RD path separately retains the unscaled columns.
+	double* d = raw_values == nullptr ? values : raw_values;
 	double* dd = ders == nullptr ? nullptr
-		: (raw_ders == nullptr ? derivative_scratch : raw_ders);
+		: (raw_ders == nullptr ? ders : raw_ders);
 	const double xyz[3] = {rvec[0], rvec[1], rvec[2]};
 	RDM0Angular::Eval(xyz, r, lmax, d, dd);
 	for (int l = 0; l <= lmax; ++l) {
@@ -925,7 +926,7 @@ void EvalRealSH(const Vector3& rvec,
                 double* values,
                 double* ders)
 {
-	if (RDM0Angular::Enabled()) {
+	if (RDM0Angular::PhysicalKernelEnabled(true)) {
 		EvalRDM0Physical(rvec, r, lmax, values, ders);
 		return;
 	}
@@ -1005,7 +1006,7 @@ void EvalRealSHValuesOnly(const Vector3& rvec,
                           int lmax,
                           double* values)
 {
-	if (RDM0Angular::Enabled()) {
+	if (RDM0Angular::PhysicalKernelEnabled(false)) {
 		EvalRDM0Physical(rvec, r, lmax, values, nullptr);
 		return;
 	}

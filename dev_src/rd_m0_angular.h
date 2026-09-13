@@ -29,15 +29,45 @@ inline int Index(int l, int m) { return l * l + l + m; }
 // catch invalid_argument at their normal model/setup boundary to report it
 // through the application's ERROR mechanism.  An invalid value never silently
 // falls back to ry.  Environment changes after the first call are unsupported.
-inline bool Enabled()
+enum class Backend { RY, RYNew, Hybrid, RDM0 };
+
+inline Backend ParseBackend(const char* value)
 {
-    static const bool enabled = []() {
-        const char* value = std::getenv("SUS2_SH_ANGULAR_BACKEND");
-        if (value == nullptr || std::strcmp(value, "ry") == 0) return false;
-        if (std::strcmp(value, "rd-m0") == 0) return true;
-        throw std::invalid_argument("SUS2_SH_ANGULAR_BACKEND must be ry or rd-m0");
-    }();
-    return enabled;
+    if (value == nullptr || std::strcmp(value, "ry") == 0) return Backend::RY;
+    if (std::strcmp(value, "ry-new") == 0) return Backend::RYNew;
+    if (std::strcmp(value, "hybrid") == 0) return Backend::Hybrid;
+    if (std::strcmp(value, "rd-m0") == 0) return Backend::RDM0;
+    throw std::invalid_argument(
+        "SUS2_SH_ANGULAR_BACKEND must be ry, ry-new, hybrid or rd-m0");
+}
+
+inline Backend SelectedBackend()
+{
+    static const Backend backend = ParseBackend(std::getenv("SUS2_SH_ANGULAR_BACKEND"));
+    return backend;
+}
+
+inline const char* BackendName()
+{
+    switch (SelectedBackend()) {
+    case Backend::RY: return "ry";
+    case Backend::RYNew: return "ry-new";
+    case Backend::Hybrid: return "hybrid";
+    case Backend::RDM0: return "rd-m0";
+    }
+    throw std::logic_error("invalid angular backend");
+}
+
+// Only the genuine RD experiment changes the primitive neighbor reduction.
+// The two physical-Y variants deliberately use the original reductions and
+// cache layout, isolating the angular evaluator from deferred normalization.
+inline bool Enabled() { return SelectedBackend() == Backend::RDM0; }
+
+inline bool PhysicalKernelEnabled(bool derivatives)
+{
+    const Backend backend = SelectedBackend();
+    return backend == Backend::RDM0 || backend == Backend::RYNew
+        || (backend == Backend::Hybrid && derivatives);
 }
 
 namespace detail {
