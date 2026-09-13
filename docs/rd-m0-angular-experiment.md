@@ -136,3 +136,50 @@ The experimental installation is
 `/work/phy-weigw/app/superlinear/experimental/rd-m0/mlp-sus2`.
 Select `SUS2_SH_ANGULAR_BACKEND=rd-m0` explicitly. No speed improvement or MD
 stability result is claimed by this mathematical qualification.
+
+## Paired CPU performance test
+
+`codex_tests/rd_m0_benchmark.cpp` is a standalone driver linked against the
+qualified native objects. `dev_test/rd_m0_benchmark.py` runs it only inside a
+Linux LSF compute allocation, freezes both models and the selected CFG data,
+and writes a live `summary.json`. This benchmark does not update parameters.
+
+Job `4271804` was submitted to queue 33 on 2026-09-13 and started on
+`b07u36a`. The server working directory is
+`/work/phy-weigw/20260321_Test/superlinear-rd-m0-performance-20260913/`;
+its report is `result-4271804/summary.json` and its runner log is
+`logs/benchmark-4271804.log`. Submission is not a completed performance result;
+check the report status and complete paired aggregates before drawing a
+conclusion.
+
+The test uses the two frozen VO2 models from qualification. The models have
+different readout layouts as well as different U layouts, so only compare
+RY and RD within the same model. It uniformly selects 500 configurations
+(47112 atoms) from the updated 2162-configuration VO2 training set, including
+indices in the added-data interval. Each fresh child process uses the same
+single allowed CPU, one MPI rank, and one BLAS/OpenMP thread.
+
+Four timing modes are reported separately:
+
+- `energy`: energy and site energies, with prebuilt neighborhoods.
+- `efs`: energy, forces and virial, with prebuilt neighborhoods.
+- `gradient`: actual E/F/S residual loss and its full physical coefficient
+  gradient, with weights 1/0.1/0.01 and vibrations weighting. Regularization,
+  STD/STDD scaling, optimizer updates, and line searches are excluded. Every
+  configuration gets a fresh forward pass; only its forward-to-backward
+  cache is reused.
+- `efs-total`: complete CalcEFS, including fresh neighborhood construction.
+
+Loading, one full warmup pass, checksums, and output are excluded from all
+timers. Pilot runs compare full-precision energy/site/force/virial outputs or
+every physical gradient component, then choose equal measured pass counts
+for both backends. Four pairs alternate RY/RD order. The reported paired
+ratio is **RD time / RY time**; a value above one means RD is slower. Median,
+range and median absolute deviation are retained, along with peak RSS and
+checks that neither model coefficients nor reference labels changed.
+
+This measures single-core CPU latency, not MPI scaling, optimizer convergence
+or GPUMD throughput. Peak RSS includes loaded configurations and resident
+prebuilt neighborhoods (also in `efs-total`), and therefore is not a minimal
+streaming-inference memory estimate. CPU binding reduces scheduling noise but
+does not eliminate shared-node load effects.
