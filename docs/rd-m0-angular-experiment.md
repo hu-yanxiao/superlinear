@@ -97,3 +97,42 @@ derivatives, exact/near poles, parity and rotations. The CLI regression checks
 native model/backend parity, coordinate and mixed EFS parameter derivatives,
 and model generation/training. See its output for the actual tested cases;
 unsupported model angular orders are not counted as numerical passes.
+
+### Server qualification, 2026-09-13
+
+Final build job: `4270352` (queue 33). Final lossless qualification job:
+`4270355` (queue 33, host b07u36a). Both completed successfully.
+Binary SHA256:
+`5da3a8e54f75f986f97ffb6623775264c4571be54acfe609fe2cd55a68f497e8`.
+
+- Standalone angular test: 135851 assertions / 102 direction-scale cases;
+  maximum independent SH value difference 2.665e-15, derivative difference
+  multiplied by radius 6.303e-15, five-point FD difference multiplied by radius
+  8.434e-11. Includes l=0..6 and exact/near poles.
+- Native runtime: all 10 fixtures passed (l=0..4, all four gate/outer
+  cross/same combinations, nonzero tensor and joint branches, full/shared-n
+  projection, shared/species amplitude/readout, K/L/LK scaling).
+- Candidate RY/RD predictions were written with verified 17-significant-digit
+  output. Largest absolute component difference across each fixture's native
+  E/F/virial vector was 2.132e-14. Coordinate/strain FD and mixed parameter FD
+  passed, including separately isolated energy, force and virial objectives.
+- Both backends completed initialization and a real BFGS update (trace steps
+  0 and 1; physical parameters changed). After that one-update smoke, the
+  largest E/F/virial component difference was 4.858e-17. This is not a claim
+  about long training trajectories or fitted accuracy.
+- Two frozen, trained VO2 models (shared-n/species-amplitude/shared readout;
+  full-U/species readout), each evaluated on the first two updated training
+  configurations, passed lossless RY/RD parity. Maximum absolute component
+  differences were respectively 3.658e-13 and 6.382e-13, in each component's
+  native E/F/virial units. This was not a full-dataset accuracy benchmark.
+- The production reference binary agreed with candidate RY at the legacy
+  CFG output precision. That separate comparison is not FP64 parity evidence.
+- Native model l=6 rejection was checked explicitly; it is unsupported, not
+  a passing native numerical case. Runtime l<=4 remains unchanged.
+
+Full evidence is retained on the server under
+`/work/phy-weigw/20260321_Test/superlinear-rd-m0-experiment-20260913/qualification-4270355/`.
+The experimental installation is
+`/work/phy-weigw/app/superlinear/experimental/rd-m0/mlp-sus2`.
+Select `SUS2_SH_ANGULAR_BACKEND=rd-m0` explicitly. No speed improvement or MD
+stability result is claimed by this mathematical qualification.
