@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Server-only RY / RD_m0 native CLI equivalence and derivative qualification.
+"""Server-only RY / RY-new / hybrid / RD_m0 native CLI qualification.
 
 Every backend receives the identical, hashed MTP bytes in a fresh process.
 Candidate predictions use --no-loss and verify scientific notation with 16
@@ -44,7 +44,8 @@ from adaptive_species_readout_check import (
 from adaptive_tensor_message_check import read_fixture, write_geometry
 
 BACKEND_ENV = "SUS2_SH_ANGULAR_BACKEND"
-BACKENDS = (None, "ry", "rd-m0")
+MODES = ("ry", "rd-m0", "ry-new", "hybrid")
+BACKENDS = (None, *MODES)
 BANNER = "[RDM0_ANGULAR] backend=rd-m0"
 EFS_ATOL = EFS_RTOL = 2e-10
 GRAD_ATOL, GRAD_RTOL = 5e-9, 2e-9
@@ -176,6 +177,8 @@ class Check:
                        "lsb_jobid": os.environ["LSB_JOBID"],
                        "host": os.uname().nodename,
                        "scope": "native CLI FP64 mathematics; no speed/deployment claim",
+                       "backends": list(MODES),
+                       "coverage": "all ten fixtures: all-mode EFS; deep fixture: all-mode mixed/isolated gradients; all-mode one-update training",
                        "supported_runtime_lmax": [0, 1, 2, 3, 4],
                        "angular_unit_lmax6_is_separate": True,
                        "tolerances": {"EFS": [EFS_ATOL, EFS_RTOL],
@@ -232,8 +235,16 @@ class Check:
                 assert BANNER in output, f"RD selector not evidenced in {log}"
                 for token in ("gate_reduce=RD_then_Yl0", "outer_reduce=RD_then_Yl0", "physical_aux_cache=1"):
                     assert token in output, (name, token)
+            elif backend in ("ry-new", "hybrid"):
+                assert BANNER not in output, f"physical-Y mode accidentally selected RD reduction: {log}"
+                value_kernel = "ry" if backend == "hybrid" else "rd-m0"
+                for token in (f"[ANGULAR_BACKEND] backend={backend}", f"value_kernel={value_kernel}",
+                              "derivative_kernel=rd-m0", "gate_reduce=RY", "outer_reduce=RY",
+                              "raw_d_cache=0", "physical_aux_cache=1"):
+                    assert token in output, (name, token)
             else:
                 assert BANNER not in output, f"unexpected RD backend: {log}"
+                assert "[ANGULAR_BACKEND]" not in output, f"unexpected experimental Y kernel: {log}"
         return output, code
 
     def calc(self, directory, name, model, cfg=None, backend=None, extra_env=None, binary=None,
@@ -257,10 +268,12 @@ class Check:
         return values
 
     def parity(self, directory, name, model, cfg=None, extra_env=None):
-        values = [self.calc(directory, name + "-" + (backend or "default"), model, cfg,
-                            backend=backend, extra_env=extra_env) for backend in BACKENDS]
-        result = {"default_vs_explicit_ry": compare(values[0], values[1], exact=True),
-                  "ry_vs_rd_m0": compare(values[1], values[2]),
+        values = {backend: self.calc(directory, name + "-" + (backend or "default"), model, cfg,
+                                    backend=backend, extra_env=extra_env) for backend in BACKENDS}
+        result = {"default_vs_explicit_ry": compare(values[None], values["ry"], exact=True),
+                  "ry_vs_rd_m0": compare(values["ry"], values["rd-m0"]),
+                  "ry_vs_ry_new": compare(values["ry"], values["ry-new"]),
+                  "ry_vs_hybrid": compare(values["ry"], values["hybrid"]),
                   "candidate_output_precision": "verified scientific, 16 decimal places / 17 significant digits"}
         if self.reference and extra_env is None:
             # Never compare rounded reference F/S to the lossless candidate
@@ -273,7 +286,7 @@ class Check:
             result["candidate_legacy_vs_reference_legacy"] = {
                 **compare(candidate_legacy, reference), "fp64_parity_evidence": False,
                 "output_precision": "fixed E=12, F=6, stress=5 decimal places"}
-        return result, values[1]
+        return result, values["ry"]
 
     def direction(self, directory, name, model, begin, end, weights, backend):
         assert end > begin
@@ -304,11 +317,17 @@ class Check:
         return {"begin": begin, "end": end, "weights": weights,
                 "analytic": a, "attempts": attempts}
 
-    def paired_direction(self, directory, name, model, begin, end, weights):
+    def paired_direction(self, directory, name, model, begin, end, weights, *, extended=False):
         ry = self.direction(directory, name, model, begin, end, weights, "ry")
         rd = self.direction(directory, name, model, begin, end, weights, "rd-m0")
         np.testing.assert_allclose(ry["analytic"], rd["analytic"], atol=GRAD_ATOL, rtol=GRAD_RTOL)
-        return {"ry": ry, "rd_m0": rd, "analytic_difference": abs(ry["analytic"] - rd["analytic"])}
+        result = {"ry": ry, "rd_m0": rd, "analytic_difference": abs(ry["analytic"] - rd["analytic"])}
+        for mode in (("ry-new", "hybrid") if extended else ()):
+            current = self.direction(directory, name, model, begin, end, weights, mode)
+            np.testing.assert_allclose(ry["analytic"], current["analytic"], atol=GRAD_ATOL, rtol=GRAD_RTOL)
+            current["analytic_difference_vs_ry"] = abs(ry["analytic"] - current["analytic"])
+            result[mode.replace("-", "_")] = current
+        return result
 
     def case(self, name, spec):
         directory = self.out / name
@@ -322,11 +341,11 @@ class Check:
         record["EFS"], values = self.parity(directory, "efs", model)
         assert float(np.linalg.norm(values[0][1:-6])) > 1e-8, "vacuous force fixture"
         roundtrips = []
-        for backend in ("ry", "rd-m0"):
+        for backend in MODES:
             path = directory / f"roundtrip-{backend}.mtp"
             self.run(directory, "roundtrip-" + backend, "roundtrip-model-dev", model, path, backend=backend)
             roundtrips.append(path.read_bytes())
-        assert roundtrips[0] == roundtrips[1], "backend leaked into serialized model format/parameters"
+        assert all(value == roundtrips[0] for value in roundtrips), "backend leaked into serialized model format/parameters"
         record["roundtrip_bytes_identical"] = True
         output, _ = self.run(directory, "layout", "check-loss-gradient-dev", model, self.cfg,
             "--max-configs=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
@@ -335,8 +354,9 @@ class Check:
         layout = dev_fields(output)
         record["layout"] = layout
         count = int(layout["coeff_count"])
-        record["mixed_global"] = self.paired_direction(directory, "mixed-all", model, 0, count, [1., .1, .01])
-        for backend in ("ry", "rd-m0"):
+        record["mixed_global"] = self.paired_direction(directory, "mixed-all", model, 0, count, [1., .1, .01],
+                                                        extended=bool(spec.get("deep")))
+        for backend in (MODES if spec.get("deep") else ("ry", "rd-m0")):
             output, _ = self.run(directory, "geometry-FD-" + backend, "check-efs-fd-dev", model, self.cfg,
                 "--max-configs=1", "--max-atoms=3", "--displacement=2e-5",
                 f"--abs-tolerance={GEOM_ATOL}", f"--rel-tolerance={GEOM_RTOL}",
@@ -360,14 +380,16 @@ class Check:
         directions = record["block_directions"] = {}
         for key, (begin, end) in ranges.items():
             assert end > begin, (key, "required nonempty parameter block")
-            directions[key] = self.paired_direction(directory, "mixed-" + key, model, begin, end, [1., .1, .01])
+            directions[key] = self.paired_direction(directory, "mixed-" + key, model, begin, end,
+                                                     [1., .1, .01], extended=True)
             # Componentwise FD supplements the directional contraction; it is
             # explicitly a two-coordinate sample, not an all-parameter claim.
-            self.run(directory, "component-FD-" + key, "check-loss-gradient-dev", model, self.cfg,
-                "--max-configs=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
-                *ZERO_REG, f"--coeff-start={begin}", f"--coeff-end={min(end, begin + 2)}",
-                "--displacement=5e-6", f"--abs-tolerance={FD_ATOL}", f"--rel-tolerance={FD_RTOL}",
-                backend="rd-m0", calculation=True)
+            for backend in ("rd-m0", "ry-new", "hybrid"):
+                self.run(directory, "component-FD-" + key + "-" + backend, "check-loss-gradient-dev", model, self.cfg,
+                    "--max-configs=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
+                    *ZERO_REG, f"--coeff-start={begin}", f"--coeff-end={min(end, begin + 2)}",
+                    "--displacement=5e-6", f"--abs-tolerance={FD_ATOL}", f"--rel-tolerance={FD_RTOL}",
+                    backend=backend, calculation=True)
         # Isolate E, F and virial: the energy-only objective exercises the
         # values-only forward/cache path; mixed E/F/S can conceal a missing
         # force chain. Keep the same nonzero blocks and strict FD refinement.
@@ -377,9 +399,30 @@ class Check:
             isolated[observable] = {}
             for key in ("gate_k_rank", "adaptive_radial_weight", "tensor_message", "joint_readout"):
                 begin, end = ranges[key]
-                result = self.paired_direction(directory, observable + "-" + key, model, begin, end, weights)
-                assert abs(result["rd_m0"]["analytic"]) > 1e-10, (observable, key, "vacuous isolated derivative")
+                result = self.paired_direction(directory, observable + "-" + key, model, begin, end,
+                                                 weights, extended=True)
+                for backend in MODES:
+                    assert abs(result[backend.replace("-", "_")]["analytic"]) > 1e-10, (observable, key, backend, "vacuous isolated derivative")
                 isolated[observable][key] = result
+        # Unlike check-efs-fd-dev (whose +/- energies use CalcEFS), this
+        # established component checker switches the SAME model from a force
+        # call to values-only perturbed calls. It therefore cross-checks
+        # hybrid's old-Y values path against its new-Y coordinate derivative.
+        # Select two real joint scalars, not the constant species-bias columns.
+        joint_column = 2 + len(numbers(model.read_text(), "moment_coeffs"))
+        assert joint_column == int(layout["joint_readout_begin"]) - int(layout["linear_begin"])
+        assert int(assignment(model.read_text(), "joint_readout_scalar_count")) >= 2
+        record["values_only_to_force_components_FD"] = {}
+        for backend in MODES:
+            output, _ = self.run(directory, "values-only-to-force-FD-" + backend,
+                "check-linear-components-fd-dev", model, self.cfg,
+                "--max-configs=1", "--max-atoms=3", f"--coeff-start={joint_column}",
+                f"--coeff-end={joint_column + 2}", "--displacement=2e-5",
+                f"--abs-tolerance={GEOM_ATOL}", f"--rel-tolerance={GEOM_RTOL}",
+                backend=backend, calculation=True)
+            fields = dev_fields(output)
+            assert int(fields["checked_components"]) == 18
+            record["values_only_to_force_components_FD"][backend] = fields
         counterfactuals = record["nonzero_feature_sensitivity"] = {}
         for key in ("tensor_message_coeffs", "joint_readout_coeffs", "adaptive_radial_weights"):
             text = model.read_text()
@@ -412,7 +455,7 @@ class Check:
         directory = self.out / "initialization-training"
         directory.mkdir()
         results = {}
-        for backend in ("ry", "rd-m0"):
+        for backend in MODES:
             work = directory / backend
             work.mkdir()
             initialized = work / "initialized.mtp"
@@ -464,25 +507,32 @@ class Check:
                                 "initialized_sha256": initialized_sha, "trained_sha256": sha(trained),
                                 "at_least_one_actual_update": True}
         for state in ("initialized", "trained"):
-            models = [Path(results[backend][state]) for backend in ("ry", "rd-m0")]
+            models = [Path(results[backend][state]) for backend in MODES]
             metadata = []
             for model in models:
                 text = model.read_text()
                 metadata.append({key: assignment(text, key) for key in (
                     "version", "readout_mode", "alpha_moments_count", "alpha_scalar_moments",
                     "adaptive_radial_amplitude_count", "adaptive_radial_weight_count")})
-            assert metadata[0] == metadata[1]
+            assert all(value == metadata[0] for value in metadata)
             scale_keys = re.findall(r"(?m)^\s*([A-Za-z_0-9]*optimizer_scales)\s*=", models[0].read_text())
             assert scale_keys, "missing optimizer normalization metadata"
             scale_comparisons = {}
             for key in scale_keys:
-                left, right = [numbers(path.read_text(), key) for path in models]
-                np.testing.assert_allclose(left, right, atol=2e-10, rtol=2e-10, err_msg=key)
-                scale_comparisons[key] = float(np.max(np.abs(left - right))) if left.size else 0.0
+                left = numbers(models[0].read_text(), key)
+                scale_comparisons[key] = {}
+                for backend, model in zip(MODES[1:], models[1:]):
+                    right = numbers(model.read_text(), key)
+                    np.testing.assert_allclose(left, right, atol=2e-10, rtol=2e-10, err_msg=key + ":" + backend)
+                    scale_comparisons[key][backend] = float(np.max(np.abs(left - right))) if left.size else 0.0
             a = self.calc(directory, state + "-ry", models[0], backend="ry")
-            b = self.calc(directory, state + "-rd", models[1], backend="rd-m0")
-            results[state + "_comparison"] = {"EFS": compare(a, b), "metadata": metadata[0],
-                                                "optimizer_scale_max_abs": scale_comparisons}
+            efs_comparisons = {}
+            for backend, model in zip(MODES[1:], models[1:]):
+                b = self.calc(directory, state + "-" + backend, model, backend=backend)
+                efs_comparisons[backend] = compare(a, b)
+            results[state + "_comparison"] = {"EFS": efs_comparisons["rd-m0"],
+                "EFS_by_backend_vs_ry": efs_comparisons, "metadata": metadata[0],
+                "optimizer_scale_max_abs": scale_comparisons}
         self.report["extra"]["initialization_training"] = {"status": "PASS", **results}
 
     def boundary(self, model):
@@ -490,11 +540,11 @@ class Check:
         directory.mkdir()
         output, code = self.run(directory, "invalid-selector", "calc-efs", model, self.cfg,
             directory / "invalid.prediction.cfg", "--no-loss", backend="not-a-backend", allow_failure=True)
-        assert code != 0 and "SUS2_SH_ANGULAR_BACKEND must be ry or rd-m0" in output
+        assert code != 0 and "SUS2_SH_ANGULAR_BACKEND must be ry, ry-new, hybrid or rd-m0" in output
         spec = {"lmax": 6}
         top = directory / "L6.topology.mtp"
         self.run(directory, "L6-init", "init-sh", top, *topology_options(spec))
-        for backend in ("ry", "rd-m0"):
+        for backend in MODES:
             output, code = self.run(directory, "L6-load-" + backend, "roundtrip-model-dev", top,
                 directory / ("L6-" + backend + ".mtp"), backend=backend, allow_failure=True)
             assert code != 0 and "supports sh_l_max in [0,4]" in output

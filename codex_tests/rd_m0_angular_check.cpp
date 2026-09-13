@@ -1,7 +1,9 @@
 // Standalone server-side qualification:
-// c++ -O3 -std=c++11 -I. codex_tests/rd_m0_angular_check.cpp -o rd_m0_check
+// c++ -O3 -std=c++11 -Idev_src codex_tests/rd_m0_angular_check.cpp -o rd_m0_check
 // env -u SUS2_SH_ANGULAR_BACKEND ./rd_m0_check --expect-ry
 // SUS2_SH_ANGULAR_BACKEND=ry ./rd_m0_check --expect-ry
+// SUS2_SH_ANGULAR_BACKEND=ry-new ./rd_m0_check --expect-ry-new
+// SUS2_SH_ANGULAR_BACKEND=hybrid ./rd_m0_check --expect-hybrid
 // SUS2_SH_ANGULAR_BACKEND=rd-m0 ./rd_m0_check --expect-rd-m0
 // SUS2_SH_ANGULAR_BACKEND=invalid ./rd_m0_check --expect-invalid-env
 #include "rd_m0_angular.h"
@@ -26,6 +28,7 @@ int assertions = 0;
 double max_fd_scaled_error = 0.0;
 double max_reference_value_error = 0.0;
 double max_reference_derivative_scaled_error = 0.0;
+int physical_inplace_cases = 0;
 
 void Require(bool condition, const std::string& name)
 {
@@ -247,10 +250,12 @@ void CheckDirection(const std::array<double, 3>& x)
     }
 
     for (int lmax = 0; lmax <= 6; ++lmax) {
-        double prefix[kCount + 1], prefix_ders[3 * kCount + 1];
+        double prefix[kCount + 1], prefix_ders[3 * kCount + 1], only_inplace[kCount + 1];
         std::fill(prefix, prefix + kCount + 1, 12345.0);
         std::fill(prefix_ders, prefix_ders + 3 * kCount + 1, 12345.0);
+        std::fill(only_inplace, only_inplace + kCount + 1, 12345.0);
         RDM0Angular::Eval(x.data(), r, lmax, prefix, prefix_ders);
+        RDM0Angular::Eval(x.data(), r, lmax, only_inplace, nullptr);
         const int count = (lmax + 1) * (lmax + 1);
         for (int i = 0; i < count; ++i) {
             Close(prefix[i], d[i], 0.0, "lmax prefix value");
@@ -259,7 +264,85 @@ void CheckDirection(const std::array<double, 3>& x)
         }
         Close(prefix[count], 12345.0, 0.0, "value buffer boundary");
         Close(prefix_ders[3 * count], 12345.0, 0.0, "derivative buffer boundary");
+
+        // Caller-owned physical-Y buffers can be the D/dd output buffers.
+        // Crucially ALL recurrence work finishes before ANY pole scaling:
+        // scaling a lower-l slot during Eval would corrupt later recursion.
+        // This validates that ownership/scheduling contract independently;
+        // native CLI parity separately exercises actual EvalRDM0Physical.
+        for (int l = 0; l <= lmax; ++l) {
+            const double pole = RDM0Angular::PoleValue(l);
+            for (int i = l * l; i < (l + 1) * (l + 1); ++i) {
+                prefix[i] *= pole;
+                only_inplace[i] *= pole;
+                Close(prefix[i], pole * d[i], 0.0, "in-place physical value equals separate output");
+                Close(only_inplace[i], prefix[i], 0.0, "in-place physical values-only parity");
+                Close(prefix[i], reference[i], 5.0e-14, "in-place physical independent SH reference");
+                for (int a = 0; a < 3; ++a) {
+                    prefix_ders[3 * i + a] *= pole;
+                    Close(prefix_ders[3 * i + a], pole * dd[3 * i + a], 0.0,
+                          "in-place physical derivative equals separate output");
+                    Close(prefix_ders[3 * i + a], reference_ders[3 * i + a], 5.0e-13 / r,
+                          "in-place physical independent SH derivative reference");
+                }
+            }
+        }
+        Close(prefix[count], 12345.0, 0.0, "physical value buffer boundary");
+        Close(only_inplace[count], 12345.0, 0.0, "physical values-only buffer boundary");
+        Close(prefix_ders[3 * count], 12345.0, 0.0, "physical derivative buffer boundary");
+        // Reuse already normalized buffers without clearing. Every active
+        // value/derivative must be overwritten by the next complete Eval.
+        RDM0Angular::Eval(x.data(), r, lmax, prefix, prefix_ders);
+        for (int i = 0; i < count; ++i) {
+            Close(prefix[i], d[i], 0.0, "reused physical buffer raw value");
+            for (int a = 0; a < 3; ++a)
+                Close(prefix_ders[3 * i + a], dd[3 * i + a], 0.0,
+                      "reused physical buffer raw derivative");
+        }
+        ++physical_inplace_cases;
     }
+}
+
+void CheckBackendSelection(const std::string& expected_argument)
+{
+    using RDM0Angular::Backend;
+    struct Case {
+        const char* name;
+        Backend backend;
+        bool raw_reduction;
+        bool new_values_kernel;
+        bool new_derivative_kernel;
+    };
+    const Case cases[] = {
+        {"ry", Backend::RY, false, false, false},
+        {"ry-new", Backend::RYNew, false, true, true},
+        {"hybrid", Backend::Hybrid, false, false, true},
+        {"rd-m0", Backend::RDM0, true, true, true}
+    };
+    Require(RDM0Angular::ParseBackend(nullptr) == Backend::RY, "unset backend defaults to RY");
+    for (const Case& row : cases)
+        Require(RDM0Angular::ParseBackend(row.name) == row.backend, "exact backend parser mapping");
+    for (const char* invalid : {"", "RY", "ry_new", "rd_m0", "hybrid ", "other"}) {
+        bool rejected = false;
+        try { RDM0Angular::ParseBackend(invalid); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        Require(rejected, "invalid backend token rejected");
+    }
+    const Backend selected = RDM0Angular::SelectedBackend();
+    bool found = false;
+    for (const Case& row : cases) {
+        if (selected != row.backend) continue;
+        found = true;
+        if (!expected_argument.empty())
+            Require(expected_argument == std::string("--expect-") + row.name, "selected backend matches requested process");
+        Require(std::string(RDM0Angular::BackendName()) == row.name, "backend banner name");
+        Require(RDM0Angular::Enabled() == row.raw_reduction, "only RD enables raw-D reduction/cache");
+        Require(RDM0Angular::PhysicalKernelEnabled(false) == row.new_values_kernel,
+                "values-only kernel dispatch truth table");
+        Require(RDM0Angular::PhysicalKernelEnabled(true) == row.new_derivative_kernel,
+                "derivative kernel dispatch truth table");
+    }
+    Require(found, "selected backend is known");
 }
 
 void CheckInvalidInput()
@@ -301,9 +384,9 @@ int main(int argc, char** argv)
             std::cout << "RD_M0_ENV_REJECTION_PASS\n";
             return 0;
         }
-        Require(mode.empty() || mode == "--expect-ry" || mode == "--expect-rd-m0", "unknown test argument");
-        const bool enabled = RDM0Angular::Enabled();
-        if (!mode.empty()) Require(enabled == (mode == "--expect-rd-m0"), "backend selection mismatch");
+        Require(mode.empty() || mode == "--expect-ry" || mode == "--expect-rd-m0"
+                || mode == "--expect-ry-new" || mode == "--expect-hybrid", "unknown test argument");
+        CheckBackendSelection(mode);
         CheckInvalidInput();
         CheckPoles();
         std::vector<std::array<double, 3> > directions = {
@@ -324,7 +407,9 @@ int main(int argc, char** argv)
             }
         }
         std::cout << std::setprecision(17) << "RD_M0_ANGULAR_PASS assertions=" << assertions
+                  << " backend=" << RDM0Angular::BackendName()
                   << " direction_cases=" << directions.size() * 3
+                  << " physical_inplace_cases=" << physical_inplace_cases
                   << " max_SH_value_error=" << max_reference_value_error
                   << " max_SH_derivative_error_times_r=" << max_reference_derivative_scaled_error
                   << " max_FD_error_times_r=" << max_fd_scaled_error << '\n';
