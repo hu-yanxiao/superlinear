@@ -3035,6 +3035,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		"mlp-sus2 calc-efs pot.mtp in.cfg out.cfg:\n"
 		"calculates energies, forces, and stresses (efs) of configurations from in.cfg and\n"
 		"writes configurations with calculated efs to out.cfg\n"
+		"  --no-loss: preserve full double precision in the output CFG\n"
 		) {
 
 		if (args.size() != 3) {
@@ -3045,6 +3046,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const string mtp_filename = args[0];
 		const string input_filename = args[1];
 		const string output_filename = args[2];
+		const unsigned int save_flags = opts["no-loss"] != ""
+			? Configuration::SAVE_NO_LOSS : 0;
 
 		MLMTPR mtpr(mtp_filename);
 
@@ -3053,7 +3056,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		Configuration cfg;
 		while (cfg.Load(ifs)) {
 			mtpr.CalcEFS(cfg);
-			cfg.Save(ofs);
+			cfg.Save(ofs, save_flags);
 		}
 
 		ifs.close();

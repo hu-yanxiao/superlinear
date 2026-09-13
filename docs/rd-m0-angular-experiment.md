@@ -60,8 +60,8 @@ but are not claimed to use deferred normalization in their outer reduction.
 Set the backend before starting the process (selection is cached per process):
 
 ```sh
-SUS2_SH_ANGULAR_BACKEND=ry /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry.cfg
-SUS2_SH_ANGULAR_BACKEND=rd-m0 /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg
+SUS2_SH_ANGULAR_BACKEND=ry /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=rd-m0 /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg --no-loss
 ```
 
 An unset variable selects `ry`; other values are rejected. RD adaptive setup
@@ -70,6 +70,11 @@ prints a `[RDM0_ANGULAR] backend=rd-m0` diagnostic. The same selection works for
 needed to switch an existing model between these mathematically equivalent
 backends. Floating-point summation order differs, so bitwise equality or
 identical long optimization trajectories is not promised.
+
+`calc-efs --no-loss` is an additive diagnostic option on this branch, using
+the existing lossless CFG serializer (17 significant digits). Default CFG
+formatting is unchanged. Do not infer double-precision parity from ordinary
+CFG files: those round forces to six and stresses to five decimal places.
 
 This first experiment intentionally keeps physical angular cache views as well
 as raw D/dD. The extra angular storage is H doubles per edge in values-only
