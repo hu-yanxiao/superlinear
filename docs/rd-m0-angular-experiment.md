@@ -101,7 +101,9 @@ equivalence alone does not imply a speedup; performance needs measurement.
 GPUMD and production installed binaries are not changed by this branch. The
 [separate PyTorch implementation branch](https://github.com/hu-yanxiao/SUS2-SH-PyTorch/tree/codex/rd-m0-angular-experiment)
 is not part of this native implementation or its validation claims. Its own
-qualification is required; no PyTorch validation result is claimed here.
+qualification is independent. Its snapshot `0de63a3` passed 45 CPU/CUDA
+float64 checks in server job `4272217`; see that repository's RD document
+for the separate autograd, native-export and batch-dependent timings.
 
 ## Validation
 
@@ -265,8 +267,10 @@ Statistics include only matching pair indices and repeat-count generations.
 `COMPLETE` requires all requested pairs, independently for each section and
 backend. A partially running campaign can therefore contain completed sections
 without being a completed campaign. The independent interruption/resume smoke
-is `dev_test/rd_m0_ablation_resume_check.py`; its existence alone is not evidence
-that the resume smoke has passed on the server.
+is `dev_test/rd_m0_ablation_resume_check.py`. Server job `4272218` passed the
+partial-pair interruption, resume, complete-resume no-rerun and changed-count
+rejection checks. Evidence is `resume-4272218/report.json` under the optimized
+server campaign root. This is a two-CFG runner smoke, not a speed result.
 
 ### Completed 100-CFG energy/EFS sections, 2026-09-13 16:28 +08:00
 
