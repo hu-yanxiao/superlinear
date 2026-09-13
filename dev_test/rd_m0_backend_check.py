@@ -2,6 +2,10 @@
 """Server-only RY / RD_m0 native CLI equivalence and derivative qualification.
 
 Every backend receives the identical, hashed MTP bytes in a fresh process.
+Candidate predictions use --no-loss and verify scientific notation with 16
+digits after the decimal point (17 significant digits). The optional older
+reference is compared only to a separate low-precision candidate prediction;
+that comparison is explicitly NOT evidence of FP64 EFS equality.
 No model conversion or parameter rescaling is part of this comparison.  The
 public runtime presently loads L<=4; L=6 is checked as an explicit rejected
 boundary, NOT counted as a successful numerical test.  The independent angular
@@ -57,23 +61,40 @@ def sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def prediction(path: Path) -> list[np.ndarray]:
+def prediction(path: Path, *, lossless: bool) -> tuple[list[np.ndarray], dict]:
     blocks = re.findall(r"(?ms)^BEGIN_CFG\s*\n.*?^END_CFG\s*$", path.read_text())
     assert blocks, f"no complete predicted CFG: {path}"
     result = []
+    checked_tokens = {"energy": 0, "force": 0, "stress": 0}
+    scientific = re.compile(r"[-+]?\d\.\d{16}[eE][-+]\d{2,}")
+    legacy_digits = {"energy": 12, "force": 6, "stress": 5}
+    def check_tokens(kind, tokens):
+        pattern = scientific if lossless else re.compile(r"[-+]?\d+\.\d{" + str(legacy_digits[kind]) + r"}")
+        for token in tokens:
+            assert pattern.fullmatch(token), (str(path), kind, "unexpected output precision", token)
+        checked_tokens[kind] += len(tokens)
     for block in blocks:
-        energy = float(re.search(r"(?m)^\s*Energy\s*\n\s*(" + NUMBER + ")", block)[1])
+        energy_token = re.search(r"(?m)^\s*Energy\s*\n\s*(" + NUMBER + ")", block)[1]
+        check_tokens("energy", [energy_token])
+        energy = float(energy_token)
         match = re.search(r"(?ms)^\s*AtomData:([^\n]*)\n(.*?)^\s*Energy", block)
         columns = match[1].split()
         indices = [columns.index(axis) for axis in ("fx", "fy", "fz")]
         rows = [row.split() for row in match[2].strip().splitlines()]
-        force = [float(row[index]) for row in rows for index in indices]
-        stress = [float(x) for x in re.search(r"(?m)^\s*PlusStress:[^\n]*\n([^\n]*)", block)[1].split()]
+        force_tokens = [row[index] for row in rows for index in indices]
+        stress_tokens = re.search(r"(?m)^\s*PlusStress:[^\n]*\n([^\n]*)", block)[1].split()
+        check_tokens("force", force_tokens)
+        check_tokens("stress", stress_tokens)
+        force = [float(token) for token in force_tokens]
+        stress = [float(token) for token in stress_tokens]
         assert len(stress) == 6
         values = np.asarray([energy, *force, *stress], dtype=float)
         assert np.isfinite(values).all(), f"nonfinite prediction: {path}"
         result.append(values)
-    return result
+    return result, {"format": "scientific_16_decimal_17_significant_digits" if lossless else "legacy_fixed",
+                    "checked_physical_tokens": checked_tokens,
+                    "decimal_places": 16 if lossless else legacy_digits,
+                    "lossless_fp64_output": lossless}
 
 
 def compare(a: list[np.ndarray], b: list[np.ndarray], *, exact=False) -> dict:
@@ -164,7 +185,7 @@ class Check:
                        "script_sha256": sha(Path(__file__)),
                        "helper_sha256": {name: sha(Path(__file__).with_name(name)) for name in
                                          ("adaptive_species_readout_check.py", "adaptive_tensor_message_check.py")},
-                       "processes": [], "cases": {}, "extra": {}, "failures": []}
+                       "processes": [], "predictions": [], "cases": {}, "extra": {}, "failures": []}
         self.cfg = self.out / "asymmetric.input.cfg"
         write_fixture(self.cfg)
         self.flush()
@@ -215,25 +236,43 @@ class Check:
                 assert BANNER not in output, f"unexpected RD backend: {log}"
         return output, code
 
-    def calc(self, directory, name, model, cfg=None, backend=None, extra_env=None, binary=None):
+    def calc(self, directory, name, model, cfg=None, backend=None, extra_env=None, binary=None,
+             legacy_output=False):
         cfg = cfg or self.cfg
         model, cfg = Path(model).resolve(), Path(cfg).resolve()
         target = (directory / (name + ".prediction.cfg")).resolve()
         assert target not in (model, cfg) and not target.exists()
         identity = (sha(model), sha(cfg))
-        self.run(directory, name, "calc-efs", model, cfg, target, backend=backend,
+        if binary is not None and Path(binary).resolve() != self.binary:
+            assert legacy_output, "the historical reference does not implement --no-loss"
+        flags = [] if legacy_output else ["--no-loss"]
+        self.run(directory, name, "calc-efs", model, cfg, target, *flags, backend=backend,
                  extra_env=extra_env, calculation=True, binary=binary)
         assert identity == (sha(model), sha(cfg)), "a prediction modified its immutable inputs"
-        return prediction(target)
+        values, precision = prediction(target, lossless=not legacy_output)
+        self.report["predictions"].append({"path": str(target), "sha256": sha(target),
+            "binary": str(binary or self.binary), "backend": backend or "unset/default",
+            "model_sha256": identity[0], "input_cfg_sha256": identity[1], "precision": precision})
+        self.flush()
+        return values
 
     def parity(self, directory, name, model, cfg=None, extra_env=None):
         values = [self.calc(directory, name + "-" + (backend or "default"), model, cfg,
                             backend=backend, extra_env=extra_env) for backend in BACKENDS]
         result = {"default_vs_explicit_ry": compare(values[0], values[1], exact=True),
-                  "ry_vs_rd_m0": compare(values[1], values[2])}
+                  "ry_vs_rd_m0": compare(values[1], values[2]),
+                  "candidate_output_precision": "verified scientific, 16 decimal places / 17 significant digits"}
         if self.reference and extra_env is None:
-            reference = self.calc(directory, name + "-reference", model, cfg, binary=self.reference)
-            result["new_ry_vs_reference_default"] = compare(values[1], reference)
+            # Never compare rounded reference F/S to the lossless candidate
+            # and then label the result FP64 parity. Preserve that legacy
+            # serialization check as a separately named diagnostic instead.
+            candidate_legacy = self.calc(directory, name + "-candidate-legacy-ry", model, cfg,
+                                         backend="ry", legacy_output=True)
+            reference = self.calc(directory, name + "-reference-legacy", model, cfg,
+                                  binary=self.reference, legacy_output=True)
+            result["candidate_legacy_vs_reference_legacy"] = {
+                **compare(candidate_legacy, reference), "fp64_parity_evidence": False,
+                "output_precision": "fixed E=12, F=6, stress=5 decimal places"}
         return result, values[1]
 
     def direction(self, directory, name, model, begin, end, weights, backend):
@@ -387,18 +426,43 @@ class Check:
                 f"--best-pot-name={work/'init-best.mtp'}", backend=backend, calculation=True)
             assert "[adaptive-pytorch-profile] fresh=1" in output
             trace = work / "trace.csv"
-            output, _ = self.run(work, "train-one-point", "train", initialized, self.cfg,
-                "--max-iter=1", *shared, f"--trained-pot-name={trained}",
+            initialized_sha = sha(initialized)
+            output, _ = self.run(work, "train-one-update", "train", initialized, self.cfg,
+                "--max-iter=2", *shared, f"--trained-pot-name={trained}",
                 f"--curr-pot-name={work/'current.mtp'}", f"--best-pot-name={work/'best.mtp'}",
                 f"--bfgs-trace-file={trace}", backend=backend, calculation=True)
             assert "[adaptive-pytorch-profile] fresh=0" in output
             with trace.open(newline="") as stream:
                 rows = list(csv.reader(stream))
             assert rows[0] == ["step", "total_loss", "efs_loss", "energy_mae_mev_atom", "force_mae_mev_a", "stress_mae_ev"]
-            assert len(rows) >= 2 and all(len(row) == 6 and all(math.isfinite(float(v)) for v in row) for row in rows[1:])
+            assert len(rows) >= 3 and all(len(row) == 6 and all(math.isfinite(float(v)) for v in row) for row in rows[1:])
+            steps = [int(row[0]) for row in rows[1:]]
+            assert steps[0] == 0 and 1 in steps and all(a < b for a, b in zip(steps, steps[1:])), steps
+            assert sha(initialized) == initialized_sha, "training modified the source initialized model"
+            changes = {}
+            initial_text, trained_text = initialized.read_text(), trained.read_text()
+            for key in ("shift_coeffs", "scal_coeffs", "species_coeffs", "moment_coeffs",
+                        "two_layer_gate_k_rank_weights", "two_layer_gate_radial_coeffs",
+                        "two_layer_gate_type_coeffs", "adaptive_radial_amplitudes",
+                        "adaptive_radial_weights", "tensor_message_coeffs", "joint_readout_coeffs"):
+                before, after = numbers(initial_text, key), numbers(trained_text, key)
+                assert before.shape == after.shape and np.isfinite(after).all(), key
+                changes[key] = float(np.max(np.abs(after - before))) if before.size else 0.0
+            def radial_values(text):
+                block = re.search(r"(?ms)^\s*radial_coeffs\s*\n(.*?)(?=^\s*alpha_moments_count\s*=)", text)
+                assert block, "missing radial parameter block"
+                return np.asarray([float(value) for row in re.findall(r"\{([^}]*)\}", block[1])
+                                   for value in re.findall(NUMBER, row)])
+            before, after = radial_values(initial_text), radial_values(trained_text)
+            assert before.shape == after.shape and np.isfinite(after).all()
+            changes["radial_coeffs"] = float(np.max(np.abs(after - before)))
+            assert max(changes.values()) > 1e-12, "step 1 did not change any physical model parameter"
             results[backend] = {"initialized": str(initialized), "trained": str(trained),
                                 "accepted_points": len(rows) - 1, "trace": rows,
-                                "max_iter_1_is_smoke_not_learning_claim": True}
+                                "max_iter": 2, "accepted_steps": steps,
+                                "physical_parameter_max_abs_changes": changes,
+                                "initialized_sha256": initialized_sha, "trained_sha256": sha(trained),
+                                "at_least_one_actual_update": True}
         for state in ("initialized", "trained"):
             models = [Path(results[backend][state]) for backend in ("ry", "rd-m0")]
             metadata = []
@@ -425,7 +489,7 @@ class Check:
         directory = self.out / "boundaries"
         directory.mkdir()
         output, code = self.run(directory, "invalid-selector", "calc-efs", model, self.cfg,
-            directory / "invalid.prediction.cfg", backend="not-a-backend", allow_failure=True)
+            directory / "invalid.prediction.cfg", "--no-loss", backend="not-a-backend", allow_failure=True)
         assert code != 0 and "SUS2_SH_ANGULAR_BACKEND must be ry or rd-m0" in output
         spec = {"lmax": 6}
         top = directory / "L6.topology.mtp"
