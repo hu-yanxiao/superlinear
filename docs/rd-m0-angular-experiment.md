@@ -1,8 +1,9 @@
 # RD m0 angular backend experiment
 
-This branch adds an optional C++ execution backend for the current
+This branch adds optional C++ angular execution backends for the current
 `radial-coefficient-gate` superlinear model. It does not add parameters or
-change the saved model format. The production/default backend remains `ry`.
+change the saved model format, CG graphs, model physics or training objective.
+The production/default backend remains `ry`.
 
 ## Definition
 
@@ -12,7 +13,7 @@ In the existing real spherical-harmonic convention,
     Y_lm(rhat_ij) = D^l_m0(Q_ij) c_l,
     c_l = Y_l0(zhat) = sqrt((2l+1)/(4*pi)).
 
-The experimental gate and outer primitive reductions are
+Only the full `rd-m0` backend changes the gate and outer primitive reductions to
 
     h_i,klm = c_l sum_j R_gate,ij,kl D^l_m0(Q_ij),
     A_i,olm = c_l sum_j R_outer,ij,ol D^l_m0(Q_ij).
@@ -31,7 +32,22 @@ The weighted sum of these columns is not itself a rotation matrix. Rotating the
 fixed axial tensor onto each edge precedes summation; there is no single
 rotation applied to an already summed neighborhood.
 
-## Implementation and derivatives
+## Backends, implementation and derivatives
+
+All four selections use the same physical model and coefficients:
+
+| Selection | Values-only angular kernel | Angular kernel with derivatives | Neighbor reduction / raw angular cache |
+| --- | --- | --- | --- |
+| `ry` (default) | Existing real SH | Existing real SH | Physical Y; no raw D cache |
+| `ry-new` | New direction-cosine recurrence, immediately normalized to Y | New recurrence, immediately normalized to Y/dY | Physical Y; no raw D/dD cache |
+| `hybrid` | Existing real SH | Same new physical Y/dY kernel as `ry-new` | Physical Y; no raw D/dD cache |
+| `rd-m0` | New D recurrence | New D/dD recurrence | Raw D reduction, then c_l restoration; retains raw and physical cache views |
+
+`ry-new` and `hybrid` are physical-only ablations, not deferred-normalization
+backends. Their recurrence workspace is the final Y/dY buffer and they do not
+allocate the extra raw angular caches used by `rd-m0`. `hybrid` preserves the
+old values-only route while using the new derivative route; it does not have
+a separate faster EFS kernel than `ry-new`.
 
 `dev_src/rd_m0_angular.h` independently evaluates the normalized real rotation
 column using direction-cosine recurrences. It does not call the old spherical
@@ -43,7 +59,7 @@ For n = r/|r|, derivatives include the complete normalization chain rule:
     dD/dr_a = (dD/dn_a - n_a sum_b n_b dD/dn_b) / |r|.
     d(c_l sum_j R_j D_j)/dr = c_l sum_j (dR_j D_j + R_j dD_j).
 
-Raw D/dD caches serve the experimental reductions. Physical Y/dY cache views
+In `rd-m0`, raw D/dD caches serve the experimental reductions. Physical Y/dY cache views
 are produced directly as c_l D/c_l dD for existing reverse, mixed-loss-gradient
 and auxiliary code. Physical adjoints must not be multiplied by c_l a second
 time. Cached gate moments are always physical and are not rescaled on reuse.
@@ -61,10 +77,12 @@ Set the backend before starting the process (selection is cached per process):
 
 ```sh
 SUS2_SH_ANGULAR_BACKEND=ry /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=ry-new /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry-new.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=hybrid /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg hybrid.cfg --no-loss
 SUS2_SH_ANGULAR_BACKEND=rd-m0 /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg --no-loss
 ```
 
-An unset variable selects `ry`; other values are rejected. RD adaptive setup
+An unset variable selects `ry`; values outside these four are rejected. RD adaptive setup
 prints a `[RDM0_ANGULAR] backend=rd-m0` diagnostic. The same selection works for
 `init-sh`, training and evaluation. No model conversion or reinitialization is
 needed to switch an existing model between these mathematically equivalent
@@ -76,11 +94,14 @@ the existing lossless CFG serializer (17 significant digits). Default CFG
 formatting is unchanged. Do not infer double-precision parity from ordinary
 CFG files: those round forces to six and stresses to five decimal places.
 
-This first experiment intentionally keeps physical angular cache views as well
-as raw D/dD. The extra angular storage is H doubles per edge in values-only
+The full `rd-m0` experiment intentionally keeps physical angular cache views as
+well as raw D/dD. Its extra angular storage is H doubles per edge in values-only
 mode or 4H doubles per edge with derivatives, H=(lmax+1)^2. Mathematical
 equivalence alone does not imply a speedup; performance needs measurement.
-PyTorch, GPUMD and production installed binaries are not changed by this branch.
+GPUMD and production installed binaries are not changed by this branch. The
+[separate PyTorch implementation branch](https://github.com/hu-yanxiao/SUS2-SH-PyTorch/tree/codex/rd-m0-angular-experiment)
+is not part of this native implementation or its validation claims. Its own
+qualification is required; no PyTorch validation result is claimed here.
 
 ## Validation
 
@@ -98,9 +119,9 @@ native model/backend parity, coordinate and mixed EFS parameter derivatives,
 and model generation/training. See its output for the actual tested cases;
 unsupported model angular orders are not counted as numerical passes.
 
-### Server qualification, 2026-09-13
+### Original two-backend qualification, 2026-09-13
 
-Final build job: `4270352` (queue 33). Final lossless qualification job:
+Original build job: `4270352` (queue 33). Original lossless qualification job:
 `4270355` (queue 33, host b07u36a). Both completed successfully.
 Binary SHA256:
 `5da3a8e54f75f986f97ffb6623775264c4571be54acfe609fe2cd55a68f497e8`.
@@ -132,10 +153,44 @@ Binary SHA256:
 
 Full evidence is retained on the server under
 `/work/phy-weigw/20260321_Test/superlinear-rd-m0-experiment-20260913/qualification-4270355/`.
-The experimental installation is
+The original two-backend experimental installation was
 `/work/phy-weigw/app/superlinear/experimental/rd-m0/mlp-sus2`.
 Select `SUS2_SH_ANGULAR_BACKEND=rd-m0` explicitly. No speed improvement or MD
 stability result is claimed by this mathematical qualification.
+
+### Four-backend qualification, 2026-09-13
+
+Build job `4272207` and qualification job `4272208` use the optimized
+four-backend implementation. Qualification completed with **PASS, 10/10
+positive fixtures, zero failures** on `b07u36a`. The qualified executable is
+`/work/phy-weigw/20260321_Test/superlinear-rd-m0-optimized-20260913/runtime/mlp-sus2`,
+SHA256 `0c31698276079574a618d36f41fe698171cab392d8e6f806ed94e09e6d2cd062`.
+
+- All four backends passed lossless E/F/virial parity on all ten fixtures,
+  covering native l=0..4 and all gate/outer cross/same combinations. Default
+  and explicitly selected `ry` remained identical in the recorded checks.
+- RY/RD coordinate and mixed-gradient checks cover all fixtures. The deep
+  `L2-extended-0` fixture additionally checks all four backends for mixed
+  gradients, isolated energy/force/virial objectives, parameter-block
+  directions, values-only energy-to-force component finite differences,
+  geometry A/B/A cache reuse, and full-radial-derivative/reference-EFS caches.
+  This is targeted coverage, not every parameter direction in every fixture.
+- All four backends passed model initialization, normalization comparison and
+  a real one-update BFGS smoke (accepted trace steps 0 and 1, changed physical
+  parameters). These short checks do not establish long-training equivalence.
+- Both frozen trained VO2 models passed lossless all-backend checks on the
+  first two updated-data configurations. The largest absolute E/F/virial
+  component differences versus RY were 3.658e-13 for shared-n/species-amplitude
+  shared readout and 6.382e-13 for full-U/species readout. Components retain
+  their respective native units; this is not a full-dataset accuracy test.
+- Invalid selectors fail closed. Native l=6 remains explicitly unsupported
+  and is not counted as a numerical pass. The standalone angular l<=6 test
+  is separate from native-model support. The legacy-formatted production
+  comparison remains only a legacy-precision check, not FP64 evidence.
+
+Evidence: `qualification-4272208/report.json` under the optimized server
+directory above. The four-backend driver parity tolerances and individual FD
+attempts are retained there; passing is not a claim of bitwise equality.
 
 ## Paired CPU performance test
 
@@ -183,3 +238,77 @@ or GPUMD throughput. Peak RSS includes loaded configurations and resident
 prebuilt neighborhoods (also in `efs-total`), and therefore is not a minimal
 streaming-inference memory estimate. CPU binding reduces scheduling noise but
 does not eliminate shared-node load effects.
+
+### Resumable four-backend ablation
+
+`dev_test/rd_m0_ablation_benchmark.py` is a separate runner; it does not replace
+the original runner or overwrite the original 500-CFG campaign. It accepts
+`--models`, `--modes`, `--backends`, and `--count` filters, retaining `ry` as the
+reference and at least four pairs. Four-backend order is balanced across pairs:
+RY/new/RD/hybrid, new/hybrid/RY/RD, hybrid/RD/new/RY, RD/RY/hybrid/new.
+The same fixed-objective driver, immutable reference labels, one full warmup
+per fresh process, and full component/physical-gradient dump checks apply.
+
+Add `--resume` to the identical invocation to continue a partial pair. Resume
+requires the same source/model/data/binary and runner/dependency hashes,
+parameters, relevant runtime environment, host and original CPU identity.
+The selected CFG bytes are frozen. Only cleanly completed processes with
+matching timing/log/dump evidence are reused; incomplete work is rerun, not
+counted. The campaign lock prevents concurrent writers. A completed resume
+does not rerun successful measurements. Changing inputs or parameters requires
+a new output directory, not silently mixing results into an old campaign.
+
+Every accepted timed process must last at least three seconds. If any backend
+is too short, the entire section moves to a larger common repeat count;
+earlier attempts remain recorded but are excluded from the active aggregate.
+Statistics include only matching pair indices and repeat-count generations.
+`COMPLETE` requires all requested pairs, independently for each section and
+backend. A partially running campaign can therefore contain completed sections
+without being a completed campaign. The independent interruption/resume smoke
+is `dev_test/rd_m0_ablation_resume_check.py`; its existence alone is not evidence
+that the resume smoke has passed on the server.
+
+### Completed 100-CFG energy/EFS sections, 2026-09-13 16:28 +08:00
+
+Job `4272209`, queue 33, is the four-backend diagnostic campaign in
+`/work/phy-weigw/20260321_Test/superlinear-rd-m0-optimized-20260913/ablation100-4272209/`.
+The snapshot `summary.json` updated at `2026-09-13T16:28:45.969868+08:00`
+was still `RUNNING`. Only the following **completed 4/4-pair sections** are
+reported here: energy and EFS for the shared-n/species-amplitude/shared-readout
+model. EFS-total and gradient are not completed results in this snapshot.
+
+This diagnostic uses **100 CFG / 9,408 atoms**, uniformly selected from the
+same updated 2,162-CFG VO2 source, on one pinned CPU of `b07u36a` (Xeon Gold
+6133, 2.50 GHz). It is not the earlier **500 CFG / 47,112 atoms** campaign,
+nor a completed new 500-CFG verification. The new benchmark driver SHA256 is
+`c5d8cfaa8df90ec352c8e4e2d8446b054967dc7504264ac08220a02fe570a07a`;
+the shared-n model SHA256 remains
+`6e5de8b306061cadbdefdba812e30567166d388f49b899f9b2ab61eeaf2ca449`.
+
+Ratios are per-pair **backend time / RY time**, then median across four pairs.
+Ranges describe observed paired scatter, not a confidence interval. Throughput
+change is `100*(1/median_ratio-1)`, not the negative of the time change.
+
+| Mode | Backend | Paired time ratio, median [min, max] | Time change | Throughput change | Pairs |
+| --- | --- | --- | --- | --- | --- |
+| Energy | `ry-new` | 1.01230 [1.00773, 1.02342] | +1.23% | -1.21% | 4/4 |
+| Energy | `hybrid` | 1.00123 [0.99555, 1.00519] | +0.12% | -0.12% | 4/4 |
+| Energy | `rd-m0` | 1.01524 [1.01268, 1.01763] | +1.52% | -1.50% | 4/4 |
+| EFS | `ry-new` | 0.84471 [0.84177, 0.85454] | -15.53% | +18.38% | 4/4 |
+| EFS | `hybrid` | 0.84034 [0.83814, 0.84846] | -15.97% | +19.00% | 4/4 |
+| EFS | `rd-m0` | 0.84362 [0.84221, 0.85013] | -15.64% | +18.54% | 4/4 |
+
+Energy uses two measured passes per process (200 configuration calls); EFS
+uses one (100 calls). Median RY costs are 408.734 us/atom for energy and
+971.184 us/atom for EFS. Loading and the full warmup are outside these timers.
+All 100-CFG energy/EFS full-precision output checks passed; the largest
+absolute E/F/virial component difference was 5.756e-13 in native units.
+
+On this model, the new physical derivative kernel accounts for essentially
+the measured EFS gain: deferred normalization is not required to obtain it.
+`hybrid` avoids the small energy-only regression of `ry-new` (direct paired
+hybrid/new energy ratio 0.98878) and is effectively tied with original RY for
+energy. Hybrid and new use the same derivative path; their roughly 0.58%
+paired EFS difference is not evidence of an additional algorithmic speedup.
+Four shared-node pairs do not establish cross-CPU scaling, optimizer speed,
+MD throughput, another model's performance, or the final 500-CFG result.
