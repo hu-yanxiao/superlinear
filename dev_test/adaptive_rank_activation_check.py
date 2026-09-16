@@ -25,7 +25,7 @@ def main():
         raise SystemExit('Numerical checks require a server LSF allocation')
     import numpy as np
     from adaptive_species_readout_check import (
-        assignment, numbers, put, put_numbers, asymmetric_shared_text, write_fixture, ZERO_REG)
+        assignment, numbers, put, put_numbers, asymmetric_shared_text, write_fixture, parse_prediction, ZERO_REG)
     from adaptive_tensor_message_check import TensorCheck, topology_args
     check = TensorCheck(args.cpp, args.outdir, args.old_cpp)
     check.cfg = check.out/'asymmetric.cfg'
@@ -104,6 +104,27 @@ def main():
     linear, _, _ = case('shared_linear', activation='none')
     full, _, _ = case('full_tanh', projection='full', rank=1)
     case('rank_N_joint_tensor', rank=3, gate='same-k', outer='q-total', joint=True, message=2)
+    legacy, _, _ = case('legacy_rank_one', rank=1, activation='none')
+    if args.old_cpp:
+        np.testing.assert_allclose(check.calc('legacy-new',legacy),
+            check.calc('legacy-old',legacy,binary=args.old_cpp),atol=2e-10,rtol=2e-10)
+        check.record('legacy-rank-one-parity',True)
+    angular = {}
+    for backend in ('ry','rd-m0'):
+        pred=check.out/('tanh-'+backend+'.cfg')
+        check.run('tanh-'+backend,'calc-efs',target,check.cfg,pred,
+            env={'SUS2_SH_ANGULAR_BACKEND':backend})
+        angular[backend]=parse_prediction(pred)
+    np.testing.assert_allclose(angular['ry'],angular['rd-m0'],atol=2e-10,rtol=2e-10)
+    check.record('tanh-RY-RD-parity',True)
+    zero=check.out/'zero-expansion.mtp'
+    zero.write_text(put_numbers(target.read_text(),'adaptive_radial_amplitudes',
+        np.zeros_like(numbers(target.read_text(),'adaptive_radial_amplitudes'))))
+    zero_layout=check.layout('zero-expansion-layout',zero)
+    for name in ('adaptive_radial_amplitude','adaptive_radial_weight'):
+        check.direction('zero-expansion-'+name,zero,int(zero_layout[name+'_begin']),
+            int(zero_layout[name+'_end']),nonzero=name=='adaptive_radial_amplitude',weights=(0.,1.,0.))
+    check.record('zero-expansion-chain-rule',True)
     if args.stage == 'full':
         for gate, outer, readout in itertools.product(('same-k','q-total'), ('same-k','q-total'), ('shared','species')):
             case('combo_'+gate+'_'+outer+'_'+readout, gate=gate, outer=outer, readout=readout)
