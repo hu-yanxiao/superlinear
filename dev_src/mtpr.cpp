@@ -1831,12 +1831,14 @@ int MLMTPR::TensorMessageCoeffCount() const
 int MLMTPR::AdaptiveRadialProjectionRowCount() const
 {
 	const int rows = AdaptiveRadialRowCount();
-	return AdaptiveRadialSharedN() && rows > 0 ? rows / p_RadialBasis->rb_size : rows;
+	return AdaptiveRadialSharedN() && rows > 0
+		? CheckedIntProduct(static_cast<size_t>(rows / p_RadialBasis->rb_size),
+			static_cast<size_t>(adaptive_radial_shared_n_rank_), "Adaptive radial projection rows") : rows;
 }
 
 int MLMTPR::AdaptiveRadialAmplitudeCount() const
 {
-	return CheckedIntProduct(static_cast<size_t>(AdaptiveRadialRowCount()),
+	return CheckedIntProduct(static_cast<size_t>(AdaptiveRadialRowCount()) * AdaptiveRadialLatentCount(),
 		static_cast<size_t>(AdaptiveRadialSpeciesAmplitude() ? species_count : 1),
 		"SUS2-SH adaptive radial amplitude count");
 }
@@ -1848,18 +1850,21 @@ int MLMTPR::AdaptiveRadialWeightCount() const
 		"SUS2-SH adaptive radial weight count");
 }
 
-int MLMTPR::AdaptiveRadialProjectionRow(int row) const
+int MLMTPR::AdaptiveRadialProjectionRow(int row, int t) const
 {
 	if (row < 0 || row >= AdaptiveRadialRowCount())
 		ERROR("SUS2-SH adaptive radial row index is out of range");
-	return AdaptiveRadialSharedN() ? row / p_RadialBasis->rb_size : row;
+	if (t < 0 || t >= AdaptiveRadialLatentCount()) ERROR("Adaptive radial latent index out of range");
+	return AdaptiveRadialSharedN() ? (row / p_RadialBasis->rb_size) * adaptive_radial_shared_n_rank_ + t : row;
 }
 
-int MLMTPR::AdaptiveRadialAmplitudeLocal(int type, int row) const
+int MLMTPR::AdaptiveRadialAmplitudeLocal(int type, int row, int t) const
 {
 	if (type < 0 || type >= species_count || row < 0 || row >= AdaptiveRadialRowCount())
 		ERROR("SUS2-SH adaptive radial amplitude index is out of range");
-	return (AdaptiveRadialSpeciesAmplitude() ? type * AdaptiveRadialRowCount() : 0) + row;
+	if (t < 0 || t >= AdaptiveRadialLatentCount()) ERROR("Adaptive radial latent index out of range");
+	return ((AdaptiveRadialSpeciesAmplitude() ? type * AdaptiveRadialRowCount() : 0) + row)
+		* AdaptiveRadialLatentCount() + t;
 }
 
 int MLMTPR::TensorMessageCoeffOffset() const
@@ -2007,16 +2012,16 @@ int MLMTPR::AdaptiveRadialRowIndex(int l, int o, int n) const
 	return static_cast<int>(local);
 }
 
-int MLMTPR::AdaptiveRadialAmplitudeIndex(int l, int o, int n, int type) const
+int MLMTPR::AdaptiveRadialAmplitudeIndex(int l, int o, int n, int type, int t) const
 {
-	return AdaptiveRadialAmplitudeOffset() + AdaptiveRadialAmplitudeLocal(type, AdaptiveRadialRowIndex(l, o, n));
+	return AdaptiveRadialAmplitudeOffset() + AdaptiveRadialAmplitudeLocal(type, AdaptiveRadialRowIndex(l, o, n), t);
 }
 
-int MLMTPR::AdaptiveRadialWeightIndex(int l, int o, int n, int q) const
+int MLMTPR::AdaptiveRadialWeightIndex(int l, int o, int n, int q, int t) const
 {
 	if (q < 0 || q >= TwoLayerGateScalarCount())
 		ERROR("SUS2-SH adaptive radial gate scalar index is out of range");
-	const size_t local = static_cast<size_t>(AdaptiveRadialProjectionRow(AdaptiveRadialRowIndex(l, o, n)))
+	const size_t local = static_cast<size_t>(AdaptiveRadialProjectionRow(AdaptiveRadialRowIndex(l, o, n), t))
 		* TwoLayerGateScalarCount() + q;
 	const int checked_count = CheckedIntProduct(
 		static_cast<size_t>(AdaptiveRadialProjectionRowCount()),
@@ -2028,22 +2033,22 @@ int MLMTPR::AdaptiveRadialWeightIndex(int l, int o, int n, int q) const
 	return AdaptiveRadialWeightOffset() + static_cast<int>(local);
 }
 
-double MLMTPR::AdaptiveRadialAmplitude(int l, int o, int n, int type) const
+double MLMTPR::AdaptiveRadialAmplitude(int l, int o, int n, int type, int t) const
 {
-	const int coeff_index = AdaptiveRadialAmplitudeIndex(l, o, n, type);
+	const int coeff_index = AdaptiveRadialAmplitudeIndex(l, o, n, type, t);
 	if (coeff_index >= 0
 	    && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
-	const int local = AdaptiveRadialAmplitudeLocal(type, AdaptiveRadialRowIndex(l, o, n));
+	const int local = AdaptiveRadialAmplitudeLocal(type, AdaptiveRadialRowIndex(l, o, n), t);
 	if (local >= 0 && local < static_cast<int>(adaptive_radial_amplitudes_.size()))
 		return adaptive_radial_amplitudes_[local];
 	ERROR("SUS2-SH adaptive radial amplitude storage is inconsistent");
 	return 0.0;
 }
 
-double MLMTPR::AdaptiveRadialWeight(int l, int o, int n, int q) const
+double MLMTPR::AdaptiveRadialWeight(int l, int o, int n, int q, int t) const
 {
-	const int coeff_index = AdaptiveRadialWeightIndex(l, o, n, q);
+	const int coeff_index = AdaptiveRadialWeightIndex(l, o, n, q, t);
 	if (coeff_index >= 0
 	    && coeff_index < static_cast<int>(regression_coeffs.size()))
 		return regression_coeffs[coeff_index];
@@ -2299,6 +2304,11 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH adaptive_radial_projection must be full or shared-n");
 	if (adaptive_radial_amplitude_mode_ != "shared" && adaptive_radial_amplitude_mode_ != "species")
 		ERROR("SUS2-SH adaptive_radial_amplitude_mode must be shared or species");
+	if (adaptive_radial_shared_n_rank_ < 1 || (p_RadialBasis && adaptive_radial_shared_n_rank_ > p_RadialBasis->rb_size)
+	    || (!AdaptiveRadialSharedN() && adaptive_radial_shared_n_rank_ != 1))
+		ERROR("SUS2-SH adaptive_radial_shared_n_rank must be in [1,N]; full projection requires rank 1");
+	if (adaptive_radial_activation_ != "none" && adaptive_radial_activation_ != "tanh")
+		ERROR("SUS2-SH adaptive_radial_activation must be none or tanh");
 	if (AdaptiveRadialExtendedLayout() && !adaptive)
 		ERROR("SUS2-SH adaptive radial layout options require adaptive-coefficients");
 	if (readout_mode_ == "species" && !adaptive)
@@ -4410,6 +4420,8 @@ void MLMTPR::Load(const string& filename)
 	readout_mode_ = "shared";
 	adaptive_radial_projection_ = "full";
 	adaptive_radial_amplitude_mode_ = "shared";
+	adaptive_radial_shared_n_rank_ = 1;
+	adaptive_radial_activation_ = "none";
 	tensor_message_lmax_ = 0;
 	tensor_message_coeffs_.clear();
 	tensor_message_optimizer_scales_.clear();
@@ -4445,10 +4457,12 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
-	const bool joint_v16 = model_file_version == "1.6.0";
+	const bool adaptive_v17 = model_file_version == "1.7.0";
+	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;
 	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
 	bool readout_mode_seen = false;
 	bool projection_seen = false, amplitude_mode_seen = false, tensor_lmax_seen = false;
+	bool latent_rank_seen = false, activation_seen = false, joint_enabled_seen = false;
 	bool amplitude_scales_seen = false, weight_scales_seen = false, tensor_scales_seen = false;
 	auto read_adaptive_list = [&](std::vector<double>& values, int count, const char* name) {
 		if (adaptive_v15) ReadDoubleListExact(ifs, values, count, name);
@@ -4472,11 +4486,14 @@ void MLMTPR::Load(const string& filename)
 			if (++joint_fields[key] != 1) ERROR("SUS2-SH duplicate joint readout field");
 		}
 		if (key == "readout_mode") ++readout_fields;
+		if ((key == "adaptive_radial_shared_n_rank" || key == "adaptive_radial_activation") && !adaptive_v17)
+			ERROR("SUS2-SH adaptive rank/activation metadata requires version 1.7.0");
 		if (key == "adaptive_radial_projection" || key == "adaptive_radial_amplitude_mode") {
 			if (!adaptive_v15) ERROR("SUS2-SH adaptive radial layout metadata requires version 1.5.0");
 		}
 		if (adaptive_v15 && key.compare(0,16,"adaptive_radial_") == 0) {
 			if (key != "adaptive_radial_projection" && key != "adaptive_radial_amplitude_mode"
+			    && key != "adaptive_radial_shared_n_rank" && key != "adaptive_radial_activation"
 			    && key != "adaptive_radial_amplitude_count" && key != "adaptive_radial_amplitudes"
 			    && key != "adaptive_radial_weight_count" && key != "adaptive_radial_weights"
 			    && key != "adaptive_radial_amplitude_optimizer_scales"
@@ -4506,9 +4523,12 @@ void MLMTPR::Load(const string& filename)
 		     "adaptive_radial_weight_count", "adaptive_radial_weights"})
 			if (adaptive_fields[field] != 1) ERROR("SUS2-SH version 1.5.0 is missing explicit adaptive radial metadata");
 	}
+	if (adaptive_v17 && (adaptive_fields["adaptive_radial_shared_n_rank"] != 1
+	    || adaptive_fields["adaptive_radial_activation"] != 1 || joint_fields["joint_readout_enabled"] != 1))
+		ERROR("SUS2-SH version 1.7.0 requires unique rank, activation and joint enable metadata");
 	ifs.clear();
 	ifs.seekg(metadata_start);
-	if (joint_v16 && joint_fields.size() != 16)
+	if (joint_v16 && joint_fields.size() != 16 && !(adaptive_v17 && joint_fields.size() == 1))
 		ERROR("SUS2-SH version 1.6.0 requires complete unique joint readout metadata");
 	if (ifs.fail()) ERROR("Cannot seek while validating SUS2-SH model metadata");
 
@@ -5249,6 +5269,24 @@ void MLMTPR::Load(const string& filename)
 			amplitude_mode_seen = true;
 			ifs >> tmpstr;
 		}
+		if (tmpstr == "adaptive_radial_shared_n_rank") {
+			ifs.ignore(2);
+			ifs >> adaptive_radial_shared_n_rank_;
+			latent_rank_seen = true;
+			if (ifs.fail() || adaptive_radial_shared_n_rank_ < 1
+			    || adaptive_radial_shared_n_rank_ > p_RadialBasis->rb_size
+			    || (!AdaptiveRadialSharedN() && adaptive_radial_shared_n_rank_ != 1))
+				ERROR("Invalid adaptive radial shared-n rank in model");
+			ifs >> tmpstr;
+		}
+		if (tmpstr == "adaptive_radial_activation") {
+			ifs.ignore(2);
+			ifs >> adaptive_radial_activation_;
+			activation_seen = true;
+			if (adaptive_radial_activation_ != "none" && adaptive_radial_activation_ != "tanh")
+				ERROR("Invalid adaptive radial activation in model");
+			ifs >> tmpstr;
+		}
 		if (tmpstr == "tensor_message_lmax") {
 			ifs.ignore(2);
 			ifs >> tensor_message_lmax_;
@@ -5261,10 +5299,22 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr == "joint_readout_enabled") {
 			if (!joint_v16 || !OuterUsesAdaptiveRadialCoefficients())
 				ERROR("SUS2-SH joint readout requires version 1.6.0 and adaptive radial coefficients");
-			ReadJointReadoutSection(ifs, joint_readout_graph_, joint_readout_coeffs_,
-				joint_readout_optimizer_scales_, species_count, UsesSpeciesReadout(),
-				sh_l_max_, sh_body_order_, sh_body_l_max_);
-			joint_readout_enabled_ = true;
+			joint_enabled_seen = true;
+			const std::streampos enable_start = ifs.tellg();
+			std::string equals, enabled;
+			ifs >> equals >> enabled;
+			if (equals != "=" || (enabled != "true" && enabled != "false"))
+				ERROR("Invalid joint readout enable field");
+			if (enabled == "false") {
+				if (!adaptive_v17 || joint_fields.size() != 1)
+					ERROR("Disabled joint readout requires v1.7 and no joint graph fields");
+			} else {
+				ifs.seekg(enable_start);
+				ReadJointReadoutSection(ifs, joint_readout_graph_, joint_readout_coeffs_,
+					joint_readout_optimizer_scales_, species_count, UsesSpeciesReadout(),
+					sh_l_max_, sh_body_order_, sh_body_l_max_);
+				joint_readout_enabled_ = true;
+			}
 			ifs >> tmpstr;
 		}
 		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
@@ -6382,7 +6432,9 @@ void MLMTPR::Load(const string& filename)
 				ERROR("SUS2-SH version 1.5.0 has misplaced optimizer-scale metadata");
 		}
 		MemAlloc();
-		if (joint_v16 && !JointReadoutEnabled()) ERROR("SUS2-SH version 1.6.0 joint readout block is misplaced");
+		if (adaptive_v17 && (!latent_rank_seen || !activation_seen || !joint_enabled_seen))
+			ERROR("SUS2-SH version 1.7.0 rank/activation/joint metadata is misplaced");
+		if (joint_v16 && !adaptive_v17 && !JointReadoutEnabled()) ERROR("SUS2-SH version 1.6.0 joint readout block is misplaced");
 		DistributeCoeffs();
 }
 
@@ -6722,8 +6774,8 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))) << '\n';
+	    << (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -6900,6 +6952,10 @@ void MLMTPR::Save(const string& filename)
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
 					ofs << "adaptive_radial_amplitude_mode = " << adaptive_radial_amplitude_mode_ << '\n';
 				}
+				if (AdaptiveRadialV17()) {
+					ofs << "adaptive_radial_shared_n_rank = " << adaptive_radial_shared_n_rank_ << '\n';
+					ofs << "adaptive_radial_activation = " << adaptive_radial_activation_ << '\n';
+				}
 				if (TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "tensor_message_lmax = " << tensor_message_lmax_ << '\n';
 				if (JointReadoutEnabled()) {
@@ -6909,6 +6965,7 @@ void MLMTPR::Save(const string& filename)
 							regression_coeffs.begin() + off + JointReadoutCoeffCount()),
 						joint_readout_optimizer_scales_);
 				}
+				else if (AdaptiveRadialV17()) ofs << "joint_readout_enabled = false\n";
 			}
 		ofs << "outer_k_rank1_basic_begin = " << outer_k_rank1_basic_begin_ << '\n';
 		ofs << "outer_k_rank1_basic_count = " << outer_k_rank1_basic_count_ << '\n';
@@ -13725,26 +13782,24 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 					* static_cast<size_t>(scalar_count) * amplitude_types);
 			for (int type = 0; type < amplitude_types; ++type)
 			for (int row = 0; row < row_count; ++row) {
-				const int amplitude_index = amplitude_begin + type * row_count + row;
-				const double amplitude = regression_coeffs[amplitude_index];
+				const int latent = AdaptiveRadialLatentCount();
+				const int amplitude_index = amplitude_begin + (type * row_count + row) * latent;
+				const int u0 = weight_begin + AdaptiveRadialProjectionRow(row) * scalar_count;
 				for (int q = 0; q < scalar_count; ++q) {
-					const int coeff_index =
-						weight_begin
-						+ static_cast<int>(
-							static_cast<size_t>(AdaptiveRadialProjectionRow(row))
-							* static_cast<size_t>(scalar_count)
-							+ static_cast<size_t>(q));
 					const double scale = AdaptiveRadialWeightOptimizerScale(q);
-					const double radial_weight = regression_coeffs[coeff_index];
-					const double folded =
-						amplitude * radial_weight / scale;
+					// C=sum_t B_t U_t contains cross-t terms when squared.
+					// With tanh this is its exact Jacobian at s=0, not a global fold.
+					double folded = 0.0;
+					for (int t = 0; t < latent; ++t)
+						folded += regression_coeffs[amplitude_index+t] * regression_coeffs[u0+t*scalar_count+q];
+					folded /= scale;
 					out_penalty_accumulator += weight * folded * folded;
 					if (out_penalty_grad_accumulator != nullptr) {
 						const double grad_common = 2.0 * weight * folded / scale;
-						(*out_penalty_grad_accumulator)[coeff_index] +=
-							grad_common * amplitude;
-						(*out_penalty_grad_accumulator)[amplitude_index] +=
-							grad_common * radial_weight;
+						for (int t = 0; t < latent; ++t) {
+							(*out_penalty_grad_accumulator)[u0+t*scalar_count+q] += grad_common * regression_coeffs[amplitude_index+t];
+							(*out_penalty_grad_accumulator)[amplitude_index+t] += grad_common * regression_coeffs[u0+t*scalar_count+q];
+						}
 					}
 				}
 			}

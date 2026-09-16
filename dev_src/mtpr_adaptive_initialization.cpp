@@ -209,6 +209,7 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 	const int amplitude_count = AdaptiveRadialAmplitudeCount();
 	const int Q = TwoLayerGateScalarCount();
 	const int R = p_RadialBasis->rb_size;
+	const int latent = AdaptiveRadialLatentCount();
 	const int blocks = (sh_l_max_ + 1) * outer_k_rank_;
 	if (D <= 0 || Q <= 0 || R <= 0 || D != blocks * R)
 		ERROR("Balanced adaptive radial initialization found inconsistent adaptive dimensions");
@@ -263,12 +264,50 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 	double* amplitudes = regression_coeffs.data() + AdaptiveRadialAmplitudeOffset();
 	double* weights = regression_coeffs.data() + AdaptiveRadialWeightOffset();
 	const double inv_sqrt_q = 1.0 / std::sqrt(static_cast<double>(Q));
-	std::fill(amplitudes, amplitudes + amplitude_count, 1.0);
+	const double latent_scale = 1.0 / std::sqrt(static_cast<double>(latent));
+	std::fill(amplitudes, amplitudes + amplitude_count, latent_scale);
 	for (int row = 0; row < projection_rows; ++row) {
 		for (int q = 0; q < Q; ++q)
 			weights[static_cast<size_t>(row) * Q + q] =
 				CenteredUnit(seed, AdaptiveRadialSharedN() ? row * R : row, q) * inv_sqrt_q
 				* adaptive_radial_weight_optimizer_scales_[q];
+	}
+	// A gate feature RMS does not control U*s RMS when features correlate.
+	// Fresh tanh models therefore calibrate every compact preactivation row
+	// before calibrating the actual nonlinear radial response. This is never
+	// performed during a preserve-function resume.
+	double preactivation_rms_min = 0.0, preactivation_rms_max = 0.0;
+	if (AdaptiveRadialTanh()) {
+		std::vector<double> signal_sq(projection_rows, 0.0);
+		for (std::size_t cfg_index = 0; cfg_index < training_set.size(); ++cfg_index) {
+			std::unique_ptr<Neighborhoods> owned;
+			const Neighborhoods* neighborhoods = nullptr;
+			if (training_neighborhoods) neighborhoods = &(*training_neighborhoods)[cfg_index];
+			else {
+				owned.reset(new Neighborhoods(training_set[cfg_index], CutOff()));
+				neighborhoods = owned.get();
+			}
+			PrepareAdaptiveRadial(*neighborhoods, false, false);
+			for (int atom = 0; atom < static_cast<int>(neighborhoods->size()); ++atom) {
+				const double* s = two_layer_gate_scalar_values_cache_.data() + static_cast<size_t>(atom)*Q;
+				for (int row = 0; row < projection_rows; ++row) {
+					double h = 0.0;
+					for (int q = 0; q < Q; ++q) h += weights[static_cast<size_t>(row)*Q+q]*s[q];
+					signal_sq[row] += h*h;
+				}
+			}
+		}
+		AllreduceInPlace(signal_sq);
+		if (!AllFiniteNonnegative(signal_sq)) ERROR("Non-finite tanh preactivation calibration moments");
+		preactivation_rms_min = std::numeric_limits<double>::infinity();
+		for (int row = 0; row < projection_rows; ++row) {
+			const double rms = std::sqrt(signal_sq[row]/static_cast<double>(global_sites));
+			UpdateRange(rms, preactivation_rms_min, preactivation_rms_max);
+			if (rms > 1.0e-12) {
+				const double factor = 0.5/rms;
+				for (int q = 0; q < Q; ++q) weights[static_cast<size_t>(row)*Q+q] *= factor;
+			}
+		}
 	}
 
 	std::vector<double> base_sq(blocks, 0.0);
@@ -306,7 +345,9 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 						double response = 0.0;
 						for (int n = 0; n < R; ++n) {
 							base += c[n] * rb[rb_start + n];
-							response += signal[AdaptiveRadialSharedN() ? block : row0 + n] * rb[rb_start + n];
+							const int pr = AdaptiveRadialSharedN() ? block*latent : row0+n;
+							for (int t = 0; t < latent; ++t)
+								response += latent_scale*signal[pr+t]*rb[rb_start+n];
 						}
 						base_sq[block] += base * base;
 						response_sq[block] += response * response;
@@ -356,7 +397,8 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 			UpdateRange(a, initial_a_min, initial_a_max);
 			for (int type = 0; type < (AdaptiveRadialSpeciesAmplitude() ? species_count : 1); ++type)
 				for (int n = 0; n < R; ++n)
-					amplitudes[type * D + row0 + n] = a;
+					for (int t = 0; t < latent; ++t)
+						amplitudes[(type * D + row0 + n)*latent+t] = a*latent_scale;
 		}
 	}
 
@@ -425,7 +467,8 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 			for (int n = 0; n < R; ++n) {
 				c[n] *= factor;
 				for (int type = 0; type < (AdaptiveRadialSpeciesAmplitude() ? species_count : 1); ++type)
-					amplitudes[type * D + block * R + n] *= factor;
+					for (int t = 0; t < latent; ++t)
+						amplitudes[(type * D + block * R + n)*latent+t] *= factor;
 			}
 		}
 	}
@@ -457,6 +500,10 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 		          << degenerate_response_blocks << ","
 		          << degenerate_moment_blocks
 		          << " optimizer_scale(weight,amplitude)=physical"
+		          << " latent_rank=" << latent
+		          << " activation=" << AdaptiveRadialActivation()
+		          << " tanh_preactivation_rms_before=[" << preactivation_rms_min << "," << preactivation_rms_max << "]"
+		          << " tanh_preactivation_rms_target=" << (AdaptiveRadialTanh() ? 0.5 : 0.0)
 		          << std::endl;
 	}
 

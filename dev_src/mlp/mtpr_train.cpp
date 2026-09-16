@@ -520,6 +520,8 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			"joint-readout",
 			"adaptive-radial-projection",
 			"adaptive-radial-amplitude-mode",
+			"adaptive-radial-shared-n-rank",
+			"adaptive-radial-activation",
 			"tensor-message-lmax",
 			"write-sh-scalar-info",
 		"cutoff",
@@ -2458,6 +2460,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
 		        || opts["adaptive-radial-amplitude-mode"] != mtpr.AdaptiveRadialAmplitudeMode()))
 			ERROR("--adaptive-radial-amplitude-mode must match the loaded adaptive model");
+		if (!opts["adaptive-radial-shared-n-rank"].empty()
+		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
+		        || ParseOptionalNonnegativeInteger(opts, "adaptive-radial-shared-n-rank") != mtpr.AdaptiveRadialSharedNRank()))
+			ERROR("--adaptive-radial-shared-n-rank must match the loaded model; no silent topology conversion during resume");
+		if (!opts["adaptive-radial-activation"].empty()
+		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
+		        || opts["adaptive-radial-activation"] != mtpr.AdaptiveRadialActivation()))
+			ERROR("--adaptive-radial-activation must match the loaded model; enabling tanh changes the physical function");
 		if (!opts["tensor-message-lmax"].empty()) {
 			const int requested_tensor_message_lmax =
 				ParseOptionalNonnegativeInteger(opts, "tensor-message-lmax");

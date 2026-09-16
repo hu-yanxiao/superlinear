@@ -549,6 +549,8 @@ void MTPR_trainer::PrepareAdaptivePytorchTraining(
 		          << " readout_output_scale=" << output_scale
 		          << " radial_parameterization=weight-norm"
 		          << " adaptive_radial_projection=" << model.AdaptiveRadialProjection()
+		          << " adaptive_radial_shared_n_rank=" << model.AdaptiveRadialSharedNRank()
+		          << " adaptive_radial_activation=" << model.AdaptiveRadialActivation()
 		          << " adaptive_radial_amplitude_mode=" << model.AdaptiveRadialAmplitudeMode()
 		          << " scalar_head_l2=1e-5 adaptive_response_l2=1e-4 radial_smooth=1e-6 grid=128"
 		          << " species_readout_bias="

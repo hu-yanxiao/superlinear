@@ -96,6 +96,8 @@ protected:
 		std::string readout_mode_ = "shared";
 		std::string adaptive_radial_projection_ = "full";
 		std::string adaptive_radial_amplitude_mode_ = "shared";
+		int adaptive_radial_shared_n_rank_ = 1;
+		std::string adaptive_radial_activation_ = "none";
 		int tensor_message_lmax_ = 0;
 		std::vector<double> tensor_message_coeffs_;
 		std::vector<double> tensor_message_optimizer_scales_;
@@ -1148,18 +1150,23 @@ public:
 			int AdaptiveRadialWeightCount() const;
 			const std::string& AdaptiveRadialProjection() const { return adaptive_radial_projection_; }
 			const std::string& AdaptiveRadialAmplitudeMode() const { return adaptive_radial_amplitude_mode_; }
+			int AdaptiveRadialSharedNRank() const { return adaptive_radial_shared_n_rank_; }
+			int AdaptiveRadialLatentCount() const { return AdaptiveRadialSharedN() ? adaptive_radial_shared_n_rank_ : 1; }
+			const std::string& AdaptiveRadialActivation() const { return adaptive_radial_activation_; }
+			bool AdaptiveRadialTanh() const { return adaptive_radial_activation_ == "tanh"; }
+			bool AdaptiveRadialV17() const { return adaptive_radial_shared_n_rank_ != 1 || AdaptiveRadialTanh(); }
 			bool AdaptiveRadialSharedN() const { return adaptive_radial_projection_ == "shared-n"; }
 			bool AdaptiveRadialSpeciesAmplitude() const { return adaptive_radial_amplitude_mode_ == "species"; }
-			bool AdaptiveRadialExtendedLayout() const { return AdaptiveRadialSharedN() || AdaptiveRadialSpeciesAmplitude(); }
-			int AdaptiveRadialAmplitudeLocal(int type, int row) const;
-			int AdaptiveRadialProjectionRow(int row) const;
+			bool AdaptiveRadialExtendedLayout() const { return AdaptiveRadialSharedN() || AdaptiveRadialSpeciesAmplitude() || AdaptiveRadialV17(); }
+			int AdaptiveRadialAmplitudeLocal(int type, int row, int t = 0) const;
+			int AdaptiveRadialProjectionRow(int row, int t = 0) const;
 			int AdaptiveRadialAmplitudeOffset() const;
 			int AdaptiveRadialWeightOffset() const;
 			int AdaptiveRadialRowIndex(int l, int o, int n) const;
-			int AdaptiveRadialAmplitudeIndex(int l, int o, int n, int type = 0) const;
-			int AdaptiveRadialWeightIndex(int l, int o, int n, int q) const;
-			double AdaptiveRadialAmplitude(int l, int o, int n, int type = 0) const;
-			double AdaptiveRadialWeight(int l, int o, int n, int q) const;
+			int AdaptiveRadialAmplitudeIndex(int l, int o, int n, int type = 0, int t = 0) const;
+			int AdaptiveRadialWeightIndex(int l, int o, int n, int q, int t = 0) const;
+			double AdaptiveRadialAmplitude(int l, int o, int n, int type = 0, int t = 0) const;
+			double AdaptiveRadialWeight(int l, int o, int n, int q, int t = 0) const;
 			double AdaptiveRadialAmplitudeOptimizerScale(int row) const;
 			double AdaptiveRadialWeightOptimizerScale(int q) const;
 			struct AdaptiveRadialNormalizationSums {
