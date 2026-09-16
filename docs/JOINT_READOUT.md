@@ -15,7 +15,9 @@ hmean[i,l,m] = sum_g z[i,g,l,m] / G
 Here A is the actual outer primitive before scalarization, including tensor
 edge corrections if enabled. z is the actual post-rank gate primitive before
 scalarization, not the gate scalar vector or the raw K-channel primitive.
-No tanh or additional nonlinear normalization is introduced.
+The joint inputs themselves introduce no tanh or additional nonlinear
+normalization. The independent adaptive radial projection may optionally use
+tanh; that does not change the definition of this joint head.
 
 The independent K=2 q-total graph has input 0=Amean and input 1=hmean. It uses
 the outer body's order and angular limits. l=0 is excluded during leaf
@@ -131,7 +133,8 @@ the fresh topology/initialization examples above.
 
 ## File and execution contract
 
-Enabled models use version 1.6.0 with explicit readout, adaptive-layout and
+Enabled models use version 1.6.0 (1.7.0 when combined with retained rank >1 or
+adaptive tanh) with explicit readout, adaptive-layout and
 tensor-lmax metadata (including tensor lmax=0). A `joint_readout_*` block
 follows those fields and precedes `outer_k_rank1_basic_begin`. The block stores
 the complete independent graph, shared/species physical head coefficients and
@@ -148,9 +151,13 @@ the cached graph values and physical radial contractions.
 Server numerical qualification is required before release; this document does
 not assert unrun test or performance results.
 
-The current GPUMD-superlinear interface supports model versions only through
-1.5.0. It does not implement joint readout and explicitly rejects a 1.6.0 model
-before evaluation. Do not manually downgrade the version header or remove
-joint metadata to bypass this check: that would discard part of the trained
-energy model. Joint-readout models require a separately implemented and
-qualified GPUMD update before GPU molecular dynamics can use them.
+The updated GPUMD-superlinear source implements the independent joint head
+for v1.6 and combined rank/tanh/joint v1.7 models. It checks the complete
+canonical graph, supports RY/RD and shared/species readout, and propagates
+both outer and gate force adjoints. An all-zero head uses the old fast path
+without joint buffers or kernel launches. Install only after server
+CPU/GPU qualification; older GPUMD binaries still reject these models.
+Never downgrade a version header or remove joint metadata to bypass that
+check: doing so would discard part of the trained energy model. See the
+GPUMD repository's `docs/adaptive-latent-joint-v17.md` for its precision and
+qualification contract.
