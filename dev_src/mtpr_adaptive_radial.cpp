@@ -1291,6 +1291,77 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
     if (gradient!=nullptr) gradient->resize(CoeffCount());
     std::vector<double> inverse_scale(Q);
     for (int q=0;q<Q;++q) inverse_scale[q]=1.0/AdaptiveRadialWeightOptimizerScale(q);
+    if (AdaptiveRadialSharedN() && T>1) {
+        // Exact latent Gram contraction: remove Q from the S^2 * grid loop.
+        // G=U diag(scale^-2) U^T. This retains cross-t terms and avoids
+        // expanding the low-rank response into N*Q coefficients.
+        std::vector<double> gram(T*T), u_metric(T*T), g(T), gs(T), gh(T), gg(T);
+        for (int l=0;l<=sh_l_max_;++l) for (int o=0;o<O;++o) {
+            const int block=l*O+o, mu=o*(sh_l_max_+1)+l;
+            const int c0=RadialCoeffOffset()+mu*RadialCoeffBlockSize();
+            const int u0=AdaptiveRadialWeightOffset()+block*T*Q;
+            std::fill(gram.begin(),gram.end(),0.0);
+            std::fill(u_metric.begin(),u_metric.end(),0.0);
+            for (int t=0;t<T;++t) for (int u=0;u<T;++u) for (int q=0;q<Q;++q)
+                gram[t*T+u]+=regression_coeffs[u0+t*Q+q]*regression_coeffs[u0+u*Q+q]
+                    *inverse_scale[q]*inverse_scale[q];
+            for (int zi=0;zi<C;++zi) for (int zj=0;zj<C;++zj) {
+                const int a0=AdaptiveRadialAmplitudeOffset()
+                    + ((AdaptiveRadialSpeciesAmplitude() ? zj*blocks : 0)+block)*R*T;
+                const int slope=ScalingSlopeOffset(mu_to_K[mu],zi,zj);
+                const int shift=ScalingShiftOffset(mu_to_K[mu],zi,zj);
+                for (int point=0;point<grid_size;++point) {
+                    p_RadialBasis->RB_Calc(cutoff*(point+0.5)/grid_size,
+                        regression_coeffs[slope],regression_coeffs[shift],RadialBasisKForMu(mu));
+                    std::fill(g.begin(),g.end(),0.0);
+                    std::fill(gs.begin(),gs.end(),0.0);
+                    std::fill(gh.begin(),gh.end(),0.0);
+                    double base=0.0, base_s=0.0, base_h=0.0;
+                    for (int n=0;n<R;++n) {
+                        const double dr=scaling*p_RadialBasis->rb_ders[n];
+                        const double ds=scaling*p_RadialBasis->rb_ders[2*R+n];
+                        const double dh=scaling*p_RadialBasis->rb_ders[4*R+n];
+                        base+=regression_coeffs[c0+n]*dr;
+                        if (gradient) {
+                            base_s+=regression_coeffs[c0+n]*ds;
+                            base_h+=regression_coeffs[c0+n]*dh;
+                        }
+                        for (int t=0;t<T;++t) {
+                            const double a=regression_coeffs[a0+n*T+t];
+                            g[t]+=a*dr;
+                            if (gradient) { gs[t]+=a*ds; gh[t]+=a*dh; }
+                        }
+                    }
+                    double response_norm=0.0;
+                    for (int t=0;t<T;++t) {
+                        gg[t]=0.0;
+                        for (int u=0;u<T;++u) gg[t]+=gram[t*T+u]*g[u];
+                        response_norm+=g[t]*gg[t];
+                    }
+                    penalty+=weight*(base*base+response_norm);
+                    if (!gradient) continue;
+                    double response_s=0.0,response_h=0.0;
+                    for (int t=0;t<T;++t) {
+                        response_s+=gg[t]*gs[t]; response_h+=gg[t]*gh[t];
+                        for (int u=0;u<T;++u) u_metric[t*T+u]+=2.0*weight*g[t]*g[u];
+                    }
+                    (*gradient)[slope]+=2.0*weight*(base*base_s+response_s);
+                    (*gradient)[shift]+=2.0*weight*(base*base_h+response_h);
+                    for (int n=0;n<R;++n) {
+                        const double common=2.0*weight*scaling*p_RadialBasis->rb_ders[n];
+                        (*gradient)[c0+n]+=common*base;
+                        for (int t=0;t<T;++t) (*gradient)[a0+n*T+t]+=common*gg[t];
+                    }
+                }
+            }
+            if (gradient) for (int t=0;t<T;++t) for (int q=0;q<Q;++q) {
+                double value=0.0;
+                for (int u=0;u<T;++u) value+=u_metric[t*T+u]*regression_coeffs[u0+u*Q+q];
+                (*gradient)[u0+t*Q+q]+=value*inverse_scale[q]*inverse_scale[q];
+            }
+        }
+        return;
+    }
     // A fixed isotropic prior in normalized gate-feature coordinates:
     // |R_base'|² + sum_q |R_response,q'|². This is a physical a*U
     // regularizer, not a norm of the redundant optimization factors separately.

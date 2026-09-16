@@ -88,6 +88,13 @@ the global nonlinear response norm. It does not bound learned B or guarantee
 bounded force/extrapolation. Existing baseline-radial and scalar readout
 regularization remain unchanged.
 
+For d>1 shared-n, native priors contract the latent Gram matrix
+`G[t,u]=sum_q U[t,q]*U[u,q]/scale[q]^2` exactly. The pair/radial-grid loop
+therefore uses d-dimensional vectors, not Q-dimensional folded responses.
+U gradients accumulate a d-by-d metric and contract with U once per (l,o).
+This retains cross-t terms while removing Q from the expensive S-squared
+radial-grid work. The d=1 legacy prior route is retained unchanged.
+
 ## Execution and serialization
 
 Projection uses one compact per-atom GEMM with L O d outputs. Activation is

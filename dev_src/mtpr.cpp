@@ -13780,6 +13780,39 @@ void MLMTPR::AddScalarWeightL2Penalty(const double head_coeff,
 				/ static_cast<double>(
 					static_cast<size_t>(row_count)
 					* static_cast<size_t>(scalar_count) * amplitude_types);
+			if (AdaptiveRadialSharedN() && AdaptiveRadialLatentCount() > 1) {
+				const int T = AdaptiveRadialLatentCount(), R = p_RadialBasis->rb_size;
+				std::vector<double> gram(T*T), metric(T*T), gb(T), inv2(scalar_count);
+				for (int q=0;q<scalar_count;++q) {
+					const double scale=AdaptiveRadialWeightOptimizerScale(q);
+					inv2[q]=1.0/(scale*scale);
+				}
+				for (int block=0;block<row_count/R;++block) {
+					const int u0=weight_begin+block*T*scalar_count;
+					std::fill(gram.begin(),gram.end(),0.0);
+					std::fill(metric.begin(),metric.end(),0.0);
+					for (int t=0;t<T;++t) for (int u=0;u<T;++u) for (int q=0;q<scalar_count;++q)
+						gram[t*T+u]+=regression_coeffs[u0+t*scalar_count+q]*regression_coeffs[u0+u*scalar_count+q]*inv2[q];
+					for (int type=0;type<amplitude_types;++type) for (int n=0;n<R;++n) {
+						const int a0=amplitude_begin+(type*row_count+block*R+n)*T;
+						for (int t=0;t<T;++t) {
+							gb[t]=0.0;
+							for (int u=0;u<T;++u) gb[t]+=gram[t*T+u]*regression_coeffs[a0+u];
+							out_penalty_accumulator+=weight*regression_coeffs[a0+t]*gb[t];
+							if (out_penalty_grad_accumulator) {
+								(*out_penalty_grad_accumulator)[a0+t]+=2.0*weight*gb[t];
+								for (int u=0;u<T;++u) metric[t*T+u]+=2.0*weight*regression_coeffs[a0+t]*regression_coeffs[a0+u];
+							}
+						}
+					}
+					if (out_penalty_grad_accumulator) for (int t=0;t<T;++t) for (int q=0;q<scalar_count;++q) {
+						double value=0.0;
+						for (int u=0;u<T;++u) value+=metric[t*T+u]*regression_coeffs[u0+u*scalar_count+q];
+						(*out_penalty_grad_accumulator)[u0+t*scalar_count+q]+=value*inv2[q];
+					}
+				}
+				return;
+			}
 			for (int type = 0; type < amplitude_types; ++type)
 			for (int row = 0; row < row_count; ++row) {
 				const int latent = AdaptiveRadialLatentCount();
