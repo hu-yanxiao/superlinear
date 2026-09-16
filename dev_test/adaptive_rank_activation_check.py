@@ -19,11 +19,20 @@ def main():
     parser.add_argument('--cpp', type=Path, required=True)
     parser.add_argument('--old-cpp', type=Path)
     parser.add_argument('--outdir', type=Path, required=True)
+    parser.add_argument('--pytorch-root', type=Path, required=True,
+                        help='Independent gate-feature evaluator for non-vacuous test-only tanh calibration')
     parser.add_argument('--stage', choices=('minimal', 'full'), default='minimal')
     args = parser.parse_args()
     if sys.platform == 'darwin' or not os.environ.get('LSB_JOBID'):
         raise SystemExit('Numerical checks require a server LSF allocation')
     import numpy as np
+    sys.path.insert(0, str(args.pytorch_root.resolve()))
+    import torch
+    from sus2shpt.io.cfg import load_cfg
+    from sus2shpt.io.mtp import load_mtp_model
+    from sus2shpt.model.sus2_sh import SUS2SHPyTorch
+    from sus2shpt.model.neighbor import build_pair_list
+    torch.set_num_threads(1)
     from adaptive_species_readout_check import (
         assignment, numbers, put, put_numbers, asymmetric_shared_text, write_fixture, parse_prediction, ZERO_REG)
     from adaptive_tensor_message_check import TensorCheck, topology_args
@@ -31,6 +40,40 @@ def main():
     check.cfg = check.out/'asymmetric.cfg'
     write_fixture(check.cfg)
     cases = {}
+
+    def calibrate_test_signal(label, text):
+        """Only fixtures are changed: make phi'' substantial, not near zero.
+
+        PT supplies gate scalar values only. All E/F/S and mixed derivative
+        acceptance checks below remain native analytic-vs-finite-difference.
+        """
+        tmp=check.out/(label+'.precalibration.mtp'); tmp.write_text(text)
+        obj=SUS2SHPyTorch(load_mtp_model(tmp),device='cpu',dtype=torch.float64)
+        cfg=load_cfg(check.cfg)[0]
+        positions=torch.tensor([a.position for a in cfg.atoms],dtype=torch.float64)
+        cell=torch.tensor(cfg.supercell,dtype=torch.float64)
+        types=torch.tensor([a.type for a in cfg.atoms],dtype=torch.long)
+        with torch.no_grad():
+            pair=build_pair_list(positions,cell,obj.max_dist)
+            geo=obj._edge_geometry(positions,types,pair.centers,pair.neighbors,pair.shifts@cell)
+            gate=obj._moment_values_from_geometry(atom_count=len(types),centers=pair.centers,
+                neighbors=pair.neighbors,geometry=geo,gate_pass=True,gate_signal=None,edge_l1_values=None)
+            selected=gate.index_select(1,obj.gate_scalar_moment_indices)
+            raw=obj._adaptive_project_scalars(selected,activate=False).reshape(len(types),-1).numpy()
+        rms=np.sqrt(np.mean(raw*raw,axis=0))
+        assert np.isfinite(rms).all() and (rms>1e-12).all(),(label,'degenerate fixture h',rms)
+        factors=.7/rms
+        q=int(assignment(text,'two_layer_gate_scalar_count'))
+        weights=numbers(text,'adaptive_radial_weights').reshape(-1,q)*factors[:,None]
+        text=put_numbers(text,'adaptive_radial_weights',weights.ravel())
+        calibrated=raw*factors[None,:]
+        phi=np.tanh(calibrated)
+        second=-2*phi*(1-phi*phi)
+        assert np.max(np.abs(second))>.3,(label,'vacuous phi second derivative')
+        check.record(label+'-nonlinear-fixture',{'raw_rms_min':float(rms.min()),
+            'raw_rms_max':float(rms.max()),'calibrated_rms':.7,
+            'max_abs_phi_second':float(np.abs(second).max())})
+        return text
 
     def case(label, projection='shared-n', rank=2, activation='tanh',
              gate='q-total', outer='same-k', readout='species', message=0, joint=False):
@@ -51,6 +94,8 @@ def main():
         if joint:
             text = put_numbers(text, 'joint_readout_coeffs',
                 .04*np.sin(np.arange(len(numbers(text, 'joint_readout_coeffs')))*.31+.23))
+        if activation == 'tanh':
+            text=calibrate_test_signal(label,text)
         q = int(assignment(text, 'two_layer_gate_scalar_count'))
         t = rank if projection == 'shared-n' else 1
         assert len(numbers(text, 'adaptive_radial_amplitudes')) == 2*27*t
@@ -65,6 +110,13 @@ def main():
         check.run(label+'-roundtrip', 'roundtrip-model-dev', model, roundtrip)
         np.testing.assert_allclose(check.calc(label+'-efs', model),
             check.calc(label+'-roundtrip-efs', roundtrip), atol=2e-10, rtol=2e-10)
+        if activation == 'tanh':
+            identity=check.out/(label+'.identity.mtp')
+            identity.write_text(put(text,'adaptive_radial_activation','none'))
+            difference=float(np.abs(check.calc(label+'-nonlinear',model)
+                -check.calc(label+'-identity',identity)).max())
+            assert difference>1e-8,(label,'tanh has no measurable EFS effect',difference)
+            check.record(label+'-nonlinear-EFS-effect',difference)
         layout = check.layout(label+'-layout', model)
         ranges = {name:(int(layout[name+'_begin']), int(layout[name+'_end']))
                   for name in ('adaptive_radial_amplitude', 'adaptive_radial_weight',

@@ -122,7 +122,10 @@ models default to d=1 and no activation.
 ## Qualification
 
 Run `dev_test/adaptive_rank_activation_check.py` in a server LSF allocation,
-not on the local workstation. Minimal checks include native E/F/S coordinate
+not on the local workstation; pass `--pytorch-root` for the independent
+gate-feature evaluator. The nonlinear test fixtures calibrate raw h RMS to
+0.7, require substantial phi'' and a measurable tanh-vs-identity E/F/S change.
+This changes test fixtures only, not production initialization. Minimal checks include native E/F/S coordinate
 FD, mixed parameter directions (including force-only and stress-only), exact
 identity folding, response-prior gradients, linear readout components, fresh
 and preserve-function resume, malformed schema, and combined nonzero tensor
