@@ -31,7 +31,6 @@ def main():
     from sus2shpt.io.cfg import load_cfg
     from sus2shpt.io.mtp import load_mtp_model
     from sus2shpt.model.sus2_sh import SUS2SHPyTorch
-    from sus2shpt.model.neighbor import build_pair_list
     torch.set_num_threads(1)
     from adaptive_species_readout_check import (
         assignment, numbers, put, put_numbers, asymmetric_shared_text, write_fixture, parse_prediction, ZERO_REG)
@@ -54,11 +53,7 @@ def main():
         cell=torch.tensor(cfg.supercell,dtype=torch.float64)
         types=torch.tensor([a.type for a in cfg.atoms],dtype=torch.long)
         with torch.no_grad():
-            pair=build_pair_list(positions,cell,obj.max_dist)
-            geo=obj._edge_geometry(positions,types,pair.centers,pair.neighbors,pair.shifts@cell)
-            gate=obj._moment_values_from_geometry(atom_count=len(types),centers=pair.centers,
-                neighbors=pair.neighbors,geometry=geo,gate_pass=True,gate_signal=None,edge_l1_values=None)
-            selected=gate.index_select(1,obj.gate_scalar_moment_indices)
+            selected,_,_=obj.raw_feature_values_from_tensors(positions,cell,types,outer_required=False)
             raw=obj._adaptive_project_scalars(selected,activate=False).reshape(len(types),-1).numpy()
         rms=np.sqrt(np.mean(raw*raw,axis=0))
         assert np.isfinite(rms).all() and (rms>1e-12).all(),(label,'degenerate fixture h',rms)
