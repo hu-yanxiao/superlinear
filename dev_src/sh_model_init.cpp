@@ -1973,6 +1973,15 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			for (int i = 0; i < adaptive_weights; ++i) {
 				if (i != 0)
 					ofs << ", ";
+				if (adaptive_shared_n_rank > 1) {
+					const int q = i % static_cast<int>(gate_scalar_indices.size());
+					const int t = (i / static_cast<int>(gate_scalar_indices.size())) % adaptive_shared_n_rank;
+					// Distinct latent directions even when Q is a multiple of the
+					// old 34-entry wave period; same across output channels.
+					ofs << amplitude * (std::sin((q+1)*(t+1)*0.6180339887498949)
+						+ 0.5*std::cos((q+1)*(t+2)*0.4142135623730951));
+					continue;
+				}
 				const double sign = (i % 2 == 0) ? 1.0 : -1.0;
 				const double ramp = 1.0
 					+ static_cast<double>((i / 2) % 17) / 32.0;
