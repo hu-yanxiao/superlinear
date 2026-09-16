@@ -1,5 +1,10 @@
 # Adaptive radial projection and source-species amplitudes
 
+For generalized retained rank and independent `tanh`, see
+[ADAPTIVE_RADIAL_RANK_ACTIVATION.md](ADAPTIVE_RADIAL_RANK_ACTIVATION.md).
+The formulas below remain the backward-compatible `d=1`, activation `none`
+special case.
+
 Two independent options extend the adaptive-coefficients model. Existing
 models and commands retain `full` projection and `shared` amplitudes.
 

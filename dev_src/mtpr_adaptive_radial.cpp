@@ -547,6 +547,17 @@ void MLMTPR::ReduceAdaptiveRadialCoefficientAdjoints(bool tangent) {
     const int D=ex.rows,P=ex.projection_rows,R=p_RadialBasis->rb_size,T=AdaptiveRadialLatentCount();
     const int atoms=static_cast<int>(ex.amplitude_offsets.size());
     const double* a=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
+    if (!AdaptiveRadialSharedN() && !AdaptiveRadialTanh()) {
+        // Keep the original full/linear in-place pullback: no extra buffer,
+        // zero-fill or copy is needed for already uncompressed rows.
+        for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) {
+            const size_t at=static_cast<size_t>(i)*D+row;
+            const double amp=a[ex.amplitude_offsets[i]+row];
+            ex.coefficient_adjoints[at]*=amp;
+            if (tangent) ex.coefficient_tangent_adjoints[at]*=amp;
+        }
+        return;
+    }
     ex.signal_adjoints.assign(static_cast<size_t>(atoms)*P,0.0);
     if (tangent) ex.signal_tangent_adjoints.assign(static_cast<size_t>(atoms)*P,0.0);
     for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) {
@@ -582,7 +593,8 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
     const double* Bmsg=tensor_enabled
         ? regression_coeffs.data()+TensorMessageCoeffOffset() : nullptr;
     ReduceAdaptiveRadialCoefficientAdjoints(false);
-    const double* seeds=ex.signal_adjoints.data();
+    const double* seeds=(!AdaptiveRadialSharedN() && !AdaptiveRadialTanh())
+        ? ex.coefficient_adjoints.data() : ex.signal_adjoints.data();
     ex.scalar_adjoints.resize(static_cast<size_t>(atoms)*Q);
     if (atoms>0)
         cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,atoms,Q,P,1.0,
@@ -834,7 +846,8 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
     const int cached_moments=static_cast<int>(two_layer_gate_required_moment_indices_.size());
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     std::vector<double> scalar_seeds(static_cast<size_t>(P)*Q);
-    std::vector<double> compact_seeds(static_cast<size_t>(P)*projection_rows);
+    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialTanh();
+    std::vector<double> compact_seeds(direct_linear ? 0 : static_cast<size_t>(P)*projection_rows);
     std::vector<double> adj(static_cast<size_t>(alpha_moments_count)*P);
     std::vector<double> gate_values(alpha_moments_count,0.0);
     std::vector<double> basic_seeds(static_cast<size_t>(P)*basic_count),jacobian,derivatives;
@@ -843,6 +856,10 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
         const int coords=3*nbh.count;
         if (coords==0) continue;
         double* seeds=ex.component_coefficient_adjoints.data()+static_cast<size_t>(atom)*P*D;
+        if (direct_linear) {
+            for (int p=0;p<P;++p) for (int row=0;row<D;++row)
+                seeds[p*D+row]*=amplitude[ex.amplitude_offsets[atom]+row];
+        } else {
         std::fill(compact_seeds.begin(),compact_seeds.end(),0.0);
         for (int p=0;p<P;++p)
             for (int row=0;row<D;++row) {
@@ -855,7 +872,8 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
             const double x=ex.signals[static_cast<size_t>(atom)*projection_rows+pr];
             compact_seeds[p*projection_rows+pr]*=1.0-x*x;
         }
-        const double* projected=compact_seeds.data();
+        }
+        const double* projected=direct_linear ? seeds : compact_seeds.data();
         cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,P,Q,projection_rows,1.0,projected,projection_rows,
                     regression_coeffs.data()+AdaptiveRadialWeightOffset(),Q,0.0,scalar_seeds.data(),Q);
         std::fill(adj.begin(),adj.end(),0.0);
@@ -1183,8 +1201,9 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             }
     ReduceAdaptiveRadialCoefficientAdjoints(tangent);
     const int projection_rows=ex.projection_rows;
-    const double* seeds=ex.signal_adjoints.data();
-    const double* tangent_seeds=ex.signal_tangent_adjoints.data();
+    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialTanh();
+    const double* seeds=direct_linear ? ex.coefficient_adjoints.data() : ex.signal_adjoints.data();
+    const double* tangent_seeds=direct_linear ? ex.coefficient_tangent_adjoints.data() : ex.signal_tangent_adjoints.data();
     ex.scalar_adjoints.resize(static_cast<size_t>(atoms)*Q);
     if (atoms>0) {
         cblas_dgemm(CblasRowMajor,CblasTrans,CblasNoTrans,projection_rows,Q,atoms,1.0,seeds,projection_rows,two_layer_gate_scalar_values_cache_.data(),Q,1.0,out.data()+AdaptiveRadialWeightOffset(),Q);
