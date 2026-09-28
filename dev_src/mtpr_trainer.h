@@ -125,6 +125,7 @@ public:
 	int do_lin_step_limit = 1000;
 	int do_lin_frequency = 50;
 	bool freeze_scal_coeffs = false;
+	std::string trainable_groups; // Complete adaptive-model coefficient allowlist.
 	std::string optimizer_kind = "bfgs";
 	std::string bfgs_line_search = "wolfe";
 	std::string radial_parameterization = "physical";

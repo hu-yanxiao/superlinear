@@ -2635,7 +2635,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	const int scal_coeff_begin = p_mlmtpr->species_count;
 	const int scal_coeff_end = p_mlmtpr->RadialCoeffOffset();
 	std::vector<int> active_coeff_indices;
-	p_mlmtpr->BuildActiveCoeffIndices(active_coeff_indices, freeze_scal_coeffs);
+	p_mlmtpr->BuildActiveCoeffIndices(active_coeff_indices, freeze_scal_coeffs, trainable_groups);
 	if (p_mlmtpr->TwoLayerResidualEnabled()
 	    && two_layer_residual_stage != kResidualStageFull) {
 		std::vector<int> stage_active_coeff_indices;
@@ -2649,6 +2649,19 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 	for (int active_idx = 0; active_idx < static_cast<int>(active_coeff_indices.size()); ++active_idx)
 		full_to_active_index[active_coeff_indices[active_idx]] = active_idx;
 	const int opt_n = static_cast<int>(active_coeff_indices.size());
+	std::vector<std::pair<int, double>> frozen_reference;
+	if (!trainable_groups.empty()) {
+		if (do_lin || do_lin_rescale || random_perturb != 0)
+			ERROR("Selective adaptive training forbids linear refits and random perturbations");
+		for (int i = 0; i < n; ++i)
+			if (full_to_active_index[i] < 0)
+				frozen_reference.emplace_back(i, x[i]);
+	}
+	auto verify_frozen_coefficients = [&]() {
+		for (const auto& frozen : frozen_reference)
+			if (x[frozen.first] != frozen.second)
+				ERROR("Selective training changed frozen coefficient " + std::to_string(frozen.first));
+	};
 	if (opt_n <= 0)
 		ERROR("MTPR_trainer::Train(): no active optimizer coordinates.");
 	if (prank == 0) {
@@ -4602,6 +4615,7 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 				require_live_coeff_pointer("optimizer coordinate unpack");
 				copy_optimizer_x_to_full_coeffs();
+				verify_frozen_coefficients();
 				std::copy(x, x + n, evaluated_coeffs.begin());
 				if (!startup_objective_logged
 				    && !coordinate_physical_reference.empty()) {

@@ -3868,8 +3868,51 @@ bool MLMTPR::IsUnusedOuterRadialCoeff(int coeff_index) const
 	return k >= outer_k_rank_;
 }
 
-void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs) const
+void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices,
+                                   bool exclude_scal_coeffs,
+                                   const std::string& trainable_groups) const
 {
+	std::vector<std::pair<int, int>> selected_ranges;
+	if (!trainable_groups.empty()) {
+		if (!OuterUsesAdaptiveRadialCoefficients() || !HasCompleteParameters())
+			ERROR("--trainable-groups requires a complete adaptive radial model");
+		if (exclude_scal_coeffs)
+			ERROR("--trainable-groups cannot be combined with legacy --fine-tune");
+		std::vector<std::string> seen;
+		std::size_t start = 0;
+		do {
+			const std::size_t end = trainable_groups.find(',', start);
+			const std::string group = trainable_groups.substr(start, end - start);
+			if (std::find(seen.begin(), seen.end(), group) != seen.end())
+				ERROR("Duplicate --trainable-groups entry: " + group);
+			seen.push_back(group);
+			int begin = 0, count = 0;
+			if (group == "shift") {
+				count = species_count;
+			} else if (group == "radial") {
+				begin = RadialCoeffOffset();
+				count = radial_func_count * RadialCoeffBlockSize();
+			} else if (group == "readout") {
+				begin = LinearCoeffOffset() + species_count;
+				count = ScalarReadoutCoeffCount();
+			} else if (group == "adaptive_amplitude") {
+				begin = AdaptiveRadialAmplitudeOffset();
+				count = AdaptiveRadialAmplitudeCount();
+			} else if (group == "adaptive_weight") {
+				begin = AdaptiveRadialWeightOffset();
+				count = AdaptiveRadialWeightCount();
+			} else {
+				ERROR("Unknown --trainable-groups entry: '" + group
+				      + "'; allowed: shift,readout,radial,adaptive_amplitude,adaptive_weight");
+			}
+			if (count <= 0)
+				ERROR("--trainable-groups entry has no coefficients: " + group);
+			selected_ranges.emplace_back(begin, begin + count);
+			if (end == std::string::npos)
+				break;
+			start = end + 1;
+		} while (true);
+	}
 	active_coeff_indices.clear();
 	active_coeff_indices.reserve(regression_coeffs.size());
 	const int scal_begin = species_count;
@@ -3880,6 +3923,13 @@ void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, boo
 	const int species_readout_bias_end = UsesSpeciesReadout()
 		? species_readout_bias_begin + species_count : -1;
 	for (int coeff_index = 0; coeff_index < static_cast<int>(regression_coeffs.size()); ++coeff_index) {
+		if (!selected_ranges.empty()) {
+			bool selected = false;
+			for (const auto& range : selected_ranges)
+				selected = selected || (coeff_index >= range.first && coeff_index < range.second);
+			if (!selected)
+				continue;
+		}
 		if (exclude_scal_coeffs
 		    && ((coeff_index >= scal_begin && coeff_index < scal_end)
 		        || (coeff_index >= gate_scal_begin && coeff_index < gate_scal_end)))
@@ -3894,10 +3944,10 @@ void MLMTPR::BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, boo
 	}
 }
 
-int MLMTPR::ActiveCoeffCount(bool exclude_scal_coeffs) const
+int MLMTPR::ActiveCoeffCount(bool exclude_scal_coeffs, const std::string& trainable_groups) const
 {
 	std::vector<int> active_coeff_indices;
-	BuildActiveCoeffIndices(active_coeff_indices, exclude_scal_coeffs);
+	BuildActiveCoeffIndices(active_coeff_indices, exclude_scal_coeffs, trainable_groups);
 	return static_cast<int>(active_coeff_indices.size());
 }
 

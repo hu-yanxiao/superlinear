@@ -1888,6 +1888,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	bool fine_tune = false;
 	if (opts["fine-tune"] != "")
 		fine_tune = true;
+	const bool explicit_trainable_groups = opts.find("trainable-groups") != opts.end();
+	const std::string trainable_groups = opts["trainable-groups"];
+	if (explicit_trainable_groups && trainable_groups.empty())
+		ERROR("--trainable-groups must be a nonempty comma-separated allowlist");
 	const bool two_layer_gate_readout_linear_init =
 		opts["two-layer-gate-readout-linear-init"] != "";
 	int do_lin_step_limit = 1000;
@@ -2269,6 +2273,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
 	const bool adaptive_pytorch_profile = mtpr.OuterUsesAdaptiveRadialCoefficients();
+	if (!trainable_groups.empty()) {
+		if (!adaptive_pytorch_profile || !loaded_complete_parameters
+		    || opts["init-params"] != "same")
+			ERROR("--trainable-groups requires a complete adaptive checkpoint and --init-params=same");
+		if (fine_tune || do_lin || do_lin_rescale || two_layer_residual_staged)
+			ERROR("--trainable-groups forbids legacy fine-tune, linear refits and residual stages");
+		// Validate before reading the training data or performing calibration.
+		if (mtpr.ActiveCoeffCount(false, trainable_groups) == 0)
+			ERROR("--trainable-groups selected no active coefficients");
+	}
 	if (adaptive_pytorch_profile) {
 		// One production conditioning/regularization contract for adaptive models.
 		// Legacy architectures keep their historical options and defaults.
@@ -2804,6 +2818,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.do_lin_step_limit = do_lin_step_limit;
 	trainer.do_lin_frequency = do_lin_frequency;
 	trainer.freeze_scal_coeffs = fine_tune;
+	trainer.trainable_groups = trainable_groups;
 	trainer.std_scaling = weight_std;
         trainer.stdd_scaling = weight_stdd;
 	trainer.linstop = bfgs_conv_tol;	//if in 100 iterations loss decreases less than this, BFGS is finished
@@ -3185,7 +3200,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
                                 std::cout <<"validation structures: " << valid_cfg_total << std::endl;
                                 std::cout <<"validation atoms: " << valid_atom_total << std::endl;
                          }
-                         std::cout <<"num_of_parameters: " <<mtpr.ActiveCoeffCount(fine_tune)  <<std::endl;
+                         std::cout <<"num_of_parameters: " <<mtpr.ActiveCoeffCount(fine_tune, trainable_groups)  <<std::endl;
+                         if (!trainable_groups.empty())
+                             std::cout << "trainable_groups: " << trainable_groups << std::endl;
                          std::cout <<"num_of_stored_coefficients: " <<mtpr.regression_coeffs.size()  <<std::endl;
                          std::cout <<"num_of_scalar_basis_functions: " <<mtpr.alpha_scalar_moments  <<std::endl;
 						 std::cout << "num_of_L_channels: " << mtpr.L << std::endl;

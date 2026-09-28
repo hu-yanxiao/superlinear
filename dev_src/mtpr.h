@@ -1301,8 +1301,13 @@ public:
 	double RadialFirstCoeffDerivativeFromValue(double coeff_value) const;
 	bool IsRedundantRadialSpeciesCoeff(int coeff_index) const;
 	bool IsUnusedOuterRadialCoeff(int coeff_index) const;
-	void BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices, bool exclude_scal_coeffs = false) const;
-	int ActiveCoeffCount(bool exclude_scal_coeffs = false) const;
+	// Empty groups preserve historical all-active behavior. A nonempty allowlist
+	// is for complete adaptive models; coefficients outside it are never packed.
+	void BuildActiveCoeffIndices(std::vector<int>& active_coeff_indices,
+	                            bool exclude_scal_coeffs = false,
+	                            const std::string& trainable_groups = "") const;
+	int ActiveCoeffCount(bool exclude_scal_coeffs = false,
+	                     const std::string& trainable_groups = "") const;
 	int ScalingSlopeOffset(int scaling_block, int type_central, int type_outer) const;
 	int ScalingShiftOffset(int scaling_block, int type_central, int type_outer) const;
 		double OrderedPairStrength(int type_central, int type_outer) const;

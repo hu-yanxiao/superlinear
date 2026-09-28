@@ -305,3 +305,41 @@ The independent composition QR/SVD check passed rank-deficient VO2 and
 full-rank examples. The existing adaptive radial regression also passed in
 job `4258469`, covering K/L/LK, independent gate scaling, cached/recomputed
 paths, model I/O, zero-a/zero-U, force/virial differences and mixed gradients.
+
+## Selective native fine-tuning
+
+For a complete adaptive checkpoint, native BFGS/L-BFGS can restrict the
+optimizer coordinates with, for example:
+
+```sh
+mlp-sus2 train initial.mtp train.cfg --init-params=same --optimizer=bfgs \
+  --max-iter=10000 --energy-weight=10 --force-weight=1 --stress-weight=0.1 \
+  --std-weight=0 --stdd-weight=0 \
+  --trainable-groups=shift,readout,radial,adaptive_weight,adaptive_amplitude \
+  --curr-pot-name=current.mtp --trained-pot-name=trained.mtp
+```
+
+The option is an allowlist: `shift` selects element energy offsets; `readout`
+selects the outer scalar head; `radial` selects active outer radial rows and
+outer type factors; `adaptive_weight` selects U; `adaptive_amplitude` selects a.
+Unlisted coefficients remain fixed. In the example this freezes all coordinate
+scaling, inner gate radial/type/rank parameters, and the redundant species
+readout bias. Consequently the pre-U gate scalar on a fixed geometry is fixed.
+Unused outer rows and redundant type coefficients remain excluded even when
+`radial` is requested; stored coefficient count is not active parameter count.
+Joint heads and tensor-message coefficients, if present, are not selected by
+these five names.
+
+Omitting the option preserves the original all-active behavior. Empty entries,
+unknown/duplicate groups, incomplete models, random initialization, legacy
+`--fine-tune`, linear refits and residual stages are rejected. Native training
+does not import PyTorch LR, clip, batch or optimizer state. Its full-batch
+squared E/F/stress normalization and fixed physical regularizers are those
+documented above, not a promise of PyTorch minibatch-MSE trajectory parity.
+Complete-model calibration changes optimizer coordinates only, not the
+starting physical coefficients. Every objective checks frozen physical
+coefficients exactly against the optimizer-entry reference.
+
+Regression: `dev_test/adaptive_selective_train_check.py BIN` (optionally
+`--mpi-command 'mpiexec.hydra -n 2'`) exercises each group, the five-group
+combination, MPI/serial EFS, idle ranks, invalid options and zero-step resume.
