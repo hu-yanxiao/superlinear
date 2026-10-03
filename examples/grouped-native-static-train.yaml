@@ -1,0 +1,42 @@
+# Native CPU/FP64 BFGS without coordination-dependent radial corrections.
+# Paths are relative to this YAML. Choose a fresh output directory for each run.
+schema_version: 1
+model:
+  kind: static-radial
+  elements: [H, O]
+  l_max: 3
+  radial_channels: 8
+  neighbor_cutoff: 6.5
+  radial:
+    basis: chebyshev-sss
+    basis_size: 10
+    warp_sharing: LK
+  coordination:
+    enabled: false
+  interaction:
+    channels: 4
+    body_order: 4
+    channel_coupling: cross
+  # No other coordination.* or response.* fields in this mode.
+initialization:
+  parameters: same
+training:
+  engine: native
+  device: cpu
+  dtype: float64
+  profile: native-static-v1
+  optimizer: bfgs
+  iterations: 2000
+loss:
+  energy_weight: 20
+  force_weight: 20
+  virial_weight: 5
+regularization:
+  radial_smoothness: 1e-6
+  radial_smoothness_grid: 128
+  energy_readout_l2: 0
+data:
+  train: train.cfg
+  # valid: val.cfg  # Only include when a validation set exists.
+output:
+  directory: runs/native-static

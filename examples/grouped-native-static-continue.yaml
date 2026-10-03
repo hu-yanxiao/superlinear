@@ -1,0 +1,13 @@
+# Architecture comes from this complete gate-free ranked SH checkpoint.
+# Do not include model.* or a response/coordination architecture override.
+schema_version: 1
+data:
+  model: runs/native-static/final.mtp
+  train: train.cfg
+  # valid: val.cfg
+training:
+  profile: native-static-v1
+  optimizer: bfgs
+  iterations: 2000
+output:
+  directory: runs/native-static-continued

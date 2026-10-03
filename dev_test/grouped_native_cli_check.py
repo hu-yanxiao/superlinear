@@ -172,9 +172,125 @@ output:
 """)
 run("reject-incomplete", ["train", bad_continue], failure="requires a complete checkpoint")
 
+# Disable coordination through the existing gate-free ranked SH implementation.
+# Compare to its legacy CLI, not to an adaptive model with a zeroed U matrix.
+STATIC_MODEL = """model:
+  kind: coordination-adaptive
+  elements: [H, O]
+  l_max: 1
+  radial_channels: 2
+  neighbor_cutoff: 3.5
+  radial:
+    basis_size: 3
+    warp_sharing: LK
+  coordination:
+    enabled: false
+  interaction:
+    channels: 2
+    body_order: 3
+    channel_coupling: cross
+"""
+STATIC_LEGACY = ["--superlinear-mode=legacy", "--species-count=2", "--l-max=1", "--k-max=2",
+                 "--cutoff=3.5", "--radial-basis-size=3", "--outer-k-rank=2", "--body-order=3",
+                 "--sh-factor-pruning=q-total"]
+static_kind_config = yaml("static-kind.yaml", STATIC_MODEL.replace("kind: coordination-adaptive", "kind: 'static-radial'")
+                          .replace("  coordination:\n    enabled: false\n", "") + "output:\n  model: static-kind.mtp\n")
+run("static-quoted-kind", ["init-sh", static_kind_config])
+for sharing in ["L", "K", "LK"]:
+    config = yaml("static-" + sharing + ".yaml", STATIC_MODEL.replace("warp_sharing: LK", "warp_sharing: " + sharing)
+                  + "output:\n  model: static-" + sharing + ".mtp\n")
+    run("static-init-" + sharing, ["init-sh", config])
+    run("static-legacy-init-" + sharing, ["init-sh", ROOT / ("static-legacy-" + sharing + ".mtp")]
+        + STATIC_LEGACY + ["--scaling-map=" + sharing])
+    text = (ROOT / ("static-" + sharing + ".mtp")).read_text()
+    assert "two_layer_gate" not in text and "adaptive_radial" not in text, "static topology contains coordination/response"
+    assert (ROOT / ("static-" + sharing + ".mtp")).read_bytes() == (ROOT / ("static-legacy-" + sharing + ".mtp")).read_bytes()
+    CHECKS += 1
+
+STATIC_TRAINING = """initialization:
+  parameters: random
+  seed: 41
+training:
+  optimizer: bfgs
+  iterations: 1
+regularization:
+  radial_smoothness: 0
+  radial_smoothness_grid: 32
+  energy_readout_l2: 1e-5
+loss:
+  energy_weight: 1
+  force_weight: 0.1
+  virial_weight: 0.01
+data:
+  train: tiny.cfg
+  valid: tiny.cfg
+output:
+  directory: static-run
+"""
+static_train_config = yaml("static-train.yaml", STATIC_MODEL + STATIC_TRAINING)
+# Adaptive initialization earlier in this same fixture root legitimately uses
+# ini.mtp. Static runs must neither create nor modify that inherited artifact.
+def undeclared_initial_snapshot():
+    path = ROOT / "ini.mtp"
+    return (path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None
+
+
+static_undeclared_before = undeclared_initial_snapshot()
+run("static-train-yaml", ["train", static_train_config])
+assert undeclared_initial_snapshot() == static_undeclared_before, "static grouped run changed an undeclared pretraining output"
+(ROOT / "static-legacy-run").mkdir()
+run("static-train-legacy", ["train", CFG] + STATIC_LEGACY + ["--init-sh", "--init-params=random", "--init-random-seed=41",
+    "--skip-preinit", "--max-iter=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
+    "--radial-smooth=0", "--radial-smooth-grid=32", "--scalar-head-l2=1e-5", "--valid-cfgs=" + str(CFG),
+    "--inline-sh-model=" + str(ROOT / "static-legacy-run/initial.mtp"), "--curr-pot-name=" + str(ROOT / "static-legacy-run/current.mtp"),
+    "--best-pot-name=" + str(ROOT / "static-legacy-run/best.mtp"), "--trained-pot-name=" + str(ROOT / "static-legacy-run/final.mtp"),
+    "--optimizer-trace-file=" + str(ROOT / "static-legacy-run/optimizer.csv")])
+for field in ["initial.mtp", "final.mtp", "optimizer.csv"]:
+    assert (ROOT / "static-run" / field).read_bytes() == (ROOT / "static-legacy-run" / field).read_bytes(), "static " + field + " differs"
+    CHECKS += 1
+run("static-predict-yaml", ["calc-efs", ROOT / "static-run/final.mtp", CFG, ROOT / "static-yaml-pred.cfg"])
+run("static-predict-legacy", ["calc-efs", ROOT / "static-legacy-run/final.mtp", CFG, ROOT / "static-legacy-pred.cfg"])
+assert (ROOT / "static-yaml-pred.cfg").read_bytes() == (ROOT / "static-legacy-pred.cfg").read_bytes()
+CHECKS += 1
+static_continue_config = yaml("static-continue.yaml", """data:
+  model: static-run/final.mtp
+  train: tiny.cfg
+training:
+  profile: 'native-static-v1'
+  iterations: 1
+output:
+  directory: static-resumed
+""")
+run("static-continue", ["train", static_continue_config])
+assert (ROOT / "static-resumed/final.mtp").exists() and not (ROOT / "static-resumed/initial.mtp").exists()
+default_static_config = yaml("static-defaults.yaml", STATIC_MODEL + """training:
+  iterations: 1
+data:
+  train: tiny.cfg
+output:
+  directory: static-defaults
+""")
+default_output = run("static-default-training", ["train", default_static_config])
+assert "Initial untrained model warmup rescale+linear solve done" in default_output and "Pre-training started" not in default_output
+assert "coordination_response_l2" not in default_output and (ROOT / "static-defaults/final.mtp").exists()
+assert undeclared_initial_snapshot() == static_undeclared_before
+wrong_profile = yaml("static-wrong-profile.yaml", static_continue_config.read_text().replace("native-static-v1", "native-adaptive-v1")
+                     .replace("static-resumed", "static-wrong-profile"))
+run("static-reject-wrong-profile", ["train", wrong_profile], failure="does not match the checkpoint architecture")
+wrong_adaptive_profile = yaml("adaptive-wrong-profile.yaml", continue_config.read_text()
+                              .replace("  iterations: 0", "  profile: native-static-v1\n  iterations: 0")
+                              .replace("directory: resumed", "directory: adaptive-wrong-profile"))
+run("adaptive-reject-wrong-profile", ["train", wrong_adaptive_profile], failure="does not match the checkpoint architecture")
+run("static-reject-response", ["train", static_train_config, "--response-layout=full", "--check-config"], failure="unavailable")
+run("static-reject-coordination", ["train", static_train_config, "--coord-channels=1", "--check-config"], failure="unavailable")
+run("static-reject-diagonal", ["train", static_train_config, "--interaction-coupling=diagonal", "--check-config"], failure="conflict")
+
 if MPI:
     output = run("mpi-check", ["train", train_config, "--check-config"], mpi=True)
     assert output.count("CONFIG_CHECK_PASS") == 1
     CHECKS += 1
+    static_mpi_config = yaml("static-mpi.yaml", STATIC_MODEL + STATIC_TRAINING.replace("directory: static-run", "directory: static-mpi"))
+    run("static-mpi-train", ["train", static_mpi_config], mpi=True)
+    assert (ROOT / "static-mpi/final.mtp").exists() and undeclared_initial_snapshot() == static_undeclared_before
 
 print("GROUPED_NATIVE_CLI_PASS checks=" + str(CHECKS) + " fixtures=" + str(ROOT))

@@ -58,6 +58,9 @@ const std::string training =
     "loss:\n  energy_weight: 20\n  force_weight: 20\n  virial_weight: 5\n"
     "data:\n  train: 'train with spaces.cfg'\n  valid: val.cfg\n"
     "output:\n  directory: run\n";
+const std::string static_model =
+    "model:\n  elements: [H, O]\n  l_max: 3\n  radial_channels: 8\n"
+    "  coordination:\n    enabled: false\n  interaction:\n    channels: 4\n    body_order: 4\n";
 }
 int main() {
     try {
@@ -139,6 +142,49 @@ int main() {
         Bad({"train", Fixture(model + training), "--regularization.energy_readout_l2=0", "--check-config"}, "fixed to");
         const auto resumed = Run({"train", Fixture("data:\n  model: checkpoint.mtp\n  train: train.cfg\noutput:\n  directory: resumed\ntraining:\n  iterations: 5\n"), "--check-config"});
         Require(resumed.args.size() == 2 && resumed.opts.at("init-params") == "same" && !resumed.opts.count("init-sh"), "continuation");
+        const auto static_run = Run({"train", Fixture(static_model + training), "--check-config"});
+        Require(static_run.opts.at("superlinear-mode") == "legacy" && static_run.opts.at("sh-factor-pruning") == "q-total"
+            && static_run.opts.at("outer-k-rank") == "4", "static topology without gate");
+        Require(!static_run.opts.count("two-layer-gate-k-rank") && !static_run.opts.count("adaptive-radial-projection")
+            && static_run.opts.at("skip-preinit") == "true", "omit unused gate and hidden pretraining");
+        for (const char* sharing : {"L", "K", "LK"}) {
+            const auto s = Run({"train", Fixture(static_model + training), "--distance-warp-sharing", sharing, "--check-config"});
+            Require(s.opts.at("scaling-map") == sharing, "static warp sharing");
+        }
+        const auto static_cli = Run({"train", "data.cfg", "--coord-enabled", "false", "--interaction-channels=2",
+            "--output.directory=" + root + "/static-cli", "--check-config"});
+        Require(static_cli.opts.at("superlinear-mode") == "legacy", "static short CLI");
+        const auto static_kind = Run({"init-sh", Fixture("model:\n  kind: static-radial\n  interaction:\n    channels: 2\noutput:\n  model: static.mtp\n"), "--check-config"});
+        Require(static_kind.opts.at("superlinear-mode") == "legacy", "static kind implies coordination disabled");
+        const auto static_quoted = Run({"train", Fixture("model:\n  kind: 'static-radial'\n  interaction:\n    channels: 2\n" + training
+            + "regularization:\n  energy_readout_l2: 0\n"), "--training.profile='native-static-v1'", "--check-config"});
+        Require(static_quoted.opts.at("superlinear-mode") == "legacy" && static_quoted.opts.at("scalar-head-l2") == "0", "quoted static mode/profile");
+        const auto static_family = Run({"train", Fixture(static_model + training), "--model.kind=coordination-adaptive", "--check-config"});
+        Require(static_family.opts.at("superlinear-mode") == "legacy", "explicit switch overrides adaptive family default");
+        for (const char* key : {"model.coordination.channels", "model.coordination.body_order",
+             "model.coordination.channel_coupling", "model.coordination.distance_warp", "model.coordination.tensor_l_max",
+             "model.response.layout", "model.response.latent_channels", "model.response.activation", "model.response.element_mode"})
+            Bad({"train", Fixture(static_model + training), std::string("--") + key + "=1", "--check-config"}, "unavailable");
+        Bad({"train", Fixture(static_model + training), "--two-layer-gate-k-rank=2", "--check-config"}, "unavailable");
+        Bad({"train", Fixture(static_model + training), "--adaptive-radial-projection=full", "--check-config"}, "unavailable");
+        Bad({"train", Fixture(static_model + training), "--model.readout.element_mode=per-element", "--check-config"}, "only shared readout");
+        Bad({"train", Fixture(static_model + training), "--model.readout.joint=true", "--check-config"}, "only shared readout");
+        Bad({"train", Fixture(static_model + training), "--interaction-coupling=diagonal", "--check-config"}, "conflicting");
+        Bad({"train", Fixture(static_model + training), "--regularization.coordination_response_l2=0", "--check-config"}, "unavailable");
+        Bad({"train", Fixture(static_model + training), "--training.profile=native-adaptive-v1", "--check-config"}, "must match");
+        Bad({"train", Fixture(model + training), "--training.profile=native-static-v1", "--check-config"}, "must match");
+        Bad({"train", Fixture(static_model + training), "--initialization.seed=41", "--check-config"}, "requires a fresh model");
+        const auto random_static = Run({"train", Fixture(static_model + training), "--initialization.parameters=random",
+            "--initialization.seed=41", "--check-config"});
+        Require(random_static.opts.at("init-params") == "random" && random_static.opts.at("init-random-seed") == "41", "static random initialization");
+        const auto static_regularizers = Run({"train", Fixture(static_model + training), "--regularization.radial_smoothness=0",
+            "--regularization.radial_smoothness_grid=32", "--regularization.energy_readout_l2=1e-5", "--check-config"});
+        Require(static_regularizers.opts.at("radial-smooth") == "0" && static_regularizers.opts.at("radial-smooth-grid") == "32"
+            && std::stod(static_regularizers.opts.at("scalar-head-l2")) == 1e-5, "static selectable regularizers");
+        const std::string static_continue = "data:\n  model: static.mtp\n  train: train.cfg\ntraining:\n  profile: native-static-v1\noutput:\n  directory: resumed-static\n";
+        const auto sresumed = Run({"train", Fixture(static_continue), "--check-config"});
+        Require(sresumed.args.size() == 2 && sresumed.opts.at("skip-preinit") == "true", "static continuation profile");
+        Bad({"train", Fixture(static_continue), "--training.trainable_groups=radial", "--check-config"}, "requires an adaptive checkpoint");
         Bad({"train", Fixture(model + "data:\n  model: checkpoint.mtp\n  train: train.cfg\noutput:\n  directory: resumed\n"), "--check-config"}, "inherits");
         const auto legacy = Run({"train", "old.mtp", "old.cfg", "--max-iter=7", "--unknown=true"});
         Require(!legacy.check && legacy.args.size() == 2 && legacy.opts.size() == 2, "legacy options untouched");

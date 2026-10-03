@@ -18,7 +18,7 @@ namespace {
 typedef std::map<std::string, std::string> Values;
 struct Rule { const char* key; const char* option; const char* type; };
 const Rule rules[] = {
-    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate"},
+    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate|static-radial=legacy"},
     {"model.name", "potential-name", "text"},
     {"model.species_count", "species-count", "positive-int"},
     {"model.l_max", "l-max", "int"},
@@ -29,6 +29,7 @@ const Rule rules[] = {
     {"model.radial.basis_scale", "scaling", "positive-real"},
     {"model.radial.reference_min_distance", "min-dist", "nonnegative-real"},
     {"model.radial.warp_sharing", "scaling-map", "L=L|K=K|LK=LK|angular=L|channel=K|channel-angular=LK"},
+    {"model.coordination.enabled", "@coordination-enabled", "bool"},
     {"model.coordination.channels", "two-layer-gate-k-rank", "positive-int"},
     {"model.coordination.body_order", "two-layer-gate-body-order", "positive-int"},
     {"model.coordination.channel_coupling", "two-layer-gate-factor-pruning", "cross=q-total|diagonal=same-k"},
@@ -67,7 +68,7 @@ const Rule rules[] = {
     {"training.engine", "@fixed", "native=native"},
     {"training.device", "@fixed", "cpu=cpu"},
     {"training.dtype", "@fixed", "float64=float64"},
-    {"training.profile", "@fixed", "native-adaptive-v1=native-adaptive-v1"},
+    {"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-static-v1=native-static-v1"},
     {"loss.profile", "@fixed", "sus2-legacy=sus2-legacy"},
     {"regularization.radial_smoothness", "@fixed:0.000001", "nonnegative-real"},
     {"regularization.radial_smoothness_grid", "@fixed:128", "positive-int"},
@@ -77,6 +78,7 @@ const Rule rules[] = {
 const Values& Aliases() {
     static const Values values = {
         {"radial-channels", "model.radial_channels"},
+        {"coord-enabled", "model.coordination.enabled"},
         {"coord-channels", "model.coordination.channels"},
         {"interaction-channels", "model.interaction.channels"},
         {"neighbor-cutoff", "model.neighbor_cutoff"},
@@ -329,12 +331,14 @@ std::string Quoted(const std::string& s) {
     for (char c : s) { if (c == '\\' || c == '"') result += '\\'; result += c; }
     return result + "\"";
 }
-void ValidateLegacyOptions(const Values& opts) {
+void ValidateLegacyOptions(const Values& opts, bool static_profile) {
     // Grouped input is deliberately narrower than the historical CLI. Do not
     // let a typo, an Adam flag or a legacy-only control be silently ignored.
     std::set<std::string> allowed = {"init-sh", "max-dist", "bfgs-conv-tol", "bfgs-trace-file",
         "body-l-max", "std-weight", "stdd-weight"};
     for (const Rule& r : rules) if (r.option[0] != '@') allowed.insert(r.option);
+    if (static_profile)
+        for (const char* key : {"radial-smooth", "radial-smooth-grid", "scalar-head-l2"}) allowed.insert(key);
     for (const auto& option : opts)
         if (!allowed.count(option.first)) Fail("--" + option.first +
             " is not supported with grouped native input; use a documented grouped key or the legacy CLI separately");
@@ -352,6 +356,10 @@ void ValidateLegacyOptions(const Values& opts) {
     if (opts.count("two-layer-gate-decoupled-scaling") && opts.at("two-layer-gate-decoupled-scaling") != "true")
         Fail("a legacy decoupled-scaling flag enables the feature by presence; use model.coordination.distance_warp: shared instead");
     for (const char* key : {"std-weight", "stdd-weight"}) if (opts.count(key)) Real(opts.at(key), false, true);
+    if (static_profile) {
+        for (const char* key : {"radial-smooth", "scalar-head-l2"}) if (opts.count(key)) Real(opts.at(key), false, true);
+        if (opts.count("radial-smooth-grid")) Integer(opts.at("radial-smooth-grid"), true);
+    }
 }
 }
 
@@ -430,6 +438,26 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     opts.erase("check-config");
     char cwd[4096]; if (!::getcwd(cwd, sizeof(cwd))) Fail("cannot resolve working directory");
     const std::string base = config.empty() ? cwd : Parent(Absolute(config, cwd));
+    const bool continuation = settings.count("data.model") || (command == "train" && args.size() == 2);
+    const std::string kind = settings.count("model.kind") ? Scalar(settings.at("model.kind")) : "coordination-adaptive";
+    const bool coordination_enabled = settings.count("model.coordination.enabled")
+        ? Convert(Rule{"model.coordination.enabled", "@coordination-enabled", "bool"}, settings.at("model.coordination.enabled")) == "true"
+        : kind != "static-radial";
+    const std::string profile = settings.count("training.profile") ? Scalar(settings.at("training.profile"))
+        : ((!continuation && !coordination_enabled) ? "native-static-v1" : "native-adaptive-v1");
+    const bool static_profile = profile == "native-static-v1";
+    if (!continuation && static_profile == coordination_enabled)
+        Fail("training.profile must match coordination.enabled (native-static-v1 for false, native-adaptive-v1 for true)");
+    if (kind == "static-radial" && coordination_enabled)
+        Fail("static-radial requires coordination.enabled: false");
+    if (!continuation && !coordination_enabled) {
+        for (const auto& value : settings)
+            if ((Starts(value.first, "model.coordination.") && value.first != "model.coordination.enabled") ||
+                Starts(value.first, "model.response."))
+                Fail(value.first + " is unavailable when coordination.enabled is false; omit the inactive setting");
+    }
+    if (static_profile && settings.count("regularization.coordination_response_l2"))
+        Fail("regularization.coordination_response_l2 is unavailable without coordination response");
     Values paths; std::string elements;
     for (const auto& value : settings) {
         if (!KnownKey(value.first)) Fail("unknown setting '" + value.first + "'");
@@ -447,24 +475,32 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         for (const Rule& r : rules) if (value.first == r.key) {
             std::string converted = Convert(r, value.second);
             const std::string option = r.option;
-            if (Starts(option, "@fixed")) {
-                if (Starts(option, "@fixed:") && !Equivalent(converted, option.substr(7))) Fail(value.first + " is fixed to " + option.substr(7) + " by native-adaptive-v1");
+            if (option == "@coordination-enabled" || option == "@profile") {
+                // Adapter metadata, never forwarded as a native presence flag.
+            } else if (Starts(option, "@fixed")) {
+                if (static_profile && Starts(value.first, "regularization.")) {
+                    const Values static_regularizers = {{"regularization.radial_smoothness", "radial-smooth"},
+                        {"regularization.radial_smoothness_grid", "radial-smooth-grid"},
+                        {"regularization.energy_readout_l2", "scalar-head-l2"}};
+                    Put(opts, static_regularizers.at(value.first), converted);
+                } else if (Starts(option, "@fixed:") && !Equivalent(converted, option.substr(7)))
+                    Fail(value.first + " is fixed to " + option.substr(7) + " by native-adaptive-v1");
             } else if (std::string(r.type) == "path") {
                 converted = Absolute(converted, cli_paths.count(value.first) ? cwd : base);
                 if (option.front() == '@') paths[option] = converted;
                 else Put(opts, option, converted);
             } else if (option == "two-layer-gate-decoupled-scaling" && converted == "false") {
                 if (opts.count(option) || opts.count("two-layer-gate-full-decoupled")) Fail("shared distance warp conflicts with legacy decoupled-scaling flag");
-            } else Put(opts, option, converted);
+            } else if (value.first != "model.kind" || coordination_enabled || continuation)
+                Put(opts, option, converted);
         }
     }
     // Legacy aliases must not bypass the conflict checks.
     for (const auto& alias : Values{{"max-dist", "cutoff"}, {"bfgs-conv-tol", "optimizer-conv-tol"}, {"bfgs-trace-file", "optimizer-trace-file"}})
         if (opts.count(alias.first) && opts.count(alias.second) && !Equivalent(opts[alias.first], opts[alias.second])) Fail("conflicting --" + alias.first + " and --" + alias.second);
-    ValidateLegacyOptions(opts);
+    ValidateLegacyOptions(opts, static_profile);
     if ((paths.count("@train") || paths.count("@model") || paths.count("@output")) && !args.empty())
         Fail("do not mix positional model/data/output paths with grouped data/output.model paths");
-    const bool continuation = paths.count("@model") || (command == "train" && args.size() == 2);
     if (continuation) {
         for (const auto& value : settings) if (Starts(value.first, "model.") || value.first == "elements")
             Fail("continuation inherits the saved architecture; omit " + value.first + " and use data.model");
@@ -473,7 +509,17 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         if (opts.count("init-sh")) Fail("continuation cannot use --init-sh");
         Put(opts, "init-params", "same");
     } else {
-        Put(opts, "superlinear-mode", "radial-coefficient-gate");
+        Put(opts, "superlinear-mode", coordination_enabled ? "radial-coefficient-gate" : "legacy");
+        if (!coordination_enabled) {
+            for (const Rule& r : rules)
+                if ((Starts(r.key, "model.coordination.") || Starts(r.key, "model.response.")) &&
+                    r.option[0] != '@' && opts.count(r.option))
+                    Fail("--" + std::string(r.option) + " is unavailable when coordination.enabled is false");
+            if ((opts.count("readout-mode") && opts.at("readout-mode") != "shared") ||
+                (opts.count("joint-readout") && opts.at("joint-readout") != "false"))
+                Fail("static-radial supports only shared readout and joint: false");
+            Put(opts, "sh-factor-pruning", "q-total");
+        }
         const int l = GetInt(opts, "l-max", 3), k = GetInt(opts, "k-max", 3);
         const int o = GetInt(opts, "outer-k-rank", 0), g = GetInt(opts, "two-layer-gate-k-rank", k);
         const int body = GetInt(opts, "body-order", 5), gate_body = GetInt(opts, "two-layer-gate-body-order", body);
@@ -500,9 +546,17 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         }
         if (command == "train") {
             if (opts.count("trainable-groups")) Fail("trainable_groups is for continuation from a complete checkpoint");
-            Put(opts, "init-params", "same");
+            if (coordination_enabled || !opts.count("init-params")) Put(opts, "init-params", "same");
             Put(opts, "init-sh", "true");
         }
+    }
+    if (command == "train" && static_profile) {
+        if (opts.count("trainable-groups")) Fail("trainable_groups requires an adaptive checkpoint, not native-static-v1");
+        if (opts.count("init-random-seed") && (continuation || opts.at("init-params") != "random"))
+            Fail("static initialization.seed requires a fresh model with initialization.parameters: random");
+        // Keep native static rescale/linear warmup, but no hidden 75-step
+        // pretraining or unscoped ini.mtp output outside the declared run paths.
+        opts["skip-preinit"] = "true";
     }
     const std::string dir = paths.count("@directory") ? paths["@directory"] : "";
     if (!dir.empty()) {
@@ -537,7 +591,10 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         if (!elements.empty()) *output << "elements_in_cfg_type_order=" << elements << " (does not enable ZBL)\n";
         *output << "resolved_arguments:"; for (const std::string& arg : args) *output << " " << Quoted(arg); *output << '\n';
         for (const auto& option : opts) *output << "resolved_option --" << option.first << "=" << Quoted(option.second) << '\n';
-        if (command == "train") *output << "native-adaptive-v1: fixed RMS; force-RMS output scale; radial_smoothness=1e-6; energy_readout_l2=1e-5; coordination_response_l2=1e-4; iterations are BFGS steps, not epochs\n";
+        if (command == "train") {
+            if (static_profile) *output << "native-static-v1: no coordination/response; physical radial coordinates; native vibrations weighting; radial_smoothness defaults to 1e-6; energy_readout_l2 defaults to 0; no 75-step pretraining; iterations are BFGS steps, not epochs\n";
+            else *output << "native-adaptive-v1: fixed RMS; force-RMS output scale; radial_smoothness=1e-6; energy_readout_l2=1e-5; coordination_response_l2=1e-4; iterations are BFGS steps, not epochs\n";
+        }
         if (check) *output << "CONFIG_CHECK_PASS (syntax/translation only; model/data not loaded, no outputs created)\n";
     }
     if (check) return true;
@@ -557,17 +614,21 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             }
     }
     if (!dir.empty()) MakeDirectory(dir);
-    if (command == "train") opts["grouped-input"] = continuation ? "continue" : "fresh";
+    if (command == "train") {
+        opts["grouped-input"] = continuation ? "continue" : "fresh";
+        opts["grouped-profile"] = profile;
+    }
     return false;
 }
 
 const char* Help() {
-    return "Grouped physical input (native adaptive models):\n"
+    return "Grouped physical input (native adaptive or static-radial models):\n"
            "  mlp-sus2 train run.yaml [--check-config]\n"
            "  mlp-sus2 train --config run.yaml [--check-config]\n"
            "  mlp-sus2 init-sh model.yaml [--check-config]\n"
            "  New CLI names: --model.kind coordination-adaptive --radial-channels K\n"
            "    --coord-channels G --interaction-channels O --neighbor-cutoff ANGSTROM\n"
+           "    --coord-enabled false: static radial weights, no coordination/response keys\n"
            "    --distance-warp-sharing L|K|LK (default LK; semantic aliases remain valid)\n"
            "    --response-layout full|shared-n (default full); --model.response.latent_channels d\n"
            "  All grouped scalar keys also accept --group.key=value. Legacy flags remain valid.\n"

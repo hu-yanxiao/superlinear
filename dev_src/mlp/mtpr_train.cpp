@@ -2274,8 +2274,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
 	const bool adaptive_pytorch_profile = mtpr.OuterUsesAdaptiveRadialCoefficients();
 	if (opts.count("grouped-input")) {
-		if (!adaptive_pytorch_profile)
-			ERROR("Grouped native input requires an adaptive-radial superlinear model");
+		const bool static_radial_model = mtpr.IsSHPotential() && mtpr.OuterKRank() > 0
+			&& !adaptive_pytorch_profile && !mtpr.OuterUsesPureRadialMatrix()
+			&& !mtpr.TwoLayerGateEnabled() && !mtpr.MultiLayerGateEnabled()
+			&& !mtpr.TwoLayerResidualEnabled() && !mtpr.TensorMessageEnabled()
+			&& !mtpr.JointReadoutEnabled() && !mtpr.UsesSpeciesReadout();
+		const bool static_profile = opts.at("grouped-profile") == "native-static-v1";
+		if (static_profile ? !static_radial_model : !adaptive_pytorch_profile)
+			ERROR("Grouped training.profile does not match the checkpoint architecture; "
+			      "use native-static-v1 for a gate-free ranked SH model or native-adaptive-v1 for an adaptive model");
 		if (opts.at("grouped-input") == "continue" && !loaded_complete_parameters)
 			ERROR("Grouped continuation requires a complete checkpoint, not an uninitialized topology");
 	}
