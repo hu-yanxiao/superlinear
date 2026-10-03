@@ -44,7 +44,7 @@ mlp-sus2 train --config continue.yaml
 | `model.radial.basis_size` | `radial-basis-size` | 径向基函数数 N；默认 10 |
 | `model.radial.basis_scale` | `scaling` | 全局径向基缩放；默认 0.01 |
 | `model.radial.reference_min_distance` | `min-dist` | 径向基参考下界，单位 Å；默认 1.5；不是强制排斥或数据过滤阈值 |
-| `model.radial.warp_sharing` | `scaling-map` | `channel`→K、`angular`→L、`channel-angular`→LK（默认）；只控制距离坐标变换的共享方式 |
+| `model.radial.warp_sharing` | `scaling-map` | `L`、`K`、`LK`（默认）；兼容 `angular`→L、`channel`→K、`channel-angular`→LK；只控制距离坐标变换的共享方式 |
 | `model.coordination.channels` | `two-layer-gate-k-rank` | G；默认 K |
 | `model.coordination.body_order` | `two-layer-gate-body-order` | 配位环境多体阶数，2..6；默认相互作用多体阶数 |
 | `model.coordination.channel_coupling` | `two-layer-gate-factor-pruning` | `cross`→q-total（默认），`diagonal`→same-k |
@@ -54,12 +54,53 @@ mlp-sus2 train --config continue.yaml
 | `model.interaction.body_order` | `body-order` | 相互作用多体阶数，2..6；默认 5 |
 | `model.interaction.channel_coupling` | `sh-factor-pruning` | `diagonal`→same-k（默认），`cross`→q-total |
 | `model.angular_limit_by_body_order` | `body-l-max` | 如 `{2: 3, 3: 3, 4: 2, 5: 1}`；2..5 必须齐全，六体模型还需 6；也作用于配位图，保持原生语义 |
-| `model.response.layout` | `adaptive-radial-projection` | `per-basis`→full（默认）、`shared-latent`→shared-n |
-| `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 潜在通道 d；默认 1；per-basis 只能 1，shared-latent 要求 1..N |
+| `model.response.layout` | `adaptive-radial-projection` | `full`（默认）、`shared-n`；兼容 `per-basis`→full、`shared-latent`→shared-n |
+| `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 共享投影数 d；默认 1；full 只能 1，shared-n 要求 1..N |
 | `model.response.activation` | `adaptive-radial-activation` | `linear`→none（默认）、`tanh` |
 | `model.response.element_mode` | `adaptive-radial-amplitude-mode` | `shared`（默认）、`source-element`→species；响应幅度按来源邻居元素区分 |
 | `model.readout.element_mode` | `readout-mode` | `shared`（默认）、`per-element`→species；能量读出按中心原子元素区分 |
 | `model.readout.joint` | `joint-readout` | false（默认）或 true；联合读出遵守现有 L/张量约束 |
+
+距离 scaling 直接写 `L` / `K` / `LK`（区分大小写）：
+
+```yaml
+model:
+  radial:
+    warp_sharing: LK
+```
+
+每个元素对中，`L` 按角动量 l 区分、跨 k 共享；`K` 按径向通道 k 区分、
+跨 l 共享；`LK` 对每个 (l,k) 单独设置。它不改变径向基数 N，也不控制
+U 的 n 维度；U 仍由独立的 `model.response.layout` 设置。
+
+U 的现有实现直接用以下三种配置（不是新增模型算法）：
+
+```yaml
+# 完整 U：U[l,o,n,q]，每个径向基 n 独立投影（默认）
+model:
+  response:
+    layout: full
+```
+
+```yaml
+# 单组跨 n 共享 U：U[l,o,q]，幅度 a[l,o,n] 仍依赖 n
+model:
+  response:
+    layout: shared-n
+    latent_channels: 1
+```
+
+```yaml
+# 多组跨 n 共享 U：U[l,o,t,q]，幅度 a[l,o,n,t] 仍依赖 n
+# 此处 d=2；允许 1 <= d <= radial.basis_size
+model:
+  response:
+    layout: shared-n
+    latent_channels: 2
+```
+
+跨 n 共享不删除径向基 n。`latent_channels` 增大也不自动变成 `full`，
+两者仍是不同参数布局。以上结构在新模型初始化时确定；续训继承 checkpoint。
 
 ## 训练、损失和输出
 
@@ -112,7 +153,7 @@ mlp-sus2 train train.cfg \
   --radial-channels 8 --coord-channels 4 --interaction-channels 4 \
   --neighbor-cutoff 6.5 --coord-body-order 4 --interaction-body-order 4 \
   --coord-coupling cross --interaction-coupling diagonal \
-  --distance-warp-sharing channel-angular --response-layout per-basis \
+  --distance-warp-sharing LK --response-layout full \
   --response-activation linear --iterations 2000 --virial-weight 5 \
   --output.directory runs/new-run --check-config
 ```
@@ -153,3 +194,12 @@ bash dev_test/sh_train_cli_compatibility_check.sh /absolute/path/to/mlp-sus2
   `adaptive_selective_train_check.py --mpi-command 'mpiexec.hydra -n 2'` 通过。
 - 服务端资格记录：
   `/work/phy-weigw/20260321_Test/superlinear-grouped-cli-20261003/logs/`。
+
+同日直接选项名称扩展的资格检查：
+
+- 输入检查 59 项、真实 CLI 检查 45 项（含 2-rank 检查）通过。
+- `L/K/LK`、`full`、单组与多组 `shared-n` 的 YAML、兼容别名和旧 CLI
+  生成的拓扑逐字节相同；单步 BFGS 和预测输出的等价检查继续通过。
+- 历史 CLI 与选择性自适应训练 MPI 回归通过；模型求值算法未修改。
+- 服务端资格记录：
+  `/work/phy-weigw/20260321_Test/superlinear-grouped-options-20261003/logs/`。

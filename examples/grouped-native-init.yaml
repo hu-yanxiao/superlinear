@@ -6,12 +6,18 @@ model:
   l_max: 3
   radial_channels: 8
   neighbor_cutoff: 6.5
+  radial:
+    warp_sharing: LK            # L / K / LK: distance-warp sharing
   coordination:
     channels: 4
     body_order: 4
   interaction:
     channels: 4
     body_order: 4
+  response:
+    layout: full               # U[l,o,n,q]; separate projection for each n
+    # layout: shared-n         # U[l,o,t,q]; shared across n
+    # latent_channels: 1       # shared-n: 1=single projection; 2..basis_size=multiple
 output:
   directory: ../runs/topology
   model: ../runs/topology/initial.mtp

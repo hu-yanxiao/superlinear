@@ -75,6 +75,41 @@ int main() {
         const auto alias = Run({"train", "data.cfg", "--radial-channels", "8", "--coord-channels=4",
             "--interaction-channels=4", "--iterations=2000", "--output.directory", root + "/cli", "--check-config"});
         Require(alias.opts.at("two-layer-gate-k-rank") == "4" && alias.opts.at("init-params") == "same", "short alias and defaults");
+        const std::pair<const char*, const char*> warp_choices[] = {
+            {"L", "L"}, {"K", "K"}, {"LK", "LK"},
+            {"angular", "L"}, {"channel", "K"}, {"channel-angular", "LK"}
+        };
+        for (const auto& choice : warp_choices) {
+            const auto warp = Run({"train", Fixture(model + "  radial:\n    warp_sharing: " + choice.first + "\n" + training), "--check-config"});
+            Require(warp.opts.at("scaling-map") == choice.second, "YAML warp sharing: " + std::string(choice.first));
+        }
+        for (const char* sharing : {"L", "K", "LK"}) {
+            const auto warp = Run({"train", Fixture(model + training), "--distance-warp-sharing", sharing,
+                "--scaling-map=" + std::string(sharing), "--check-config"});
+            Require(warp.opts.at("scaling-map") == sharing, "CLI warp sharing: " + std::string(sharing));
+        }
+        Bad({"train", Fixture(model + training), "--distance-warp-sharing=lk", "--check-config"}, "unsupported value");
+        Bad({"train", Fixture(model + training), "--distance-warp-sharing=L", "--scaling-map=K", "--check-config"}, "conflicting");
+        const std::pair<const char*, const char*> response_choices[] = {
+            {"full", "full"}, {"per-basis", "full"},
+            {"shared-n", "shared-n"}, {"shared-latent", "shared-n"}
+        };
+        for (const auto& choice : response_choices) {
+            const auto response = Run({"train", Fixture(model + "  response:\n    layout: " + choice.first + "\n" + training), "--check-config"});
+            Require(response.opts.at("adaptive-radial-projection") == choice.second, "YAML response layout: " + std::string(choice.first));
+        }
+        for (const char* rank : {"1", "2", "10"}) {
+            const auto response = Run({"train", Fixture(model + "  response:\n    layout: shared-n\n    latent_channels: " + rank + "\n" + training),
+                "--response-layout=shared-latent", "--adaptive-radial-projection=shared-n", "--check-config"});
+            Require(response.opts.at("adaptive-radial-shared-n-rank") == rank, "shared-n projection rank: " + std::string(rank));
+        }
+        const auto full_response = Run({"train", Fixture(model + training), "--response-layout=full", "--check-config"});
+        Require(full_response.opts.at("adaptive-radial-projection") == "full", "full response CLI");
+        Bad({"train", Fixture(model + training), "--response-layout=full", "--model.response.latent_channels=2", "--check-config"}, "latent channels");
+        Bad({"train", Fixture(model + training), "--response-layout=shared-n", "--model.response.latent_channels=11", "--check-config"}, "latent channels");
+        Bad({"train", Fixture(model + training), "--response-layout=shared-n", "--model.response.latent_channels=0", "--check-config"}, "out of range");
+        Bad({"train", Fixture(model + training), "--response-layout=full", "--adaptive-radial-projection=shared-n", "--check-config"}, "conflicting");
+        Fixture(model + training);
         Run({"train", config, "--energy-weight=20.0", "--check-config"}); ++checks;
         Bad({"train", config, "--energy-weight=19", "--check-config"}, "conflicting");
         Bad({"train", config, "--epochs=2000", "--check-config"}, "not supported");

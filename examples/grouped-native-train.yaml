@@ -13,7 +13,7 @@ model:
     basis_size: 10
     basis_scale: 0.01
     reference_min_distance: 1.5
-    warp_sharing: channel-angular
+    warp_sharing: LK            # L / K / LK: distance-warp sharing
   coordination:
     channels: 4                # G: coordination projection channels
     body_order: 4
@@ -25,7 +25,9 @@ model:
     body_order: 4
     channel_coupling: diagonal
   response:
-    layout: per-basis
+    layout: full               # U[l,o,n,q]; separate projection for each n
+    # layout: shared-n         # U[l,o,t,q]; shared across n
+    # latent_channels: 1       # shared-n: 1=single projection; 2..basis_size=multiple
     activation: linear
     element_mode: shared
   readout:

@@ -47,6 +47,7 @@ MODEL = """model:
   neighbor_cutoff: 3.5
   radial:
     basis_size: 3
+    warp_sharing: LK
   coordination:
     channels: 1
     body_order: 3
@@ -83,6 +84,35 @@ run("init-yaml", ["init-sh", init_config])
 run("init-legacy", ["init-sh", ROOT / "legacy-seed.mtp"] + LEGACY)
 assert (ROOT / "yaml-seed.mtp").read_bytes() == (ROOT / "legacy-seed.mtp").read_bytes(), "topology differs"
 CHECKS += 1
+
+for sharing, semantic_alias in [("L", "angular"), ("K", "channel"), ("LK", "channel-angular")]:
+    canonical_config = yaml("warp-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + sharing)
+                            + "output:\n  model: warp-" + sharing + ".mtp\n")
+    alias_config = yaml("warp-alias-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + semantic_alias)
+                        + "output:\n  model: warp-alias-" + sharing + ".mtp\n")
+    run("warp-canonical-" + sharing, ["init-sh", canonical_config])
+    run("warp-alias-" + sharing, ["init-sh", alias_config])
+    run("warp-legacy-" + sharing, ["init-sh", ROOT / ("warp-legacy-" + sharing + ".mtp")]
+        + LEGACY + ["--scaling-map=" + sharing])
+    assert (ROOT / ("warp-" + sharing + ".mtp")).read_bytes() == (ROOT / ("warp-alias-" + sharing + ".mtp")).read_bytes() \
+        == (ROOT / ("warp-legacy-" + sharing + ".mtp")).read_bytes(), "warp sharing topology differs: " + sharing
+    CHECKS += 1
+
+for label, layout, semantic_alias, rank in [("full", "full", "per-basis", 1),
+                                           ("shared-n", "shared-n", "shared-latent", 1),
+                                           ("shared-n-2", "shared-n", "shared-latent", 2)]:
+    response = "  response:\n    layout: " + layout + "\n    latent_channels: " + str(rank) + "\n"
+    canonical_config = yaml("response-" + label + ".yaml", MODEL + response
+                            + "output:\n  model: response-" + label + ".mtp\n")
+    alias_config = yaml("response-alias-" + label + ".yaml", MODEL + response.replace("layout: " + layout, "layout: " + semantic_alias)
+                        + "output:\n  model: response-alias-" + label + ".mtp\n")
+    run("response-canonical-" + label, ["init-sh", canonical_config])
+    run("response-alias-" + label, ["init-sh", alias_config])
+    run("response-legacy-" + label, ["init-sh", ROOT / ("response-legacy-" + label + ".mtp")]
+        + LEGACY + ["--adaptive-radial-projection=" + layout, "--adaptive-radial-shared-n-rank=" + str(rank)])
+    assert (ROOT / ("response-" + label + ".mtp")).read_bytes() == (ROOT / ("response-alias-" + label + ".mtp")).read_bytes() \
+        == (ROOT / ("response-legacy-" + label + ".mtp")).read_bytes(), "response topology differs: " + label
+    CHECKS += 1
 
 train_config = yaml("train.yaml", MODEL + """initialization:
   seed: 41

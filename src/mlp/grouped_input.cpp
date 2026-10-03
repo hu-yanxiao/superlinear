@@ -28,7 +28,7 @@ const Rule rules[] = {
     {"model.radial.basis_size", "radial-basis-size", "positive-int"},
     {"model.radial.basis_scale", "scaling", "positive-real"},
     {"model.radial.reference_min_distance", "min-dist", "nonnegative-real"},
-    {"model.radial.warp_sharing", "scaling-map", "channel=K|angular=L|channel-angular=LK"},
+    {"model.radial.warp_sharing", "scaling-map", "L=L|K=K|LK=LK|angular=L|channel=K|channel-angular=LK"},
     {"model.coordination.channels", "two-layer-gate-k-rank", "positive-int"},
     {"model.coordination.body_order", "two-layer-gate-body-order", "positive-int"},
     {"model.coordination.channel_coupling", "two-layer-gate-factor-pruning", "cross=q-total|diagonal=same-k"},
@@ -37,7 +37,7 @@ const Rule rules[] = {
     {"model.interaction.channels", "outer-k-rank", "positive-int"},
     {"model.interaction.body_order", "body-order", "positive-int"},
     {"model.interaction.channel_coupling", "sh-factor-pruning", "diagonal=same-k|cross=q-total"},
-    {"model.response.layout", "adaptive-radial-projection", "per-basis=full|shared-latent=shared-n"},
+    {"model.response.layout", "adaptive-radial-projection", "full=full|shared-n=shared-n|per-basis=full|shared-latent=shared-n"},
     {"model.response.latent_channels", "adaptive-radial-shared-n-rank", "positive-int"},
     {"model.response.activation", "adaptive-radial-activation", "linear=none|tanh=tanh"},
     {"model.response.element_mode", "adaptive-radial-amplitude-mode", "shared=shared|source-element=species"},
@@ -484,7 +484,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             Fail("joint readout requires l_max >= 1");
         const int d = GetInt(opts, "adaptive-radial-shared-n-rank", 1);
         const std::string projection = opts.count("adaptive-radial-projection") ? opts["adaptive-radial-projection"] : "full";
-        if (d < 1 || d > n || (projection == "full" && d != 1)) Fail("latent channels require shared-latent layout and 1<=d<=basis_size");
+        if (d < 1 || d > n || (projection == "full" && d != 1)) Fail("latent channels require shared-n (shared-latent) layout and 1<=d<=basis_size");
         std::string limits; bool explicit_limits = false;
         for (const auto& value : settings) if (Starts(value.first, "model.angular_limit_by_body_order.")) explicit_limits = true;
         if (explicit_limits) {
@@ -568,6 +568,8 @@ const char* Help() {
            "  mlp-sus2 init-sh model.yaml [--check-config]\n"
            "  New CLI names: --model.kind coordination-adaptive --radial-channels K\n"
            "    --coord-channels G --interaction-channels O --neighbor-cutoff ANGSTROM\n"
+           "    --distance-warp-sharing L|K|LK (default LK; semantic aliases remain valid)\n"
+           "    --response-layout full|shared-n (default full); --model.response.latent_channels d\n"
            "  All grouped scalar keys also accept --group.key=value. Legacy flags remain valid.\n"
            "  Conflicting values, unknown keys and unsupported native/PT-only options are errors.\n"
            "  Configuration paths are relative to the YAML directory; no output is overwritten.\n"
