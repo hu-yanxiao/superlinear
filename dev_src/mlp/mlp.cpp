@@ -16,6 +16,8 @@
 #include "../../src/mlp/train.h"
 #include "../../src/mlp/calc_errors.h"
 #include "../../src/mlp/mlp_commands.h"
+#include "../../src/mlp/grouped_input.h"
+#include <stdexcept>
 #include "../../dev_src/mlp/dev_mlp_commands.h"
 
 int ExecuteCommand(const std::string& command, std::vector<std::string>& args, std::map<std::string, std::string>& opts)
@@ -71,10 +73,24 @@ int main(int argc, char *argv[])
 		std::string command = "help";
 		if ( argc > iarg ) command = argv[iarg];
 
-		ParseOptions(argc - iarg, argv + iarg, args, opts);
-		ExecuteCommand(command, args, opts);
+		auto normalized = superlinear_input::NormalizeArguments(argc - iarg, argv + iarg);
+		std::vector<char*> pointers;
+		for (auto& token : normalized) pointers.push_back(&token[0]);
+		ParseOptions(static_cast<int>(pointers.size()), pointers.data(), args, opts);
+		if (!superlinear_input::Resolve(command, args, opts, mpi_rank == 0 ? &std::cout : nullptr))
+			ExecuteCommand(command, args, opts);
+		if (mpi_rank == 0 && command == "help" &&
+		    (args.empty() || args[0] == "train" || args[0] == "init-sh"))
+			std::cout << superlinear_input::Help();
 	}
 	catch (const MlipException& e) { std::cerr << e.What(); return 1; }
+	catch (const std::exception& e) {
+		if (mpi_rank == 0) std::cerr << e.what() << std::endl;
+#ifdef MLIP_MPI
+		MPI_Abort(MPI_COMM_WORLD, 2);
+#endif
+		return 2;
+	}
 
 #ifdef MLIP_MPI
 	MPI_Finalize();

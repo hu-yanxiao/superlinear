@@ -1,0 +1,17 @@
+# Topology only. Physical coefficients are initialized by train.
+schema_version: 1
+model:
+  kind: coordination-adaptive
+  elements: [H, O]
+  l_max: 3
+  radial_channels: 8
+  neighbor_cutoff: 6.5
+  coordination:
+    channels: 4
+    body_order: 4
+  interaction:
+    channels: 4
+    body_order: 4
+output:
+  directory: ../runs/topology
+  model: ../runs/topology/initial.mtp

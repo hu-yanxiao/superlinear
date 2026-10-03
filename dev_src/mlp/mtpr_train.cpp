@@ -2273,6 +2273,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	}
 	const bool loaded_complete_parameters = mtpr.HasCompleteParameters();
 	const bool adaptive_pytorch_profile = mtpr.OuterUsesAdaptiveRadialCoefficients();
+	if (opts.count("grouped-input")) {
+		if (!adaptive_pytorch_profile)
+			ERROR("Grouped native input requires an adaptive-radial superlinear model");
+		if (opts.at("grouped-input") == "continue" && !loaded_complete_parameters)
+			ERROR("Grouped continuation requires a complete checkpoint, not an uninitialized topology");
+	}
 	if (!trainable_groups.empty()) {
 		if (!adaptive_pytorch_profile || !loaded_complete_parameters
 		    || opts["init-params"] != "same")

@@ -9,6 +9,11 @@ only `--std-weight` and `--stdd-weight` remain selectable regularizers. Energy,
 force and stress loss weights remain configurable. See
 [the training and export contract](docs/adaptive-pytorch-training-profile.md)
 and [the minimal CPU submission template](dev_test/bsub_adaptive_cpu_simple.lsf).
+For a physically named, grouped input, use `mlp-sus2 train run.yaml` or
+`mlp-sus2 init-sh model.yaml`. See [grouped native input](docs/grouped-native-input.md)
+and the [training example](examples/grouped-native-train.yaml).
+`--check-config` validates and prints the native option translation without
+loading data, training, or creating output files. Legacy CLI calls are unchanged.
 The maintained phy-weigw entry points are installed under
 `/work/phy-weigw/app/superlinear/`. GPUMD support is maintained in the separate
 `hu-yanxiao/GPUMD-superlinear` repository; adaptive LAMMPS support is not claimed.

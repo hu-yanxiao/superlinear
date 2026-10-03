@@ -1,0 +1,58 @@
+# Paths are relative to this YAML file, not the launch directory.
+# Replace data paths and choose a new output directory before running.
+schema_version: 1
+model:
+  kind: coordination-adaptive
+  name: SUS2-SL
+  elements: [H, O]              # CFG type 0=H, type 1=O; not a ZBL switch
+  l_max: 3
+  radial_channels: 8           # K: raw radial channels
+  neighbor_cutoff: 6.5         # Angstrom
+  radial:
+    basis: chebyshev-sss
+    basis_size: 10
+    basis_scale: 0.01
+    reference_min_distance: 1.5
+    warp_sharing: channel-angular
+  coordination:
+    channels: 4                # G: coordination projection channels
+    body_order: 4
+    channel_coupling: cross
+    distance_warp: shared
+    tensor_l_max: 0
+  interaction:
+    channels: 4                # O: adaptive interaction channels
+    body_order: 4
+    channel_coupling: diagonal
+  response:
+    layout: per-basis
+    activation: linear
+    element_mode: shared
+  readout:
+    element_mode: shared
+    joint: false
+initialization:
+  seed: 1
+training:
+  engine: native
+  device: cpu
+  dtype: float64
+  profile: native-adaptive-v1
+  optimizer: bfgs
+  iterations: 2000             # BFGS steps, NOT PT epochs
+  convergence_tolerance: 1e-5
+loss:
+  profile: sus2-legacy
+  energy_weight: 20
+  force_weight: 20
+  virial_weight: 5
+regularization:                 # Fixed native profile; values may be omitted
+  radial_smoothness: 1e-6
+  radial_smoothness_grid: 128
+  energy_readout_l2: 1e-5
+  coordination_response_l2: 1e-4
+data:
+  train: ../example/train.cfg
+  # valid: ../data/val.cfg      # Enable only if a validation set exists
+output:
+  directory: ../runs/native-l3-k8-g4-o4
