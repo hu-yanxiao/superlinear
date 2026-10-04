@@ -235,6 +235,8 @@ YAML 路径相对 YAML 所在目录解析；仅通过 CLI 新添的路径相对�
 续训配置中不再写 `model.*` / `elements`，直接继承 checkpoint 架构。
 实际执行前拒绝复用或覆盖已存在的输出文件，拒绝输出互相重名或等于输入。
 该检查用于避免意外覆盖，不是并发作业锁；两个作业应使用不同输出目录。
+MPI 启动时，所有进程完成这些检查后才开始执行命令，避免较慢进程把
+本次主进程新写的 `initial.mtp` 误判为旧输出。非主进程异常会标明 rank。
 输入数据和 checkpoint 永远不因配置翻译而改写。
 
 本入口支持明确、无需外部依赖的 YAML 子集：缩进映射、标量、单/双引号、
@@ -248,10 +250,15 @@ YAML 路径相对 YAML 所在目录解析；仅通过 CLI 新添的路径相对�
 bash dev_test/grouped_input_check.sh
 python dev_test/grouped_native_cli_check.py /absolute/path/to/mlp-sus2
 bash dev_test/sh_train_cli_compatibility_check.sh /absolute/path/to/mlp-sus2
+python dev_test/grouped_mpi_startup_check.py /absolute/path/to/mlp-sus2 \
+  --mpi-command 'mpiexec.hydra -n 4' --ranks 4
 ```
 
 第一个检查不依赖 MKL/MPI。第二个对真实可执行程序检查 YAML/旧 CLI
 拓扑一致、单步 BFGS 最终模型一致、续训和拒绝覆盖；需在计算资源上执行。
+MPI 启动回归会故意延迟一个进程，检查正常/延迟/旧 CLI 的模型与优化器 CSV
+逐字节一致，并确认拒绝覆盖和只读检查仍有效。测试专用 MPI interposer
+不随训练程序部署；可加 `--old-binary` 对修复前程序复现竞态。
 
 2026-10-03 qualification（CPU 队列 33；没有 GPU 或生产训练）：
 
@@ -283,3 +290,13 @@ bash dev_test/sh_train_cli_compatibility_check.sh /absolute/path/to/mlp-sus2
   方向导数检查通过；历史 CLI、自适应选择性训练 MPI 回归继续通过。
 - 服务端资格记录：
   `/work/phy-weigw/20260321_Test/superlinear-grouped-static-qualified-20261003/logs/`。
+
+2026-10-04 MPI 启动同步修复的资格检查（CPU 队列 33；作业 4310133）：
+
+- 故意延迟 rank 3：修复前程序在主进程写出初始模型后退出；修复后正常训练。
+- 4-rank 正常启动、延迟启动和对应旧 CLI 的初始/最终模型、优化器 CSV
+  逐字节相同。已有输出仍拒绝覆盖，MPI `--check-config` 仍只读。
+- 输入 90 项、真实 CLI 71 项、无配位层导数检查、历史 CLI 和选择性训练
+  MPI 回归全部通过。只增加启动同步和 rank 异常信息，未修改训练数学。
+- 服务端资格记录：
+  `/work/phy-weigw/20260321_Test/superlinear-grouped-mpi-qualified-20261004/logs/`。

@@ -77,7 +77,14 @@ int main(int argc, char *argv[])
 		std::vector<char*> pointers;
 		for (auto& token : normalized) pointers.push_back(&token[0]);
 		ParseOptions(static_cast<int>(pointers.size()), pointers.data(), args, opts);
-		if (!superlinear_input::Resolve(command, args, opts, mpi_rank == 0 ? &std::cout : nullptr))
+		const bool check_only = superlinear_input::Resolve(command, args, opts, mpi_rank == 0 ? &std::cout : nullptr);
+#ifdef MLIP_MPI
+		// All ranks must finish grouped output-reuse checks before rank 0 can
+		// create the inline model. Otherwise a late rank mistakes the new
+		// initial.mtp for output left by an earlier run and aborts the world.
+		MPI_Barrier(MPI_COMM_WORLD);
+#endif
+		if (!check_only)
 			ExecuteCommand(command, args, opts);
 		if (mpi_rank == 0 && command == "help" &&
 		    (args.empty() || args[0] == "train" || args[0] == "init-sh"))
@@ -85,7 +92,8 @@ int main(int argc, char *argv[])
 	}
 	catch (const MlipException& e) { std::cerr << e.What(); return 1; }
 	catch (const std::exception& e) {
-		if (mpi_rank == 0) std::cerr << e.what() << std::endl;
+		if (mpi_rank != 0) std::cerr << "MPI rank " << mpi_rank << ": ";
+		std::cerr << e.what() << std::endl;
 #ifdef MLIP_MPI
 		MPI_Abort(MPI_COMM_WORLD, 2);
 #endif
