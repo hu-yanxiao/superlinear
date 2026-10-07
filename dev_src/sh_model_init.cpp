@@ -1220,8 +1220,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--joint-readout requires adaptive radial coefficients with l-max >= 1");
 	if (readout_mode != "shared" && readout_mode != "species")
 		ERROR("--readout-mode should be shared or species.");
-	if (readout_mode == "species" && !radial_coefficient_gate)
-		ERROR("--readout-mode=species currently requires --superlinear-mode=radial-coefficient-gate.");
+	if (readout_mode == "species" && pure_w_channelwise)
+		ERROR("--readout-mode=species supports Legacy and adaptive radial coefficients, not pure-W.");
 	const std::string adaptive_projection = StringOpt(opts, "adaptive-radial-projection", "full");
 	const std::string adaptive_amplitude_mode = StringOpt(opts, "adaptive-radial-amplitude-mode", "shared");
 	const int adaptive_shared_n_rank = StrictNonnegativeIntOpt(opts, "adaptive-radial-shared-n-rank", 1);
@@ -1253,8 +1253,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			? SHFactorPruning::SameK : SHFactorPruning::QTotal);
 	const bool outer_same_channel_mode =
 		pure_w_channelwise
-		|| (radial_coefficient_gate
-		    && factor_pruning == SHFactorPruning::SameK);
+		|| factor_pruning == SHFactorPruning::SameK;
 	const auto outer_k_rank1_alias_it = opts.find("outer-k-rank1");
 	const bool outer_k_rank1_alias = outer_k_rank1_alias_it != opts.end();
 	if (outer_k_rank1_alias && outer_k_rank1_alias_it->second != "true")
@@ -1295,6 +1294,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		|| HasOpt(opts, "two-layer-gate-full-decoupled");
 	const bool two_layer_gate_shared_radial = two_layer_gate;
 	const bool two_layer_residual = HasOpt(opts, "two-layer-residual");
+	if (superlinear_mode == "legacy" && readout_mode == "species"
+	    && (two_layer_residual || multi_layer_gate || two_layer_gate_readout || two_layer_gate_edge_l1))
+		ERROR("Legacy species readout does not support residual, multi-layer, auxiliary gate readout, or edge-L1 modes.");
 	const int default_two_layer_gate_body_order = body_order;
 	const int two_layer_gate_body_order =
 		IntOpt(opts, "two-layer-gate-body-order", default_two_layer_gate_body_order);
@@ -1352,18 +1354,19 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_k_rank_enabled && !outer_k_rank_enabled)
 		ERROR("--two-layer-gate-k-rank currently requires --outer-k-rank=<R>.");
 	if (outer_k_rank_enabled && !pure_w_channelwise && !radial_coefficient_gate
-	    && factor_pruning != SHFactorPruning::QTotal)
-		ERROR("--outer-k-rank currently requires --sh-factor-pruning=q-total so contracted channels retain their cross products.");
+	    && factor_pruning != SHFactorPruning::QTotal
+	    && factor_pruning != SHFactorPruning::SameK)
+		ERROR("--outer-k-rank supports --sh-factor-pruning=q-total or same-k.");
 	if (two_layer_gate_k_rank_enabled
 	    && two_layer_gate_factor_pruning != SHFactorPruning::QTotal
-	    && !(radial_coefficient_gate
-	         && two_layer_gate_factor_pruning == SHFactorPruning::SameK))
-		ERROR("--two-layer-gate-k-rank currently supports q-total; same-k is supported only for --superlinear-mode=radial-coefficient-gate.");
+	    && two_layer_gate_factor_pruning != SHFactorPruning::SameK)
+		ERROR("--two-layer-gate-k-rank supports q-total or same-k.");
 	if (HasOpt(opts, "two-layer-gate-body-order") && !two_layer_gate)
 		ERROR("--two-layer-gate-body-order requires --two-layer-gate.");
 	if (HasOpt(opts, "two-layer-gate-factor-pruning") && !two_layer_gate)
 		ERROR("--two-layer-gate-factor-pruning requires --two-layer-gate.");
 	if (two_layer_gate && !pure_w_channelwise && !radial_coefficient_gate
+	    && !two_layer_gate_k_rank_enabled
 	    && !IsFactorPruningSubset(two_layer_gate_factor_pruning, factor_pruning))
 		ERROR("--two-layer-gate-factor-pruning must select a subgraph of --sh-factor-pruning.");
 	if (two_layer_gate
@@ -1556,9 +1559,16 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool uses_extended_sh_format =
 		outer_k_rank_enabled || two_layer_gate_k_rank_enabled
 		|| two_layer_gate_readout;
+	// Ranked gate and energy graphs are serialized independently below. New
+	// Legacy channel/readout layouts must fail closed in historical readers.
+	const bool legacy_v18 = superlinear_mode == "legacy"
+		&& (readout_mode == "species"
+		    || (outer_k_rank_enabled && outer_same_channel_mode)
+		    || (two_layer_gate_k_rank_enabled
+		        && two_layer_gate_factor_pruning == SHFactorPruning::SameK));
 	ofs << "version = "
-	    << (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))) << "\n";
+	    << (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
@@ -1680,6 +1690,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		// prototype, whose reader does not know the generic rank field.
 		if (outer_k_rank != 1)
 			ofs << "outer_k_rank = " << outer_k_rank << "\n";
+		if (legacy_v18) {
+			ofs << "outer_channel_mode = "
+			    << (outer_same_channel_mode ? "same-channel" : "cross-channel") << "\n";
+			ofs << "outer_radial_mode = legacy-plus-mixer\n";
+			ofs << "readout_mode = " << readout_mode << "\n";
+		}
 		if (pure_w_channelwise) {
 			ofs << "outer_channel_mode = same-channel\n";
 			ofs << "outer_radial_mode = pure-matrix\n";
@@ -1737,6 +1753,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			}
 		}
 		ofs << "}\n";
+	}
+	if (legacy_v18 && !outer_k_rank_enabled) {
+		ofs << "readout_mode = " << readout_mode << "\n";
+		ofs << "outer_channel_mode = cross-channel\n";
+		ofs << "outer_radial_mode = legacy-plus-mixer\n";
 	}
 	if (two_layer_gate_k_rank_enabled) {
 		const int gate_k_weight_count =

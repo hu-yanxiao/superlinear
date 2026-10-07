@@ -18,7 +18,7 @@ namespace {
 typedef std::map<std::string, std::string> Values;
 struct Rule { const char* key; const char* option; const char* type; };
 const Rule rules[] = {
-    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate|static-radial=legacy"},
+    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate|coordination-legacy=legacy|legacy=legacy|static-radial=legacy"},
     {"model.name", "potential-name", "text"},
     {"model.species_count", "species-count", "positive-int"},
     {"model.l_max", "l-max", "int"},
@@ -68,7 +68,7 @@ const Rule rules[] = {
     {"training.engine", "@fixed", "native=native"},
     {"training.device", "@fixed", "cpu=cpu"},
     {"training.dtype", "@fixed", "float64=float64"},
-    {"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-static-v1=native-static-v1"},
+    {"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-legacy-v1=native-legacy-v1|native-static-v1=native-static-v1"},
     {"loss.profile", "@fixed", "sus2-legacy=sus2-legacy"},
     {"regularization.radial_smoothness", "@fixed:0.000001", "nonnegative-real"},
     {"regularization.radial_smoothness_grid", "@fixed:128", "positive-int"},
@@ -77,6 +77,10 @@ const Rule rules[] = {
 };
 const Values& Aliases() {
     static const Values values = {
+        {"L", "model.l_max"},
+        {"K", "model.radial_channels"},
+        {"R", "model.coordination.channels"},
+        {"O", "model.interaction.channels"},
         {"radial-channels", "model.radial_channels"},
         {"coord-enabled", "model.coordination.enabled"},
         {"coord-channels", "model.coordination.channels"},
@@ -331,14 +335,15 @@ std::string Quoted(const std::string& s) {
     for (char c : s) { if (c == '\\' || c == '"') result += '\\'; result += c; }
     return result + "\"";
 }
-void ValidateLegacyOptions(const Values& opts, bool static_profile) {
+void ValidateLegacyOptions(const Values& opts, bool static_profile, bool legacy_profile) {
     // Grouped input is deliberately narrower than the historical CLI. Do not
     // let a typo, an Adam flag or a legacy-only control be silently ignored.
     std::set<std::string> allowed = {"init-sh", "max-dist", "bfgs-conv-tol", "bfgs-trace-file",
         "body-l-max", "std-weight", "stdd-weight"};
     for (const Rule& r : rules) if (r.option[0] != '@') allowed.insert(r.option);
-    if (static_profile)
+    if (static_profile || legacy_profile)
         for (const char* key : {"radial-smooth", "radial-smooth-grid", "scalar-head-l2"}) allowed.insert(key);
+    if (legacy_profile) allowed.insert("gate-full-l2");
     for (const auto& option : opts)
         if (!allowed.count(option.first)) Fail("--" + option.first +
             " is not supported with grouped native input; use a documented grouped key or the legacy CLI separately");
@@ -356,10 +361,11 @@ void ValidateLegacyOptions(const Values& opts, bool static_profile) {
     if (opts.count("two-layer-gate-decoupled-scaling") && opts.at("two-layer-gate-decoupled-scaling") != "true")
         Fail("a legacy decoupled-scaling flag enables the feature by presence; use model.coordination.distance_warp: shared instead");
     for (const char* key : {"std-weight", "stdd-weight"}) if (opts.count(key)) Real(opts.at(key), false, true);
-    if (static_profile) {
+    if (static_profile || legacy_profile) {
         for (const char* key : {"radial-smooth", "scalar-head-l2"}) if (opts.count(key)) Real(opts.at(key), false, true);
         if (opts.count("radial-smooth-grid")) Integer(opts.at("radial-smooth-grid"), true);
     }
+    if (legacy_profile && opts.count("gate-full-l2")) Real(opts.at("gate-full-l2"), false, true);
 }
 }
 
@@ -443,11 +449,15 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     const bool coordination_enabled = settings.count("model.coordination.enabled")
         ? Convert(Rule{"model.coordination.enabled", "@coordination-enabled", "bool"}, settings.at("model.coordination.enabled")) == "true"
         : kind != "static-radial";
+    const bool legacy_kind = kind == "coordination-legacy" || kind == "legacy";
     const std::string profile = settings.count("training.profile") ? Scalar(settings.at("training.profile"))
-        : ((!continuation && !coordination_enabled) ? "native-static-v1" : "native-adaptive-v1");
+        : ((!continuation && !coordination_enabled) ? "native-static-v1"
+            : ((!continuation && legacy_kind) ? "native-legacy-v1" : "native-adaptive-v1"));
     const bool static_profile = profile == "native-static-v1";
-    if (!continuation && static_profile == coordination_enabled)
-        Fail("training.profile must match coordination.enabled (native-static-v1 for false, native-adaptive-v1 for true)");
+    const bool legacy_profile = profile == "native-legacy-v1";
+    if (!continuation && (static_profile == coordination_enabled ||
+        (coordination_enabled && legacy_profile != legacy_kind)))
+        Fail("training.profile must match model.kind and coordination.enabled (native-static-v1 for false, native-legacy-v1 for coordination-legacy, native-adaptive-v1 for coordination-adaptive)");
     if (kind == "static-radial" && coordination_enabled)
         Fail("static-radial requires coordination.enabled: false");
     if (!continuation && !coordination_enabled) {
@@ -458,6 +468,10 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     }
     if (static_profile && settings.count("regularization.coordination_response_l2"))
         Fail("regularization.coordination_response_l2 is unavailable without coordination response");
+    if (!continuation && legacy_kind)
+        for (const auto& value : settings)
+            if (Starts(value.first, "model.response."))
+                Fail(value.first + " is unavailable for coordination-legacy; Legacy has no adaptive U projection");
     Values paths; std::string elements;
     for (const auto& value : settings) {
         if (!KnownKey(value.first)) Fail("unknown setting '" + value.first + "'");
@@ -478,10 +492,11 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             if (option == "@coordination-enabled" || option == "@profile") {
                 // Adapter metadata, never forwarded as a native presence flag.
             } else if (Starts(option, "@fixed")) {
-                if (static_profile && Starts(value.first, "regularization.")) {
+                if ((static_profile || legacy_profile) && Starts(value.first, "regularization.")) {
                     const Values static_regularizers = {{"regularization.radial_smoothness", "radial-smooth"},
                         {"regularization.radial_smoothness_grid", "radial-smooth-grid"},
-                        {"regularization.energy_readout_l2", "scalar-head-l2"}};
+                        {"regularization.energy_readout_l2", "scalar-head-l2"},
+                        {"regularization.coordination_response_l2", "gate-full-l2"}};
                     Put(opts, static_regularizers.at(value.first), converted);
                 } else if (Starts(option, "@fixed:") && !Equivalent(converted, option.substr(7)))
                     Fail(value.first + " is fixed to " + option.substr(7) + " by native-adaptive-v1");
@@ -498,7 +513,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     // Legacy aliases must not bypass the conflict checks.
     for (const auto& alias : Values{{"max-dist", "cutoff"}, {"bfgs-conv-tol", "optimizer-conv-tol"}, {"bfgs-trace-file", "optimizer-trace-file"}})
         if (opts.count(alias.first) && opts.count(alias.second) && !Equivalent(opts[alias.first], opts[alias.second])) Fail("conflicting --" + alias.first + " and --" + alias.second);
-    ValidateLegacyOptions(opts, static_profile);
+    ValidateLegacyOptions(opts, static_profile, legacy_profile);
     if ((paths.count("@train") || paths.count("@model") || paths.count("@output")) && !args.empty())
         Fail("do not mix positional model/data/output paths with grouped data/output.model paths");
     if (continuation) {
@@ -509,23 +524,43 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         if (opts.count("init-sh")) Fail("continuation cannot use --init-sh");
         Put(opts, "init-params", "same");
     } else {
-        Put(opts, "superlinear-mode", coordination_enabled ? "radial-coefficient-gate" : "legacy");
+        Put(opts, "superlinear-mode", coordination_enabled && !legacy_kind ? "radial-coefficient-gate" : "legacy");
+        if (legacy_kind && coordination_enabled) {
+            // The same K/R/O interface selects ranked Legacy graphs. Do not
+            // obtain an Adaptive model by merely relabeling its family.
+            for (const auto& option : Values{{"two-layer-gate", "true"},
+                 {"two-layer-gate-mode", "mu-scalar-full"},
+                 {"two-layer-gate-site-mode", "neighbor"},
+                 {"two-layer-gate-radial-mode", "shared-radial"}})
+                Put(opts, option.first, option.second);
+            if (opts.count("tensor-message-lmax") && GetInt(opts, "tensor-message-lmax", 0) != 0)
+                Fail("coordination-legacy does not support tensor messages");
+            // Explicit zero is metadata, not an unsupported architecture flag.
+            opts.erase("tensor-message-lmax");
+            if (opts.count("joint-readout") && opts.at("joint-readout") != "false")
+                Fail("coordination-legacy does not support joint readout");
+            // New grouped models share the Adaptive graph defaults; old
+            // positional native CLI/model defaults remain untouched.
+            if (!opts.count("sh-factor-pruning")) Put(opts, "sh-factor-pruning", "same-k");
+            if (!opts.count("two-layer-gate-factor-pruning")) Put(opts, "two-layer-gate-factor-pruning", "q-total");
+        }
         if (!coordination_enabled) {
             for (const Rule& r : rules)
                 if ((Starts(r.key, "model.coordination.") || Starts(r.key, "model.response.")) &&
                     r.option[0] != '@' && opts.count(r.option))
                     Fail("--" + std::string(r.option) + " is unavailable when coordination.enabled is false");
-            if ((opts.count("readout-mode") && opts.at("readout-mode") != "shared") ||
-                (opts.count("joint-readout") && opts.at("joint-readout") != "false"))
-                Fail("static-radial supports only shared readout and joint: false");
+            if (opts.count("joint-readout") && opts.at("joint-readout") != "false")
+                Fail("static-radial supports only joint: false");
             Put(opts, "sh-factor-pruning", "q-total");
         }
         const int l = GetInt(opts, "l-max", 3), k = GetInt(opts, "k-max", 3);
         const int o = GetInt(opts, "outer-k-rank", 0), g = GetInt(opts, "two-layer-gate-k-rank", k);
         const int body = GetInt(opts, "body-order", 5), gate_body = GetInt(opts, "two-layer-gate-body-order", body);
         const int n = GetInt(opts, "radial-basis-size", 10), tensor = GetInt(opts, "tensor-message-lmax", 0);
+        if (coordination_enabled && legacy_kind && !opts.count("two-layer-gate-k-rank"))
+            Put(opts, "two-layer-gate-k-rank", std::to_string(g));
         if (l > 6 || !k || !o || o > k || !g || g > k || body < 2 || body > 6 || gate_body < 2 || gate_body > 6 || !n || tensor > 2 || tensor > l)
-            Fail("invalid architecture: require L=0..6, 1<=G,O<=K, body orders=2..6, tensor L<=min(2,L)");
+            Fail("invalid architecture: require L=0..6, 1<=R,O<=K, body orders=2..6, tensor L<=min(2,L)");
         if (opts.count("joint-readout") && opts["joint-readout"] == "true" && l < 1)
             Fail("joint readout requires l_max >= 1");
         const int d = GetInt(opts, "adaptive-radial-shared-n-rank", 1);
@@ -546,14 +581,14 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         }
         if (command == "train") {
             if (opts.count("trainable-groups")) Fail("trainable_groups is for continuation from a complete checkpoint");
-            if (coordination_enabled || !opts.count("init-params")) Put(opts, "init-params", "same");
+            if ((coordination_enabled && !legacy_kind) || !opts.count("init-params")) Put(opts, "init-params", "same");
             Put(opts, "init-sh", "true");
         }
     }
-    if (command == "train" && static_profile) {
-        if (opts.count("trainable-groups")) Fail("trainable_groups requires an adaptive checkpoint, not native-static-v1");
+    if (command == "train" && (static_profile || legacy_profile)) {
+        if (static_profile && opts.count("trainable-groups")) Fail("trainable_groups requires an adaptive checkpoint, not native-static-v1");
         if (opts.count("init-random-seed") && (continuation || opts.at("init-params") != "random"))
-            Fail("static initialization.seed requires a fresh model with initialization.parameters: random");
+            Fail("Legacy/static initialization.seed requires a fresh model with initialization.parameters: random");
         // Keep native static rescale/linear warmup, but no hidden 75-step
         // pretraining or unscoped ini.mtp output outside the declared run paths.
         opts["skip-preinit"] = "true";
@@ -582,6 +617,9 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             Fail("init-sh only writes topology; use train for " + value.first);
         std::set<std::string> model_options = {"body-l-max", "max-dist"};
         for (const Rule& r : rules) if (Starts(r.key, "model.")) model_options.insert(r.option);
+        if (legacy_kind && coordination_enabled)
+            for (const char* key : {"two-layer-gate", "two-layer-gate-mode", "two-layer-gate-site-mode", "two-layer-gate-radial-mode"})
+                model_options.insert(key);
         for (const auto& option : opts) if (!model_options.count(option.first)) Fail("init-sh does not use --" + option.first);
         if (paths.count("@output")) args.push_back(paths["@output"]);
         if (args.size() != 1) Fail("init-sh requires output.model or one positional output path");
@@ -592,7 +630,8 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         *output << "resolved_arguments:"; for (const std::string& arg : args) *output << " " << Quoted(arg); *output << '\n';
         for (const auto& option : opts) *output << "resolved_option --" << option.first << "=" << Quoted(option.second) << '\n';
         if (command == "train") {
-            if (static_profile) *output << "native-static-v1: no coordination/response; physical radial coordinates; native vibrations weighting; radial_smoothness defaults to 1e-6; energy_readout_l2 defaults to 0; no 75-step pretraining; iterations are BFGS steps, not epochs\n";
+            if (legacy_profile) *output << "native-legacy-v1: ranked Legacy coordination and interaction; K/R/O share Adaptive meanings; physical radial coordinates; native vibrations weighting; no adaptive U or 75-step pretraining; iterations are BFGS steps, not epochs\n";
+            else if (static_profile) *output << "native-static-v1: no coordination/response; physical radial coordinates; native vibrations weighting; radial_smoothness defaults to 1e-6; energy_readout_l2 defaults to 0; no 75-step pretraining; iterations are BFGS steps, not epochs\n";
             else *output << "native-adaptive-v1: fixed RMS; force-RMS output scale; radial_smoothness=1e-6; energy_readout_l2=1e-5; coordination_response_l2=1e-4; iterations are BFGS steps, not epochs\n";
         }
         if (check) *output << "CONFIG_CHECK_PASS (syntax/translation only; model/data not loaded, no outputs created)\n";
@@ -622,12 +661,15 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
 }
 
 const char* Help() {
-    return "Grouped physical input (native adaptive or static-radial models):\n"
+    return "Grouped physical input (native adaptive, Legacy or static-radial models):\n"
            "  mlp-sus2 train run.yaml [--check-config]\n"
            "  mlp-sus2 train --config run.yaml [--check-config]\n"
            "  mlp-sus2 init-sh model.yaml [--check-config]\n"
            "  New CLI names: --model.kind coordination-adaptive --radial-channels K\n"
-           "    --coord-channels G --interaction-channels O --neighbor-cutoff ANGSTROM\n"
+           "    --coord-channels R --interaction-channels O --neighbor-cutoff ANGSTROM\n"
+           "    Compact aliases: --L L --K K --R R --O O (identical meanings in both families)\n"
+           "    --model.kind coordination-legacy: ranked Legacy, no adaptive response U\n"
+           "    --coord-coupling cross|diagonal --interaction-coupling cross|diagonal\n"
            "    --coord-enabled false: static radial weights, no coordination/response keys\n"
            "    --distance-warp-sharing L|K|LK (default LK; semantic aliases remain valid)\n"
            "    --response-layout full|shared-n (default full); --model.response.latent_channels d\n"

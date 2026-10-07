@@ -4130,6 +4130,8 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 	const std::vector<int>* scalar_indices,
 	const std::vector<double>* scalar_coeffs) const
 {
+	if (UsesSpeciesReadout())
+		ERROR("calc-eij is not qualified for species readout; use calc-efs for total predictions");
 	if (!is_sh_potential_)
 		ERROR("calc-eij currently supports SUS2-SH models only");
 	if (!has_sh_scalar_info_)
@@ -4188,7 +4190,7 @@ void MLMTPR::CalcSHDirectedEffectivePairWeights(
 		}
 	};
 
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	double t0[kMaxSHComponents];
 	double t1[kMaxSHComponents];
 	double t2[kMaxSHComponents];
@@ -4314,6 +4316,8 @@ double MLMTPR::CalcSHDirectedEffectivePairEnergy(
 	int neighbor_index,
 	std::vector<double>& edge_basic_values)
 {
+	if (UsesSpeciesReadout())
+		ERROR("calc-eij is not qualified for species readout; use calc-efs for total predictions");
 	if (!is_sh_potential_)
 		ERROR("calc-eij currently supports SUS2-SH models only");
 	if (!has_sh_scalar_info_)
@@ -4322,14 +4326,14 @@ double MLMTPR::CalcSHDirectedEffectivePairEnergy(
 		ERROR("calc-eij does not support two-layer residual models");
 
 	CalcSHEdgeBasicValues(nbh, neighbor_index, edge_basic_values);
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	double energy = 0.0;
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const double scalar_projection =
 			CalcSHScalarFirstFactorProjection(sh_scalar_info_[i],
 			                                  edge_basic_values);
 		energy += center_linear
-			* linear_coeffs[species_count + i]
+			* linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()]
 			* linear_mults[i]
 			* scalar_projection;
 	}
@@ -9594,7 +9598,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	if (alpha_scalar_moments == 0)
 		return;
 	const size_t atom_stride =
-		static_cast<size_t>(alpha_scalar_moments) * radial_func_count;
+		static_cast<size_t>(ScalarReadoutCoeffCount()) * radial_func_count;
 	if (atom_stride == 0 || gate_linear_adjoints.size() % atom_stride != 0)
 		ERROR("SUS2-SH gate linear adjoint buffer has an incompatible size.");
 
@@ -9826,7 +9830,8 @@ void MLMTPR::AccumulateSHBasisGateDers(
 			for (int i = 0; i < alpha_scalar_moments; ++i) {
 				const double gate_adjoint =
 					sh_gate_moment_ders_[alpha_moment_mapping[i]];
-				gate_adjoints[static_cast<size_t>(i) * radial_func_count + mu] +=
+				const int column = UsesSpeciesReadout() ? type_central * alpha_scalar_moments + i : i;
+				gate_adjoints[static_cast<size_t>(column) * radial_func_count + mu] +=
 					gate_adjoint;
 				if (has_edge_l1)
 					sh_gate_edge_linear_adjoints_[
@@ -10390,18 +10395,18 @@ void MLMTPR::CalcSHSiteEnergyDersLegacy(const Neighborhood& nbh)
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int outer_type_coeff_offset = RadialCoeffOffset();
 	const int outer_type_coeff_stride = RadialCoeffBlockSize();
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 
 	site_energy_ders_wrt_moments_.resize(alpha_moments_count);
 	std::fill(site_energy_ders_wrt_moments_.begin(), site_energy_ders_wrt_moments_.end(), 0.0);
-	buff_site_energy_ += regression_coeffs[nbh.my_type] + center_linear;
+	buff_site_energy_ += regression_coeffs[nbh.my_type] + linear_coeffs[nbh.my_type];
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
-		const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+		const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 		const double coeff = center_linear * moment_coeff;
 		const double scalar_value = moment_vals[alpha_moment_mapping[i]];
 		buff_site_energy_ += coeff * scalar_value;
 		buff_site_energy_0 += coeff * scalar_value;
-		max_linear[i] = std::max(max_linear[i], std::abs(linear_coeffs[species_count + i] * scalar_value));
+		max_linear[i] = std::max(max_linear[i], std::abs(linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * scalar_value));
 		site_energy_ders_wrt_moments_[alpha_moment_mapping[i]] += moment_coeff;
 	}
 
@@ -10887,18 +10892,18 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 	const int radial_coeff_base = C + 2 * C * C * K_;
 	const int outer_type_coeff_offset = RadialCoeffOffset();
 	const int outer_type_coeff_stride = RadialCoeffBlockSize();
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 
 	site_energy_ders_wrt_moments_.resize(alpha_moments_count);
 	std::fill(site_energy_ders_wrt_moments_.begin(), site_energy_ders_wrt_moments_.end(), 0.0);
-	buff_site_energy_ += regression_coeffs[nbh.my_type] + center_linear;
+	buff_site_energy_ += regression_coeffs[nbh.my_type] + linear_coeffs[nbh.my_type];
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
-		const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+		const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 		const double coeff = center_linear * moment_coeff;
 		const double scalar_value = moment_vals[alpha_moment_mapping[i]];
 		buff_site_energy_ += coeff * scalar_value;
 		buff_site_energy_0 += coeff * scalar_value;
-		max_linear[i] = std::max(max_linear[i], std::abs(linear_coeffs[species_count + i] * scalar_value));
+		max_linear[i] = std::max(max_linear[i], std::abs(linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * scalar_value));
 		site_energy_ders_wrt_moments_[alpha_moment_mapping[i]] += moment_coeff;
 	}
 
@@ -11573,7 +11578,7 @@ void MLMTPR::AddTwoLayerGateReadoutSiteEnergyDers(const Neighborhood& nbh)
 	double readout_value = 0.0;
 	for (int q = 0; q < gate_count; ++q)
 		readout_value += TwoLayerGateReadoutCoeff(q) * gate_scalars[q];
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	buff_site_energy_ += center_linear * readout_value;
 	buff_site_energy_0 += center_linear * readout_value;
 }
@@ -11630,7 +11635,7 @@ void MLMTPR::AccumulateTwoLayerGateReadoutCombinationGrad(
 		}
 	}
 
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	double readout_value = 0.0;
 	double readout_tangent = 0.0;
 	std::vector<double>& gate_scalar_seeds =
@@ -11681,7 +11686,7 @@ void MLMTPR::AccumulateTwoLayerGateReadoutDirectionalGrad(
 		ERROR("SUS2-SH gate readout directional gradient requires tangent data");
 	out_grad_accumulator.resize(CoeffCount());
 
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	double readout_tangent = 0.0;
 	std::vector<double>& gate_scalar_seeds =
 		two_layer_gate_readout_value_seed_scratch_;
@@ -11769,7 +11774,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 	const int outer_type_coeff_stride = RadialCoeffBlockSize();
 	const int additive_coeff_offset = TwoLayerGateAdditiveCoeffOffset();
 	const int coeff_count = LinearCoeffOffset();
-	const double center_linear = linear_coeffs[type_central];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[type_central];
 	const int eval_block_count = static_cast<int>(radial_eval_to_scaling_block_.size());
 	const int sh_count = (sh_l_max_ + 1) * (sh_l_max_ + 1);
 	const int radial_val_stride = eval_block_count * R;
@@ -11804,7 +11809,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 		          site_energy_ders_wrt_moments_.end(), 0.0);
 		for (int i = 0; i < alpha_scalar_moments; ++i) {
 			const int node = alpha_moment_mapping[i];
-			const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+			const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 			site_energy_ders_wrt_moments_[node] += moment_coeff;
 		}
 		if (UseSHProductRows()) {
@@ -12196,12 +12201,12 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 	double center_linear_grad = 0.0;
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const int node = alpha_moment_mapping[i];
-		const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+		const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 		center_linear_grad += moment_coeff * grad_dloss_dsenders_[node];
-		out_grad_accumulator[coeff_count + species_count + i] +=
+		out_grad_accumulator[ScalarReadoutCoeffIndex(type_central, i)] +=
 			center_linear * linear_mults[i] * grad_dloss_dsenders_[node];
 	}
-	out_grad_accumulator[coeff_count + type_central] += center_linear_grad;
+	out_grad_accumulator[coeff_count + type_central] += UsesSpeciesReadout() ? 0.0 : center_linear_grad;
 
 	if (static_cast<int>(grad_radial_coeff_value_accum_.size()) != radial_func_count)
 		grad_radial_coeff_value_accum_.resize(radial_func_count);
@@ -12904,7 +12909,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 				const int outer_type_coeff_offset = RadialCoeffOffset();
 				const int outer_type_coeff_stride = RadialCoeffBlockSize();
 				const int additive_coeff_offset = TwoLayerGateAdditiveCoeffOffset();
-				const double center_linear = linear_coeffs[type_central];
+				const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[type_central];
 
 		site_energy_ders_wrt_moments_.resize(alpha_moments_count);
 		std::fill(site_energy_ders_wrt_moments_.begin(), site_energy_ders_wrt_moments_.end(), 0.0);
@@ -12927,7 +12932,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 			double scalar_sum = 0.0;
 			for (int i = 0; i < alpha_scalar_moments; ++i) {
 				const int node = alpha_moment_mapping[i];
-				const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+				const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 				scalar_sum += moment_coeff * moment_vals[node];
 				site_energy_ders_wrt_moments_[node] += moment_coeff;
 			}
@@ -13330,7 +13335,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 		}
 		const double profile_after_force_product = profile_accum ? SHAccumProfileNow() : 0.0;
 
-		buff_site_energy_ += regression_coeffs[type_central] + center_linear + center_linear * scalar_sum;
+		buff_site_energy_ += regression_coeffs[type_central] + linear_coeffs[type_central] + center_linear * scalar_sum;
 		buff_site_energy_0 += center_linear * scalar_sum;
 		if (shift_)
 			grad_out[type_central] += se_weight;
@@ -13339,16 +13344,16 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 		if (se_ders_weights != nullptr) {
 			for (int i = 0; i < alpha_scalar_moments; ++i) {
 				const int node = alpha_moment_mapping[i];
-				const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+				const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 				center_linear_force_grad += moment_coeff * grad_dloss_dsenders_[node];
 			}
 		}
 		grad_out[coeff_count + type_central] +=
-			se_weight * (1.0 + scalar_sum) + center_linear_force_grad;
+			(UsesSpeciesReadout() ? se_weight : se_weight * (1.0 + scalar_sum) + center_linear_force_grad);
 		for (int i = 0; i < alpha_scalar_moments; ++i) {
 			const int node = alpha_moment_mapping[i];
 			const double sender = (se_ders_weights == nullptr) ? 0.0 : grad_dloss_dsenders_[node];
-			grad_out[coeff_count + species_count + i] +=
+			grad_out[ScalarReadoutCoeffIndex(type_central, i)] +=
 				center_linear * linear_mults[i] * (se_weight * moment_vals[node] + sender);
 		}
 		const double profile_after_scalar_grad = profile_accum ? SHAccumProfileNow() : 0.0;
@@ -13971,7 +13976,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 	const int outer_type_coeff_offset = RadialCoeffOffset();
 	const int outer_type_coeff_stride = RadialCoeffBlockSize();
 	const int additive_coeff_offset = TwoLayerGateAdditiveCoeffOffset();
-	const double center_linear = linear_coeffs[type_central];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[type_central];
 
 	if (static_cast<int>(sh_adj_vals_.size()) != alpha_moments_count)
 		sh_adj_vals_.resize(alpha_moments_count);
@@ -13984,7 +13989,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 	double center_linear_force_grad = 0.0;
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const int node = alpha_moment_mapping[i];
-		const double moment_coeff = linear_coeffs[species_count + i] * linear_mults[i];
+		const double moment_coeff = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 		scalar_sum += moment_coeff * moment_vals[node];
 		sh_adj_vals_[node] += se_weight * center_linear * moment_coeff;
 		if (se_ders_weights != nullptr) {
@@ -13997,10 +14002,10 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 		}
 	}
 
-	buff_site_energy_ += regression_coeffs[type_central] + center_linear + center_linear * scalar_sum;
+	buff_site_energy_ += regression_coeffs[type_central] + linear_coeffs[type_central] + center_linear * scalar_sum;
 	buff_site_energy_0 += center_linear * scalar_sum;
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
-		const double coeff = center_linear * linear_coeffs[species_count + i] * linear_mults[i];
+		const double coeff = center_linear * linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()] * linear_mults[i];
 		const int node = alpha_moment_mapping[i];
 		for (int j = 0; j < nbh.count; ++j)
 			for (int a = 0; a < 3; ++a)
@@ -14030,7 +14035,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 
 	if (shift_)
 		grad_out[type_central] += se_weight;
-	grad_out[coeff_count + type_central] += se_weight * (1.0 + scalar_sum) + center_linear_force_grad;
+	grad_out[coeff_count + type_central] += (UsesSpeciesReadout() ? se_weight : se_weight * (1.0 + scalar_sum) + center_linear_force_grad);
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const int node = alpha_moment_mapping[i];
 		double grad = se_weight * center_linear * linear_mults[i] * moment_vals[node];
@@ -14039,7 +14044,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 				for (int a = 0; a < 3; ++a)
 					grad += center_linear * linear_mults[i] * se_ders_weights[j][a] * moment_ders(node, j, a);
 		}
-		grad_out[coeff_count + species_count + i] += grad;
+		grad_out[ScalarReadoutCoeffIndex(type_central, i)] += grad;
 	}
 
 		double sh_values[kMaxSHComponents];

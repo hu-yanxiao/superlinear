@@ -76,7 +76,6 @@ CFG.write_text("""BEGIN_CFG
    0.041 -0.027 0.018 0.006 -0.004 0.003
 END_CFG
 """)
-
 init_config = yaml("model.yaml", MODEL + "output:\n  model: yaml-seed.mtp\n")
 run("init-check", ["init-sh", init_config, "--check-config"])
 assert not (ROOT / "yaml-seed.mtp").exists()
@@ -284,6 +283,61 @@ run("adaptive-reject-wrong-profile", ["train", wrong_adaptive_profile], failure=
 run("static-reject-response", ["train", static_train_config, "--response-layout=full", "--check-config"], failure="unavailable")
 run("static-reject-coordination", ["train", static_train_config, "--coord-channels=1", "--check-config"], failure="unavailable")
 run("static-reject-diagonal", ["train", static_train_config, "--interaction-coupling=diagonal", "--check-config"], failure="conflict")
+
+# New Legacy grouped entry: true independent ranked gate/outer graphs, species
+# head allocation and native warmup/training, not just option translation.
+for inner in ("cross", "diagonal"):
+    for outer in ("cross", "diagonal"):
+        label = "legacy-" + inner + "-" + outer
+        legacy_model = """model:
+  kind: coordination-legacy
+  elements: [H, O]
+  l_max: 1
+  radial_channels: 4
+  neighbor_cutoff: 3.5
+  radial:
+    basis_size: 3
+    warp_sharing: LK
+  coordination:
+    channels: 2
+    body_order: 3
+    channel_coupling: INNER
+  interaction:
+    channels: 3
+    body_order: 3
+    channel_coupling: OUTER
+  readout:
+    element_mode: per-element
+""".replace("INNER", inner).replace("OUTER", outer)
+        config = yaml(label + ".yaml", legacy_model + STATIC_TRAINING.replace("directory: static-run", "directory: " + label))
+        run(label + "-check", ["train", config, "--check-config"])
+        assert not (ROOT / label).exists()
+        native_output = run(label + "-train", ["train", config])
+        assert "Pre-training started" not in native_output
+        final = ROOT / label / "final.mtp"
+        text = final.read_text()
+        assert "version = 1.8.0" in text and "readout_mode = species" in text
+        assert undeclared_initial_snapshot() == static_undeclared_before
+        run(label + "-predict", ["calc-efs", final, CFG, ROOT / (label + "-pred.cfg")])
+        resumed = yaml(label + "-continue.yaml", """data:
+  model: FINAL
+  train: tiny.cfg
+training:
+  profile: native-legacy-v1
+  iterations: 1
+output:
+  directory: RESUMED
+""".replace("FINAL", str(final)).replace("RESUMED", label + "-resumed"))
+        run(label + "-continue", ["train", resumed])
+        assert (ROOT / (label + "-resumed") / "final.mtp").exists()
+        assert not (ROOT / (label + "-resumed") / "initial.mtp").exists()
+
+# Gate-free species head uses the same Legacy readout math and profile guard.
+static_species_config = yaml("static-species.yaml", STATIC_MODEL +
+    "  readout:\n    element_mode: per-element\n" +
+    STATIC_TRAINING.replace("directory: static-run", "directory: static-species"))
+run("static-species-train", ["train", static_species_config])
+run("static-species-predict", ["calc-efs", ROOT / "static-species/final.mtp", CFG, ROOT / "static-species-pred.cfg"])
 
 if MPI:
     output = run("mpi-check", ["train", train_config, "--check-config"], mpi=True)

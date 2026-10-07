@@ -14,6 +14,12 @@ For a physically named, grouped input, use `mlp-sus2 train run.yaml` or
 and the [training example](examples/grouped-native-train.yaml).
 `--check-config` validates and prints the native option translation without
 loading data, training, or creating output files. Legacy CLI calls are unchanged.
+The grouped `model.kind: coordination-legacy` entry supports independent
+coordination/interaction `cross` or `diagonal` graphs and `shared` or
+`per-element` energy readout. K/R/O have the same channel meanings as Adaptive;
+see the [commented Legacy example](examples/grouped-native-legacy-train.yaml).
+Extended Legacy models use format `1.8.0` in C++ and PT; the current formal
+GPUMD reader does not support that layout.
 The maintained phy-weigw entry points are installed under
 `/work/phy-weigw/app/superlinear/`. GPUMD support is maintained in the separate
 `hu-yanxiao/GPUMD-superlinear` repository; adaptive LAMMPS support is not claimed.

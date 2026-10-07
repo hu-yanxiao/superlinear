@@ -2278,9 +2278,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			&& !adaptive_pytorch_profile && !mtpr.OuterUsesPureRadialMatrix()
 			&& !mtpr.TwoLayerGateEnabled() && !mtpr.MultiLayerGateEnabled()
 			&& !mtpr.TwoLayerResidualEnabled() && !mtpr.TensorMessageEnabled()
-			&& !mtpr.JointReadoutEnabled() && !mtpr.UsesSpeciesReadout();
+			&& !mtpr.JointReadoutEnabled();
 		const bool static_profile = opts.at("grouped-profile") == "native-static-v1";
-		if (static_profile ? !static_radial_model : !adaptive_pytorch_profile)
+		const bool legacy_profile = opts.at("grouped-profile") == "native-legacy-v1";
+		const bool legacy_model = mtpr.IsSHPotential() && mtpr.TwoLayerGateEnabled()
+			&& !adaptive_pytorch_profile && !mtpr.OuterUsesPureRadialMatrix()
+			&& !mtpr.MultiLayerGateEnabled() && !mtpr.TwoLayerResidualEnabled()
+			&& !mtpr.TensorMessageEnabled() && !mtpr.JointReadoutEnabled();
+		if (static_profile ? !static_radial_model : (legacy_profile ? !legacy_model : !adaptive_pytorch_profile))
 			ERROR("Grouped training.profile does not match the checkpoint architecture; "
 			      "use native-static-v1 for a gate-free ranked SH model or native-adaptive-v1 for an adaptive model");
 		if (opts.at("grouped-input") == "continue" && !loaded_complete_parameters)

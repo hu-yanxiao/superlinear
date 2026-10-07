@@ -61,6 +61,10 @@ const std::string training =
 const std::string static_model =
     "model:\n  elements: [H, O]\n  l_max: 3\n  radial_channels: 8\n"
     "  coordination:\n    enabled: false\n  interaction:\n    channels: 4\n    body_order: 4\n";
+const std::string legacy_model =
+    "model:\n  kind: coordination-legacy\n  elements: [H, O]\n  l_max: 3\n  radial_channels: 8\n"
+    "  coordination:\n    channels: 4\n  interaction:\n    channels: 4\n    body_order: 4\n"
+    "  readout:\n    element_mode: per-element\n";
 }
 int main() {
     try {
@@ -167,8 +171,9 @@ int main() {
             Bad({"train", Fixture(static_model + training), std::string("--") + key + "=1", "--check-config"}, "unavailable");
         Bad({"train", Fixture(static_model + training), "--two-layer-gate-k-rank=2", "--check-config"}, "unavailable");
         Bad({"train", Fixture(static_model + training), "--adaptive-radial-projection=full", "--check-config"}, "unavailable");
-        Bad({"train", Fixture(static_model + training), "--model.readout.element_mode=per-element", "--check-config"}, "only shared readout");
-        Bad({"train", Fixture(static_model + training), "--model.readout.joint=true", "--check-config"}, "only shared readout");
+        const auto static_species = Run({"train", Fixture(static_model + training), "--model.readout.element_mode=per-element", "--check-config"});
+        Require(static_species.opts.at("readout-mode") == "species", "static Legacy species readout");
+        Bad({"train", Fixture(static_model + training), "--model.readout.joint=true", "--check-config"}, "joint: false");
         Bad({"train", Fixture(static_model + training), "--interaction-coupling=diagonal", "--check-config"}, "conflicting");
         Bad({"train", Fixture(static_model + training), "--regularization.coordination_response_l2=0", "--check-config"}, "unavailable");
         Bad({"train", Fixture(static_model + training), "--training.profile=native-adaptive-v1", "--check-config"}, "must match");
@@ -185,6 +190,27 @@ int main() {
         const auto sresumed = Run({"train", Fixture(static_continue), "--check-config"});
         Require(sresumed.args.size() == 2 && sresumed.opts.at("skip-preinit") == "true", "static continuation profile");
         Bad({"train", Fixture(static_continue), "--training.trainable_groups=radial", "--check-config"}, "requires an adaptive checkpoint");
+        const auto legacy_species = Run({"train", Fixture(legacy_model + training), "--check-config"});
+        Require(legacy_species.opts.at("superlinear-mode") == "legacy" && legacy_species.opts.at("readout-mode") == "species", "Legacy family and element readout");
+        Require(legacy_species.opts.at("two-layer-gate-mode") == "mu-scalar-full" && legacy_species.opts.at("two-layer-gate-radial-mode") == "shared-radial", "ranked Legacy coordination");
+        Require(legacy_species.opts.at("sh-factor-pruning") == "same-k" && legacy_species.opts.at("two-layer-gate-factor-pruning") == "q-total", "Legacy matches Adaptive graph defaults");
+        Require(legacy_species.opts.at("k-max") == "8" && legacy_species.opts.at("two-layer-gate-k-rank") == "4" && legacy_species.opts.at("outer-k-rank") == "4", "Legacy K/R/O mapping");
+        Require(!legacy_species.opts.count("adaptive-radial-projection") && legacy_species.opts.at("skip-preinit") == "true", "Legacy no adaptive U or hidden pretraining");
+        for (const char* gate : {"cross", "diagonal"}) for (const char* outer : {"cross", "diagonal"}) {
+            const auto combination = Run({"train", Fixture(legacy_model + training), std::string("--coord-coupling=") + gate,
+                std::string("--interaction-coupling=") + outer, "--check-config"});
+            Require(combination.opts.at("two-layer-gate-factor-pruning") == (std::string(gate) == "cross" ? "q-total" : "same-k"), "independent Legacy inner coupling");
+            Require(combination.opts.at("sh-factor-pruning") == (std::string(outer) == "cross" ? "q-total" : "same-k"), "independent Legacy outer coupling");
+        }
+        const auto compact = Run({"init-sh", "--model.kind=coordination-legacy", "--L=3", "--K=8", "--R=4", "--O=4",
+            "--output.model=" + root + "/compact.mtp", "--check-config"});
+        Require(compact.opts.at("l-max") == "3" && compact.opts.at("k-max") == "8" && compact.opts.at("two-layer-gate-k-rank") == "4" && compact.opts.at("outer-k-rank") == "4", "compact L/K/R/O aliases");
+        Bad({"train", Fixture(legacy_model + training), "--model.response.layout=full", "--check-config"}, "unavailable");
+        Bad({"train", Fixture(legacy_model + training), "--model.coordination.tensor_l_max=1", "--check-config"}, "tensor messages");
+        Bad({"train", Fixture(legacy_model + training), "--model.readout.joint=true", "--check-config"}, "joint readout");
+        Bad({"train", Fixture(legacy_model + training), "--training.profile=native-adaptive-v1", "--check-config"}, "must match");
+        const auto legacy_regularizers = Run({"train", Fixture(legacy_model + training), "--regularization.coordination_response_l2=0", "--regularization.energy_readout_l2=0", "--check-config"});
+        Require(legacy_regularizers.opts.at("gate-full-l2") == "0" && legacy_regularizers.opts.at("scalar-head-l2") == "0", "Legacy explicit selectable regularizers");
         Bad({"train", Fixture(model + "data:\n  model: checkpoint.mtp\n  train: train.cfg\noutput:\n  directory: resumed\n"), "--check-config"}, "inherits");
         const auto legacy = Run({"train", "old.mtp", "old.cfg", "--max-iter=7", "--unknown=true"});
         Require(!legacy.check && legacy.args.size() == 2 && legacy.opts.size() == 2, "legacy options untouched");

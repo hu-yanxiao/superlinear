@@ -1,0 +1,48 @@
+# Legacy：配位环境乘性修正；没有 Adaptive U。
+# L=角动量截断，K=原始径向通道，R=配位投影通道，O=外层通道。
+schema_version: 1
+model:
+  kind: coordination-legacy
+  name: SUS2-SL-Legacy
+  elements: [H, O]                 # 必须与 CFG type 顺序一致
+  l_max: 3
+  radial_channels: 8
+  neighbor_cutoff: 6.5
+  radial:
+    basis: chebyshev-sss
+    basis_size: 10                 # 径向基数 N，不是 R
+    basis_scale: 0.01
+    reference_min_distance: 1.5
+    warp_sharing: LK               # L / K / LK
+  coordination:
+    channels: 4                   # R；1 <= R <= K
+    body_order: 4
+    channel_coupling: cross         # cross / diagonal，内层独立选择
+    distance_warp: shared           # shared / independent
+  interaction:
+    channels: 4                   # O；1 <= O <= K
+    body_order: 4
+    channel_coupling: diagonal      # cross / diagonal，外层独立选择
+  readout:
+    element_mode: per-element       # shared / per-element，按中心元素读出
+initialization:
+  parameters: random               # same / random
+  seed: 1
+training:
+  engine: native
+  device: cpu
+  dtype: float64
+  profile: native-legacy-v1
+  optimizer: bfgs
+  iterations: 2000
+  convergence_tolerance: 1e-5
+loss:
+  profile: sus2-legacy
+  energy_weight: 20
+  force_weight: 20
+  virial_weight: 5
+data:
+  train: ../example/train.cfg
+  # valid: ../example/valid.cfg      # 只在确有验证集时添加，不添加 test
+output:
+  directory: ../runs/native-legacy-l3-k8-r4-o4

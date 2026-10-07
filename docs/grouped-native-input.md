@@ -3,7 +3,7 @@
 维护分支 `codex/radial-coefficient-gate` 的开发版 `mlp-sus2` 现在支持
 分组 YAML 和物理语义 CLI。它是现有 `init-sh` / `train` 的输入适配层，
 复用现有模型方程、参数布局和训练实现，不新增求值算法。
-支持配位自适应和无配位修正的静态径向模型；历史 CLI 的行为不变。
+支持配位自适应、Legacy 配位乘性修正和无配位修正的静态径向模型；历史 CLI 的行为不变。
 
 ```bash
 mlp-sus2 train run.yaml --check-config
@@ -28,13 +28,14 @@ mlp-sus2 train --config continue.yaml
 ```
 
 三个通道数分别是 `K=radial_channels`（原始径向通道）、
-`G=coordination.channels`（配位投影通道）和
-`O=interaction.channels`（相互作用通道）。启用配位层时要求 `1 <= G,O <= K`；
-关闭后不再有 G，仍要求 `1 <= O <= K`。
+`R=coordination.channels`（配位投影通道，旧文档也写作 G）和
+`O=interaction.channels`（相互作用通道）。启用配位层时要求 `1 <= R,O <= K`；
+关闭后不再有 R，仍要求 `1 <= O <= K`。R 不是径向基函数数 N。
+CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 
 | 分组字段 | 原生选项 | 含义 / 允许值 / 默认值 |
 |---|---|---|
-| `model.kind` | `superlinear-mode` | 默认 `coordination-adaptive`；`static-radial` 默认关闭配位层；显式 `coordination.enabled: false` 也可从默认架构选择静态模型 |
+| `model.kind` | `superlinear-mode` | 默认 `coordination-adaptive`；`coordination-legacy`（兼容 `legacy`）选择 Legacy；`static-radial` 默认关闭配位层；显式 `coordination.enabled: false` 也可选择静态模型 |
 | `model.name` | `potential-name` | 模型名称；原生默认名称 |
 | `model.elements` 或顶层 `elements` | `species-count` | 按 CFG type 顺序的元素列表；推导元素数，不启用 ZBL、不改 CFG 类型 |
 | `model.species_count` | `species-count` | 不提供元素表时可单独指定；默认 2；和元素表冲突时报错 |
@@ -47,14 +48,14 @@ mlp-sus2 train --config continue.yaml
 | `model.radial.reference_min_distance` | `min-dist` | 径向基参考下界，单位 Å；默认 1.5；不是强制排斥或数据过滤阈值 |
 | `model.radial.warp_sharing` | `scaling-map` | `L`、`K`、`LK`（默认）；兼容 `angular`→L、`channel`→K、`channel-angular`→LK；只控制距离坐标变换的共享方式 |
 | `model.coordination.enabled` | 输入适配层开关 | 默认 true；false 选择无 gate 的静态径向模型，不是冻结已有 U |
-| `model.coordination.channels` | `two-layer-gate-k-rank` | G；默认 K |
+| `model.coordination.channels` | `two-layer-gate-k-rank` | R；默认 K |
 | `model.coordination.body_order` | `two-layer-gate-body-order` | 配位环境多体阶数，2..6；默认相互作用多体阶数 |
 | `model.coordination.channel_coupling` | `two-layer-gate-factor-pruning` | `cross`→q-total（默认），`diagonal`→same-k |
 | `model.coordination.distance_warp` | `two-layer-gate-decoupled-scaling` | `shared`（默认）或 `independent`；shared 时不传这个存在即启用的旧开关 |
 | `model.coordination.tensor_l_max` | `tensor-message-lmax` | 0（默认）、1、2，且不超过 L |
 | `model.interaction.channels` | `outer-k-rank` | O；必须显式提供，避免误用旧架构的默认 0 |
 | `model.interaction.body_order` | `body-order` | 相互作用多体阶数，2..6；默认 5 |
-| `model.interaction.channel_coupling` | `sh-factor-pruning` | 自适应模式默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
+| `model.interaction.channel_coupling` | `sh-factor-pruning` | Adaptive / Legacy 默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
 | `model.angular_limit_by_body_order` | `body-l-max` | 如 `{2: 3, 3: 3, 4: 2, 5: 1}`；2..5 必须齐全，六体模型还需 6；也作用于配位图，保持原生语义 |
 | `model.response.layout` | `adaptive-radial-projection` | `full`（默认）、`shared-n`；兼容 `per-basis`→full、`shared-latent`→shared-n |
 | `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 共享投影数 d；默认 1；full 只能 1，shared-n 要求 1..N |
@@ -104,6 +105,50 @@ model:
 跨 n 共享不删除径向基 n。`latent_channels` 增大也不自动变成 `full`，
 两者仍是不同参数布局。以上结构在新模型初始化时确定；续训继承 checkpoint。
 
+## Legacy 配位模型
+
+完整示例见 [Legacy 训练输入](../examples/grouped-native-legacy-train.yaml)。
+`model.kind: coordination-legacy` 使用已有乘性配位修正方程，不生成 Adaptive 的 U。
+K/R/O、L/K/LK 距离 scaling、截断、多体阶数和各阶角动量上限与 Adaptive 使用同一命名。
+
+```yaml
+model:
+  kind: coordination-legacy
+  l_max: 3
+  radial_channels: 8
+  coordination:
+    channels: 4
+    channel_coupling: cross       # cross / diagonal，内层独立选择
+  interaction:
+    channels: 4
+    channel_coupling: diagonal    # cross / diagonal，外层独立选择
+  readout:
+    element_mode: per-element    # shared / per-element
+training:
+  profile: native-legacy-v1
+```
+
+四种内/外层组合都支持；cross 允许同一层不同通道的标量乘积，diagonal 只保留
+同一通道内的乘积。两层各自构建乘积图，改变一层不强制改变另一层。历史未使用
+新分组入口的旧 CLI 默认不变。Legacy 不支持 `response.*`、非零张量层或 joint readout。
+
+记 Phi_iq 为外层标量、Z 为中心元素、s_Z 为能量平移、h_Z 为旧元素系数：
+
+```text
+shared:      E_i = s_Z + h_Z + h_Z * sum_q d_q Phi_iq
+per-element: E_i = s_Z + h_Z + sum_q d_Zq Phi_iq
+```
+
+独立读出只索引中心元素这一行，不计算所有元素的读出再筛选。旧共享模型可以精确
+转换为 `d_Zq = h_Z * d_q`，h_Z 为零或负数也成立。它与按邻居元素区分径向响应
+不同。Legacy 的独立读出或新增 diagonal 图布局使用 `version = 1.8.0`，避免旧读取器
+误解参数；**当前正式 GPUMD 尚不支持这些新 Legacy 布局**，本次支持范围为 C++ 和 PT。
+
+新分组入口默认内层 cross、外层 diagonal；`native-legacy-v1` 保留原生 rescale / 线性
+warmup，但不插入历史额外 75 步 pretraining。Legacy 续训显式指定该 profile 并省略
+`model.*`；不会隐式改写 checkpoint 的结构。新模型支持 same / random 初始化。
+径向平滑及 readout/gate L2 可调，省略时保留原生默认；Adaptive 固定协议不变。
+
 ## 不使用配位效应层
 
 新训练只需设置开关，并删除配位层和 response 的其他字段：
@@ -141,7 +186,7 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | `interaction.channel_coupling` | 仅 `cross`；显式 `diagonal` 会报错，不会被自动替换 |
 | `coordination.*` 除 enabled | 不可用，必须省略；G、配位多体阶数、独立配位 scaling、张量信息均不存在 |
 | `response.*` | 不可用，必须省略；full/shared-n、latent_channels、activation、element_mode 都不再有作用 |
-| `readout.element_mode/joint` | 仅 shared / false；per-element 和 joint:true 不支持 |
+| `readout.element_mode/joint` | shared 或 per-element / false；joint:true 不支持；per-element 采用新 Legacy 1.8 格式 |
 | `initialization.parameters` | 新模型可用 same（默认）或 random；续训仅 same |
 | `initialization.seed` | 仅新模型显式 parameters:random 时可用，避免静默接受无效 seed |
 | slope/shift 初始化端点 | 可用，沿用原生距离 scaling 初始化 |
@@ -170,11 +215,11 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | 字段 | 原生选项 / 语义 |
 |---|---|
 | `initialization.seed` | `init-random-seed`；uint64；平衡初始化默认 seed=1 |
-| `initialization.parameters` | 自适应训练固定 same；静态新模型支持 same/random；续训保持已有物理系数 |
+| `initialization.parameters` | 自适应训练固定 same；Legacy / 静态新模型支持 same/random；续训保持已有物理系数 |
 | `initialization.warp_slope_endpoints` | `scal-range`；两个端点列表；保持原生端点方向语义，不自动排序 |
 | `initialization.warp_shift_endpoints` | `s-range`；两个端点列表 |
 | `training.engine/device/dtype` | 仅 `native/cpu/float64`；可省略 |
-| `training.profile` | `native-adaptive-v1` 或 `native-static-v1`；新训练按配位开关默认选择；静态续训必须显式声明 |
+| `training.profile` | `native-adaptive-v1`、`native-legacy-v1` 或 `native-static-v1`；新训练按模型选择；Legacy / 静态续训必须显式声明 |
 | `training.optimizer` | 分组入口仅 `bfgs`；其他优化器可用性以历史 CLI 为准 |
 | `training.iterations` | `max-iter`；BFGS 迭代上限，不是 Adam epoch；默认 1000 |
 | `training.convergence_tolerance` | `optimizer-conv-tol`；非负收敛阈值，保持原生默认 |
@@ -182,7 +227,7 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | `loss.profile` | 仅 `sus2-legacy`；不改变损失平均方式 |
 | `loss.energy_weight/force_weight/virial_weight` | `energy-weight/force-weight/stress-weight`；默认 1/0.01/0.001；不转换 virial/stress 单位或数据 |
 | `data.train/valid` | 训练 CFG / 可选验证 CFG；不读取或自动添加 test |
-| `data.model` | 完整自适应或无 gate ranked SH checkpoint，用于续训；profile 必须匹配 |
+| `data.model` | 完整 Adaptive / Legacy 或无 gate ranked SH checkpoint，用于续训；profile 必须匹配 |
 | `output.directory` | 为五项输出提供默认路径：`initial.mtp/current.mtp/best.mtp/final.mtp/optimizer.csv`；续训不生成 initial |
 | `output.initial_model/current/best/final/optimizer_trace` | 可分别指定路径；不使用 directory 时必须全部显式指定（续训不需 initial） |
 | `output.model` | 仅 init-sh 的拓扑输出路径；也可从 directory 默认生成 initial.mtp |

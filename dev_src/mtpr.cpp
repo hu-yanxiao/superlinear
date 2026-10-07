@@ -2311,8 +2311,8 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH adaptive_radial_activation must be none or tanh");
 	if (AdaptiveRadialExtendedLayout() && !adaptive)
 		ERROR("SUS2-SH adaptive radial layout options require adaptive-coefficients");
-	if (readout_mode_ == "species" && !adaptive)
-		ERROR("SUS2-SH species readout currently requires adaptive radial coefficients");
+	if (readout_mode_ == "species" && !adaptive && (!is_sh_potential_ || pure || TwoLayerResidualEnabled() || MultiLayerGateEnabled() || TwoLayerGateReadoutEnabled() || two_layer_gate_edge_l1_enabled_))
+		ERROR("SUS2-SH Legacy species readout requires a qualified scalar SH model");
 	if (tensor_message_lmax_ < 0)
 		ERROR("SUS2-SH tensor_message_lmax should be non-negative");
 	if (tensor_message_lmax_ > 0) {
@@ -2339,10 +2339,36 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 	}
 	if (pure && outer_channel_mode_ != "same-channel")
 		ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
-	if (!pure && !adaptive && outer_channel_mode_ == "same-channel")
+	if (!pure && !adaptive && outer_channel_mode_ == "same-channel" && !OuterKRankEnabled())
 		ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
-	if (!pure && !adaptive)
+	if (!pure && !adaptive) {
+		if (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") {
+			std::vector<int> channels(alpha_moments_count, -1);
+			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
+				for (int l = 0; l <= sh_l_max_; ++l)
+					for (int m = -l; m <= l; ++m) {
+						const int node = TwoLayerGateKRankBasicIndex(g,l,m);
+						if (node < 0 || node >= alpha_moments_count) ERROR("Legacy diagonal gate primitive is out of range");
+						channels[node] = g;
+					}
+			if (two_layer_gate_k_rank_product_begin_ < 0 || two_layer_gate_k_rank_product_end_ > static_cast<int>(sh_products_.size()))
+				ERROR("Legacy diagonal gate product range is invalid");
+			for (int p = two_layer_gate_k_rank_product_begin_; p < two_layer_gate_k_rank_product_end_; ++p) {
+				const SHProduct& t=sh_products_[p];
+				if (t.left < 0 || t.left >= alpha_moments_count || t.right < 0 || t.right >= alpha_moments_count || t.target < 0 || t.target >= alpha_moments_count)
+					ERROR("Legacy diagonal gate product is out of range");
+				if (channels[t.left] < 0 || channels[t.left] != channels[t.right] || (channels[t.target] >= 0 && channels[t.target] != channels[t.left]))
+					ERROR("Legacy diagonal gate product crosses channels");
+				channels[t.target]=channels[t.left];
+			}
+			for (int q = 0; q < TwoLayerGateScalarCount(); ++q) {
+				const int scalar = TwoLayerGateScalarMomentIndex(q);
+				if (scalar < 0 || scalar >= alpha_moments_count || channels[scalar] < 0)
+					ERROR("Legacy diagonal gate scalar has invalid provenance");
+			}
+		}
 		return;
+	}
 	if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
 	    || !two_layer_gate_enabled_)
 		ERROR("SUS2-SH direct-radial outer requires a ranked two-layer gate");
@@ -2542,8 +2568,12 @@ double MLMTPR::ScalarReadoutCoeff(int type, int scalar_index) const
 
 void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 {
-	if (!OuterUsesAdaptiveRadialCoefficients())
-		ERROR("Species readout conversion currently supports only adaptive radial coefficient models");
+	if (OuterUsesPureRadialMatrix())
+		ERROR("Species readout conversion does not support pure radial-matrix models");
+	if (!OuterUsesAdaptiveRadialCoefficients() && two_layer_gate_edge_l1_enabled_)
+		ERROR("Species readout conversion does not support Legacy edge-L1 models");
+	if (!is_sh_potential_ || TwoLayerResidualEnabled() || MultiLayerGateEnabled() || TwoLayerGateReadoutEnabled())
+		ERROR("Species readout conversion requires a qualified SH model");
 	if (readout_mode_ == "species")
 		ERROR("Model already uses species readout");
 	if (readout_mode_ != "shared")
@@ -4507,6 +4537,7 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
+	const bool legacy_v18 = model_file_version == "1.8.0";
 	const bool adaptive_v17 = model_file_version == "1.7.0";
 	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;
 	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
@@ -4527,10 +4558,17 @@ void MLMTPR::Load(const string& filename)
 	std::map<std::string,int> adaptive_fields;
 	std::map<std::string,int> joint_fields;
 	std::string metadata_line;
+	int legacy_outer_channel_fields = 0, legacy_outer_radial_fields = 0;
 	while (std::getline(ifs, metadata_line)) {
 		const size_t equals = metadata_line.find('=');
 		if (equals == std::string::npos) continue;
 		const std::string key = TrimCopy(metadata_line.substr(0, equals));
+		if (legacy_v18) {
+			if (key == "outer_channel_mode") ++legacy_outer_channel_fields;
+			if (key == "outer_radial_mode") ++legacy_outer_radial_fields;
+			if (key.compare(0, 16, "adaptive_radial_") == 0 || key.compare(0, 15, "tensor_message_") == 0 || key.compare(0, 14, "joint_readout_") == 0)
+				ERROR("Version 1.8.0 is reserved for Legacy scalar models");
+		}
 		if (key.compare(0, 14, "joint_readout_") == 0) {
 			if (!joint_v16) ERROR("SUS2-SH joint readout fields require model version 1.6.0");
 			if (++joint_fields[key] != 1) ERROR("SUS2-SH duplicate joint readout field");
@@ -4560,6 +4598,8 @@ void MLMTPR::Load(const string& filename)
 		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
 		else ERROR("SUS2-SH model contains an unknown tensor message field");
 	}
+	if (legacy_v18 && (readout_fields != 1 || legacy_outer_channel_fields != 1 || legacy_outer_radial_fields != 1))
+		ERROR("Version 1.8.0 requires unique readout and outer mode fields");
 	if (model_file_version == "1.4.0"
 	    && (tensor_lmax_fields != 1 || tensor_count_fields != 1
 		|| tensor_coeff_fields != 1 || tensor_scale_fields > 1 || readout_fields != 1))
@@ -4804,7 +4844,7 @@ void MLMTPR::Load(const string& filename)
 	    && model_file_version != "1.1.0"
 	    && model_file_version != "1.2.0"
 	    && model_file_version != "1.3.0"
-	    && model_file_version != "1.4.0" && !adaptive_v15)
+	    && model_file_version != "1.4.0" && !adaptive_v15 && !legacy_v18)
 		ERROR("SUS2-SH model version must be 1.1.0, 1.2.0, 1.3.0, 1.4.0, or 1.5.0");
 			if (is_sh_potential_)
 			{
@@ -5378,17 +5418,13 @@ void MLMTPR::Load(const string& filename)
 		if (outer_radial_mode_ == "pure-matrix"
 		    && outer_channel_mode_ != "same-channel")
 			ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
-		if (outer_channel_mode_ == "same-channel"
-		    && outer_radial_mode_ != "pure-matrix"
-		    && outer_radial_mode_ != "adaptive-coefficients")
-			ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
 		if (outer_k_rank_ <= 0
 		    || (!OuterUsesPureRadialMatrix()
 		        && !OuterUsesAdaptiveRadialCoefficients()
 		        && outer_k_rank_ > sh_k_max_))
 			ERROR("SUS2-SH outer K-rank must be positive; only same-channel radial modes allow rank above sh_k_max");
-		if (readout_mode_ == "species" && !OuterUsesAdaptiveRadialCoefficients())
-			ERROR("SUS2-SH species readout currently requires adaptive radial coefficients");
+		if (readout_mode_ == "species" && !OuterUsesAdaptiveRadialCoefficients() && !legacy_v18)
+			ERROR("Legacy species readout requires model version 1.8.0");
 		if (outer_k_rank_ > std::numeric_limits<int>::max()
 			/ ((sh_l_max_ + 1) * (sh_l_max_ + 1)))
 			ERROR("SUS2-SH outer primitive count exceeds supported index range");
@@ -5442,6 +5478,13 @@ void MLMTPR::Load(const string& filename)
 		if (outer_k_rank1_product_begin_ < 0
 		    || outer_k_rank1_product_begin_ > static_cast<int>(sh_products_.size()))
 			ERROR("SUS2-SH outer K-rank1 product range is invalid");
+	}
+	if (legacy_v18 && !OuterKRankEnabled() && tmpstr == "readout_mode") {
+		ifs.ignore(2); ifs >> readout_mode_; readout_mode_seen = true; ifs >> tmpstr;
+		if (tmpstr != "outer_channel_mode") ERROR("Legacy readout metadata order is invalid");
+		ifs.ignore(2); ifs >> outer_channel_mode_; ifs >> tmpstr;
+		if (tmpstr != "outer_radial_mode") ERROR("Legacy radial metadata order is invalid");
+		ifs.ignore(2); ifs >> outer_radial_mode_; ifs >> tmpstr;
 	}
 	if (is_sh_potential_ && tmpstr == "two_layer_gate_k_rank") {
 		ifs.ignore(2);
@@ -6301,9 +6344,11 @@ void MLMTPR::Load(const string& filename)
 			ValidateOuterModeConfiguration();
 			if (model_file_version == "1.3.0" && readout_mode_ != "species")
 				ERROR("SUS2-SH model version 1.3.0 requires readout_mode = species");
+			if (legacy_v18 && (OuterUsesAdaptiveRadialCoefficients() || OuterUsesPureRadialMatrix() || !readout_mode_seen))
+				ERROR("Version 1.8.0 requires explicit Legacy readout metadata");
 			if (readout_mode_ == "species"
 			    && model_file_version != "1.3.0"
-			    && model_file_version != "1.4.0" && !adaptive_v15)
+			    && model_file_version != "1.4.0" && !adaptive_v15 && !legacy_v18)
 				ERROR("SUS2-SH species readout requires model version 1.3.0, 1.4.0, or 1.5.0");
 			if (model_file_version == "1.4.0") {
 				if (!readout_mode_seen)
@@ -6369,7 +6414,7 @@ void MLMTPR::Load(const string& filename)
 
 			linear_coeffs.resize(LinearCoeffCount());
 
-			if (UsesSpeciesReadout() || adaptive_v15) {
+			if (UsesSpeciesReadout() || adaptive_v15 || legacy_v18) {
 				std::vector<double> readout_coeffs;
 				ReadDoubleListExact(
 					ifs, readout_coeffs, ScalarReadoutCoeffCount(), "moment_coeffs");
@@ -6558,6 +6603,8 @@ void MLMTPR::CalcDescriptors(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 {
+	if (UsesSpeciesReadout())
+		ERROR("calc-partialE is not qualified for species readout; use calc-efs for total predictions");
 	ofs.setf(ios::scientific);
 	ofs.precision(15);
 	int n = LinearCoeffCount();
@@ -6628,6 +6675,8 @@ void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 {
+	if (UsesSpeciesReadout())
+		ERROR("calc-eij is not qualified for species readout; use calc-efs for total predictions");
 	if (!is_sh_potential_)
 		ERROR("calc-eij currently supports SUS2-SH models only");
 	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients())
@@ -6808,7 +6857,7 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::Save(const string& filename)
 {
-	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
+	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
 		ValidateOuterModeConfiguration();
 		ValidateSHProductGraphDefinitions();
 	}
@@ -6824,8 +6873,10 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))) << '\n';
+	    << ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
+	         && (UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
+	        (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))))) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -6993,10 +7044,10 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
-			if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()) {
-				ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+			if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
+			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
 				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-				if (UsesSpeciesReadout() || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
+				if (UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "readout_mode = " << readout_mode_ << '\n';
 				if (AdaptiveRadialExtendedLayout() || JointReadoutEnabled()) {
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
@@ -7040,6 +7091,11 @@ void MLMTPR::Save(const string& filename)
 			}
 		}
 		ofs << "}\n";
+	}
+	if (is_sh_potential_ && UsesSpeciesReadout() && !OuterKRankEnabled()) {
+		ofs << "readout_mode = " << readout_mode_ << '\n';
+		ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+		ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
 	}
 	if (is_sh_potential_ && TwoLayerGateKRankEnabled()) {
 		if (!OuterKRankEnabled())
@@ -8916,17 +8972,17 @@ double MLMTPR::CalcSiteEnergyValue(const Neighborhood& nbh,
 	CalcBasisFuncs(nbh, basis_vals);
 	double site_energy0 = 0.0;
 	double site_energy = regression_coeffs[nbh.my_type] + linear_coeffs[nbh.my_type];
-	const double center_linear = linear_coeffs[nbh.my_type];
+	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	for (int i = 0; i < alpha_scalar_moments; ++i) {
 		const double scalar_value = basis_vals[1 + i];
-		const double term = linear_coeffs[species_count + i]
+		const double term = linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()]
 		                  * linear_mults[i]
 		                  * scalar_value
 		                  * center_linear;
 		site_energy += term;
 		site_energy0 += term;
 		max_linear[i] = std::max(max_linear[i],
-		                         std::abs(linear_coeffs[species_count + i]
+		                         std::abs(linear_coeffs[ScalarReadoutCoeffIndex(nbh.my_type, i) - LinearCoeffOffset()]
 		                                  * scalar_value));
 	}
 	if (TwoLayerGateReadoutEnabled()) {
@@ -8985,6 +9041,8 @@ void MLMTPR::CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(
 	const Neighborhoods& neighborhoods,
 	std::vector<double>& out_energy_by_body_order)
 {
+	if (UsesSpeciesReadout())
+		ERROR("body-order energy decomposition is not qualified for species readout");
 	CalcEnergyAndSiteEnergiesImpl(
 		cfg, neighborhoods, &out_energy_by_body_order);
 }
@@ -10575,6 +10633,7 @@ bool MLMTPR::HasSHBodyOrderBlocks() const
 	return is_sh_potential_ && has_sh_scalar_info_
 		&& static_cast<int>(sh_scalar_info_.size()) == alpha_scalar_moments
 		&& sh_body_order_ >= 2
+		&& !UsesSpeciesReadout()
 		&& !TwoLayerResidualEnabled()
 		&& !TwoLayerGateReadoutEnabled();
 }
@@ -10584,6 +10643,8 @@ void MLMTPR::CalcSHBodyOrderEnergyContributions(
 	const Neighborhoods& neighborhoods,
 	std::vector<double>& out_energy_by_body_order)
 {
+	if (UsesSpeciesReadout())
+		ERROR("body-order energy decomposition is not qualified for species readout");
 	if (!HasSHBodyOrderBlocks())
 		ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
 	if (neighborhoods.size() != cfg.size())
@@ -10636,6 +10697,8 @@ void MLMTPR::AccumulateSHBodyOrderEnergyGrad(
 	const std::vector<double>& body_order_weights,
 	Array1D& out_grads_accumulator)
 {
+	if (UsesSpeciesReadout())
+		ERROR("body-order energy decomposition gradients are not qualified for species readout");
 	if (!HasSHBodyOrderBlocks())
 		ERROR("guard-compression block monotonic loss requires a non-residual SUS2-SH model with sh_scalar_info metadata");
 	if (neighborhoods.size() != cfg.size())
@@ -10710,10 +10773,10 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 	bool need_forces,
 	bool need_stress)
 {
-	if (!RequiresTwoLayerGateEvaluation() || alpha_scalar_moments == 0)
+	if (!RequiresTwoLayerGateEvaluation() || ScalarReadoutCoeffCount() == 0)
 		return;
 	const size_t expected_adjoint_count =
-		static_cast<size_t>(cfg.size()) * alpha_scalar_moments * radial_func_count;
+		static_cast<size_t>(cfg.size()) * ScalarReadoutCoeffCount() * radial_func_count;
 	if (sh_gate_linear_adjoints_.size() != expected_adjoint_count)
 		ERROR("SUS2-SH gate linear component adjoint buffer has inconsistent size");
 
@@ -10722,7 +10785,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 	const int edge_l1_source_count =
 		has_edge_l1 ? TwoLayerGateEdgeL1SourceCount() : 0;
 	const size_t edge_l1_projection_stride =
-		static_cast<size_t>(alpha_scalar_moments) * radial_func_count;
+		static_cast<size_t>(ScalarReadoutCoeffCount()) * radial_func_count;
 	if (has_edge_l1) {
 		const size_t expected_projection_adjoint_count =
 			static_cast<size_t>(cfg.size()) * 3 * edge_l1_projection_stride;
@@ -10777,12 +10840,12 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 		std::vector<double> body_seed_scratch;
 
 		// Keep one adjoint field per linear column so the G1 -> G2 chain is exact.
-		for (int i = 0; i < alpha_scalar_moments; ++i) {
+		for (int i = 0; i < ScalarReadoutCoeffCount(); ++i) {
 			second_layer_gate_adjoints_.assign(expected_second_gate_count, 0.0);
 			const int column = species_count + i;
 			for (int ind = 0; ind < cfg.size(); ++ind) {
 				const double* gate_adjoints = sh_gate_linear_adjoints_.data()
-					+ (static_cast<size_t>(ind) * alpha_scalar_moments + i)
+					+ (static_cast<size_t>(ind) * ScalarReadoutCoeffCount() + i)
 						* radial_func_count;
 				bool has_gate_adjoint = false;
 				for (int mu = 0; mu < radial_func_count; ++mu)
@@ -10841,7 +10904,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 	active_second_layer_gate_values_ = nullptr;
 
 	// Evaluate A * W * D as A * (W * D). This avoids materializing the much
-	// wider alpha_scalar_moments x gate_scalar_count intermediate.
+	// wider ScalarReadoutCoeffCount() x gate_scalar_count intermediate.
 	sh_gate_linear_weight_matrix_.resize(
 		static_cast<size_t>(radial_func_count) * gate_scalar_count);
 	bool has_gate_weight = false;
@@ -10861,9 +10924,9 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 
 	for (int ind = 0; ind < cfg.size(); ++ind) {
 		const double* gate_adjoints = sh_gate_linear_adjoints_.data()
-			+ static_cast<size_t>(ind) * alpha_scalar_moments * radial_func_count;
+			+ static_cast<size_t>(ind) * ScalarReadoutCoeffCount() * radial_func_count;
 		bool has_gate_adjoint = false;
-		for (int i = 0; i < alpha_scalar_moments * radial_func_count; ++i)
+		for (int i = 0; i < ScalarReadoutCoeffCount() * radial_func_count; ++i)
 			if (gate_adjoints[i] != 0.0) {
 				has_gate_adjoint = true;
 				break;
@@ -10913,11 +10976,11 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 			            coord_count);
 
 			sh_gate_linear_component_ders_.resize(
-				static_cast<size_t>(alpha_scalar_moments) * coord_count);
+				static_cast<size_t>(ScalarReadoutCoeffCount()) * coord_count);
 			cblas_dgemm(CblasRowMajor,
 			            CblasNoTrans,
 			            CblasNoTrans,
-			            alpha_scalar_moments,
+			            ScalarReadoutCoeffCount(),
 			            coord_count,
 			            radial_func_count,
 			            1.0,
@@ -10929,7 +10992,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 			            sh_gate_linear_component_ders_.data(),
 			            coord_count);
 
-			for (int i = 0; i < alpha_scalar_moments; ++i) {
+			for (int i = 0; i < ScalarReadoutCoeffCount(); ++i) {
 				const int column = species_count + i;
 				const double* component_ders = sh_gate_linear_component_ders_.data()
 					+ static_cast<size_t>(i) * coord_count;
@@ -10964,7 +11027,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 			sh_gate_edge_l1_weighted_source_coord_ders_.resize(
 				static_cast<size_t>(radial_func_count) * coord_count);
 			sh_gate_edge_l1_source_component_ders_.resize(
-				static_cast<size_t>(alpha_scalar_moments) * coord_count);
+				static_cast<size_t>(ScalarReadoutCoeffCount()) * coord_count);
 			const double* edge_l1_weights = TwoLayerGateEdgeL1WeightData();
 
 			for (int m = 0; m < 3; ++m) {
@@ -11004,7 +11067,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 				cblas_dgemm(CblasRowMajor,
 				            CblasNoTrans,
 				            CblasNoTrans,
-				            alpha_scalar_moments,
+				            ScalarReadoutCoeffCount(),
 				            coord_count,
 				            radial_func_count,
 				            1.0,
@@ -11017,7 +11080,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 				            coord_count);
 			}
 
-			for (int i = 0; i < alpha_scalar_moments; ++i) {
+			for (int i = 0; i < ScalarReadoutCoeffCount(); ++i) {
 				const int column = species_count + i;
 				const double* component_ders =
 					sh_gate_edge_l1_source_component_ders_.data()
@@ -11095,7 +11158,7 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 		}
 		return;
 	}
-	if (UsesSpeciesReadout())
+	if (UsesSpeciesReadout() && !is_sh_potential_)
 		ERROR("CalcScalarHeadSiteComponents species readout currently supports only adaptive radial coefficients");
 
 	// Gate preparation has a mutable legacy Configuration signature even though
@@ -11151,7 +11214,7 @@ void MLMTPR::CalcScalarHeadSiteComponents(
 			double* const atom_out =
 				out.data() + static_cast<size_t>(ind) * readout_count;
 			for (int q = 0; q < alpha_scalar_moments; ++q)
-				atom_out[q] = center_linear
+				atom_out[UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments + q : q] = (UsesSpeciesReadout() ? 1.0 : center_linear)
 				            * linear_mults[q]
 				            * basis_vals[1 + q];
 		}
@@ -11229,7 +11292,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		use_two_layer_gate && (need_forces || need_stress);
 	if (need_gate_linear_chain) {
 		sh_gate_linear_adjoints_.assign(
-			static_cast<size_t>(cfg.size()) * alpha_scalar_moments
+			static_cast<size_t>(cfg.size()) * ScalarReadoutCoeffCount()
 				* radial_func_count,
 			0.0);
 		if (HasNonzeroTwoLayerGateEdgeL1Weights()) {
@@ -11352,8 +11415,9 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 				throw MlipException("Too few species count in the MTP potential!");
 
 			energy_cmpnts[nbh.my_type] += basis_vals[0];
-			for (int k = species_count; k < LinearCoeffCount(); k++) {
-				int i = k - species_count + 1;
+			for (int q = 0; q < alpha_scalar_moments; q++) {
+				const int k = species_count + (UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments : 0) + q;
+				const int i = q + 1;
 				energy_cmpnts[k] += basis_vals[i];
 				if (need_forces)
 					for (int j = 0; j < nbh.count; j++)
@@ -11529,9 +11593,10 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 
 		energy_cmpnts[nbh.my_type] += basis_vals[0];
 
-		for (int k = species_count; k < LinearCoeffCount(); k++)
+		for (int q = 0; q < alpha_scalar_moments; q++)
 		{
-			int i = k - species_count + 1;
+			const int k = species_count + (UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments : 0) + q;
+			const int i = q + 1;
 			energy_cmpnts[k] += basis_vals[i];
 		}
 		if (TwoLayerGateReadoutEnabled()) {
@@ -12650,7 +12715,7 @@ void MLMTPR::RadialCoeffsInit(ifstream& ifs_rad)
 
 void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 {
-	if (UsesSpeciesReadout())
+	if (UsesSpeciesReadout() && !is_sh_potential_)
 		ERROR("CalcSiteEnergyDers does not support species readout; use CalcEFS for adaptive species-readout models");
 	if (is_sh_potential_) {
 		CalcSHSiteEnergyDers(nbh);
@@ -12938,7 +13003,7 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 										const double se_weight,
 										const Vector3* se_ders_weights) 
 {
-	if (UsesSpeciesReadout())
+	if (UsesSpeciesReadout() && !is_sh_potential_)
 		ERROR("AccumulateCombinationGrad does not support species readout; use AccumulateEFSCombinationGrad for adaptive species-readout models");
 	if (is_sh_potential_) {
 		AccumulateSHCombinationGrad(nbh, out_grad_accumulator, se_weight, se_ders_weights);
