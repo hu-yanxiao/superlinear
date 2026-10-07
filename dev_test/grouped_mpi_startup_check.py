@@ -137,12 +137,14 @@ def main():
         assert before[field] == (normal_dir / "run" / field).read_bytes(), "delay changed " + field
         assert before[field] == (legacy_dir / "run" / field).read_bytes(), "legacy parity: " + field
     print("PASS exact model/optimizer parity: delayed, normal and legacy", flush=True)
-    result, output = run("reject-reuse", binary, delayed_dir, ["train", "train.yaml"])
+    # Early rejection may abort before the delayed rank reaches its interposer
+    # marker. The delay is qualified above; these cases test output protection.
+    result, output = run("reject-reuse", binary, delayed_dir, ["train", "train.yaml"], delay=False)
     assert result.returncode != 0 and "refusing to reuse/overwrite" in output, output[-5000:]
     assert before == {field: (delayed_dir / "run" / field).read_bytes() for field in fields}
     print("PASS existing output still rejected and unmodified", flush=True)
     check_dir = fixture("check-only")
-    result, output = run("check-only", binary, check_dir, ["train", "train.yaml", "--check-config"])
+    result, output = run("check-only", binary, check_dir, ["train", "train.yaml", "--check-config"], delay=False)
     assert result.returncode == 0 and "CONFIG_CHECK_PASS" in output and not (check_dir / "run").exists(), output[-5000:]
     print("PASS MPI check-config remains read-only", flush=True)
     print("GROUPED_MPI_STARTUP_PASS", flush=True)
