@@ -84,7 +84,7 @@ run("init-legacy", ["init-sh", ROOT / "legacy-seed.mtp"] + LEGACY)
 assert (ROOT / "yaml-seed.mtp").read_bytes() == (ROOT / "legacy-seed.mtp").read_bytes(), "topology differs"
 CHECKS += 1
 
-for sharing, semantic_alias in [("L", "angular"), ("K", "channel"), ("LK", "channel-angular")]:
+for sharing, semantic_alias in [("L", "angular"), ("K", "channel"), ("LK", "channel-angular"), ("pair", "pair")]:
     canonical_config = yaml("warp-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + sharing)
                             + "output:\n  model: warp-" + sharing + ".mtp\n")
     alias_config = yaml("warp-alias-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + semantic_alias)

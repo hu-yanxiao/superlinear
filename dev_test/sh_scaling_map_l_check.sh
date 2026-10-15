@@ -232,7 +232,31 @@ active_lk="$tmp_dir/active-LK-expanded.mtp"
   --trained-pot-name="$active_l" --scaling-map=L \
   --max-iter=1 --skip-preinit --shift \
   --energy-weight=1 --force-weight=0.2 --stress-weight=0 \
-  --radial-smooth=0 >/dev/null
+  --radial-smooth=0 >"$tmp_dir/active-train.log" 2>&1
+[[ -s "$active_l" ]] || {
+  cat "$tmp_dir/active-train.log" >&2
+  echo "training did not save the requested active model (requires DEV binary)" >&2
+  exit 1
+}
+python3 - "$tmp_dir/RBChebyshev_sss-L.mtp" "$active_l" <<'PY'
+import re
+import sys
+
+def parameters(path):
+    text = open(path).read()
+    return [float(v) for field in re.findall(
+        r"(?m)^\s*\w*coeffs\s*=\s*\{([^}]*)\}", text, re.S
+    ) for v in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?", field)]
+
+before, after = map(parameters, sys.argv[1:])
+if not before or len(before) != len(after) or before == after:
+    raise SystemExit("training must change model parameters before the active-model checks")
+PY
+"$bin" roundtrip-model-dev "$active_l" "$tmp_dir/active-L-roundtrip.mtp" >/dev/null
+"$bin" calc-efs "$active_l" "$probe_cfg" "$tmp_dir/active-L-before-roundtrip.cfg" >/dev/null
+"$bin" calc-efs "$tmp_dir/active-L-roundtrip.mtp" "$probe_cfg" \
+  "$tmp_dir/active-L-after-roundtrip.cfg" >/dev/null
+compare_cfg "$tmp_dir/active-L-before-roundtrip.cfg" "$tmp_dir/active-L-after-roundtrip.cfg"
 expand_l_to_lk "$active_l" "$active_lk"
 "$bin" calc-efs "$active_l" "$probe_cfg" "$tmp_dir/active-L.cfg" >/dev/null
 "$bin" calc-efs "$active_lk" "$probe_cfg" "$tmp_dir/active-LK.cfg" >/dev/null
