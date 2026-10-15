@@ -27,7 +27,7 @@ common=(
   --outer-k-rank=2 --two-layer-gate-radial-mixing=full
 )
 
-for map in K L; do
+for map in K L pair; do
   "$bin" init-sh "$tmp_dir/${map}.init.mtp" "${common[@]}" \
     --scaling-map="$map" >/dev/null
   "$bin" roundtrip-model-dev \
@@ -38,7 +38,8 @@ done
 # mathematically identical LK expansions. Mixer C stays (l,outer,k,b) in both
 # files; only the radial slope/shift sharing map is expanded.
 python3 - "$tmp_dir/K.mtp" "$tmp_dir/K.LK.mtp" K \
-            "$tmp_dir/L.mtp" "$tmp_dir/L.LK.mtp" L <<'PY'
+            "$tmp_dir/L.mtp" "$tmp_dir/L.LK.mtp" L \
+            "$tmp_dir/pair.mtp" "$tmp_dir/pair.LK.mtp" pair <<'PY'
 import re
 import sys
 
@@ -74,7 +75,7 @@ for source, target, compact_map in zip(sys.argv[1::3], sys.argv[2::3], sys.argv[
     if not count or int(count.group(1)) != expected_mixer:
         raise SystemExit("wrong direct mixer coefficient count")
 
-    compact_count = kmax if compact_map == "K" else lcount
+    compact_count = 1 if compact_map == "pair" else kmax if compact_map == "K" else lcount
     blocks = []
     for channel in range(compact_count):
         slopes = [2.4 + 0.31 * channel + 0.037 * pair for pair in range(pair_count)]
@@ -92,7 +93,7 @@ for source, target, compact_map in zip(sys.argv[1::3], sys.argv[2::3], sys.argv[
     expanded = []
     for k in range(kmax):
         for ell in range(lcount):
-            block = blocks[k] if compact_map == "K" else blocks[ell]
+            block = blocks[0] if compact_map == "pair" else blocks[k] if compact_map == "K" else blocks[ell]
             expanded.extend(block)
     lk = re.sub(
         rf"(?m)^scaling_map\s*=\s*{compact_map}\s*$",
@@ -132,8 +133,9 @@ PY
 
 compare_efs K
 compare_efs L
+compare_efs pair
 
-for model in K.mtp L.mtp K.LK.mtp; do
+for model in K.mtp L.mtp pair.mtp K.LK.mtp; do
   "$bin" check-efs-fd-dev "$tmp_dir/$model" "$cfg" \
     --max-configs=1 --max-atoms=2 --displacement=1.0e-5 \
     --abs-tolerance=7.0e-5 --rel-tolerance=7.0e-3 >/dev/null
@@ -176,7 +178,7 @@ mix_end=$(layout_field K.mtp gate_radial_mixing_end)
 [[ $((mix_end - mix_begin)) == 54 ]]
 check_direction direct_mixer_C_K K.mtp "$mix_begin" "$mix_end"
 
-for spec in "K.mtp:24:K" "L.mtp:24:L" "K.LK.mtp:72:LK"; do
+for spec in "K.mtp:24:K" "L.mtp:24:L" "pair.mtp:8:pair" "K.LK.mtp:72:LK"; do
   IFS=: read -r model scaling_count label <<<"$spec"
   radial_begin=$(layout_field "$model" radial_begin)
   check_direction "direct_mixer_scaling_${label}" "$model" \

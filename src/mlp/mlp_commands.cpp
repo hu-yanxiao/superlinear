@@ -707,7 +707,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 			"                                from the init-sh options.\n"
 			"    --radial-cutoff-type=legacy|polynomial: cutoff envelope for new init-sh models. Default=legacy\n"
 			"    --radial-cutoff-p=<int>: smooth-polynomial cutoff exponent in [1,64]. Default=5\n"
-					"    --scaling-map=K|L|LK: share scal/s by radial k, share by angular l, or keep one block per (k,l). Default=LK\n"
+					"    --scaling-map=K|L|LK|pair: share scal/s by radial k, angular l, (k,l), or ordered element pair only. Default=LK\n"
 					"    --sh-factor-pruning=same-k|legacy|q-total: outer scalar graph. Default=q-total\n"
 					"    --superlinear-mode=legacy|pure-w-channelwise|radial-coefficient-gate: new-model architecture. Default=legacy.\n"
 					"        pure-w-channelwise uses full W_l(K x O), no P*R branch, O positive and possibly >K;\n"

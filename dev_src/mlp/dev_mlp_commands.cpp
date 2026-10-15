@@ -2575,7 +2575,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"writes an untrained SUS2-SH model",
 				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
-				"Options: --scaling-map=K|L|LK (default=LK),\n"
+				"Options: --scaling-map=K|L|LK|pair (default=LK),\n"
 				"         --superlinear-mode=legacy|pure-w-channelwise|radial-coefficient-gate (default=legacy),\n"
 				"           pure-w-channelwise: complete distance matrix W_l(K x O), no P*R residual, O may exceed K;\n"
 				"           one K=1 angular graph is bound to O independent channels; requires --outer-k-rank=O;\n"

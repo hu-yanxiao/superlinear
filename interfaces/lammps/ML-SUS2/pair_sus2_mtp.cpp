@@ -3856,7 +3856,7 @@ void PairSUS2MTP::calc_pair_radial_values(int itype,
   // which is one entry per full mu=(k,l) channel.
   const bool per_mu_sigma =
       basis_requires_per_mu_sigma(radial_basis_type_index) ||
-      (is_sh_model && scaling_map == "L");
+      (is_sh_model && (scaling_map == "L" || scaling_map == "pair"));
   const bool compact_k_scaling =
       is_sh_model && scaling_map == "K" && K_scaling < radial_func_count;
   const int radial_cache_count = per_mu_sigma ? radial_func_count : K_scaling;
@@ -7237,7 +7237,7 @@ void PairSUS2MTP::compute(int eflag, int vflag)
       // but it must still evaluate every distinct radial-k basis channel.
       const bool per_mu_sigma =
           basis_requires_per_mu_sigma(radial_basis_type_index) ||
-          (is_sh_model && scaling_map == "L");
+          (is_sh_model && (scaling_map == "L" || scaling_map == "pair"));
       const bool compact_k_scaling =
           is_sh_model && scaling_map == "K" && K_ < radial_func_count;
       const int radial_cache_count = per_mu_sigma ? radial_func_count : K_;
@@ -7898,8 +7898,8 @@ access to the buffer size that is not provided in PFR.
     // Read scaling_map (SUS2-MLIP specific)
     if (keyword == "scaling_map") {
       scaling_map = line_tokens.next_string();
-      if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
-        error->one(FLERR, "scaling_map must be 'K', 'L', or 'LK'");
+      if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK" && scaling_map != "pair")
+        error->one(FLERR, "scaling_map must be 'K', 'L', 'LK', or 'pair'");
       line_tokens = ValueTokenizer(tfr.next_line(), separators);
       keyword = line_tokens.next_string();
     } else {
@@ -8017,8 +8017,8 @@ access to the buffer size that is not provided in PFR.
         error->one(FLERR, "Invalid SUS2-SH sh_k_max: {}.", sh_k_max);
       if (L_max != sh_l_max + 1)
         error->one(FLERR, "SUS2-SH L header is inconsistent with sh_l_max.");
-      if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
-        error->one(FLERR, "SUS2-SH scaling_map should be K, L, or LK.");
+      if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK" && scaling_map != "pair")
+        error->one(FLERR, "SUS2-SH scaling_map should be K, L, LK, or pair.");
 
       do {
         line_tokens = ValueTokenizer(tfr.next_line(), separators);
@@ -8167,7 +8167,9 @@ access to the buffer size that is not provided in PFR.
     }
 
     // Compute K_scaling based on scaling_map
-    if (scaling_map == "K") {
+    if (scaling_map == "pair") {
+      K_scaling = 1;
+    } else if (scaling_map == "K") {
       K_scaling = radial_func_count / L_max;
     } else if (scaling_map == "L") {
       K_scaling = L_max;
@@ -8187,7 +8189,11 @@ access to the buffer size that is not provided in PFR.
     }
     
     // Initialize mu_to_K based on scaling_map
-    if (scaling_map == "K") {
+    if (scaling_map == "pair") {
+      for (int n = 0; n < radial_func_count; n++) {
+        mu_to_K[n] = 0;
+      }
+    } else if (scaling_map == "K") {
       for (int n = 0; n < radial_func_count; n++) {
         mu_to_K[n] = n / L_max;
       }

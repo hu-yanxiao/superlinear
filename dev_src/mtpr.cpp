@@ -5008,6 +5008,11 @@ void MLMTPR::Load(const string& filename)
 	}
 
 	}
+	else if (scaling_map=="pair")
+	{
+		K_ = 1;
+		std::fill(mu_to_K.begin(), mu_to_K.end(), 0);
+	}
 	else if (scaling_map=="LK")
 	{
 		K_ = radial_func_count;
@@ -5024,8 +5029,8 @@ void MLMTPR::Load(const string& filename)
 
 	if (is_sh_potential_)
 	{
-		if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
-			ERROR("SUS2-SH scaling_map should be K, L, or LK");
+		if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK" && scaling_map != "pair")
+			ERROR("SUS2-SH scaling_map should be K, L, LK, or pair");
 		if (sh_l_max_ < 0 || sh_l_max_ > 4)
 			ERROR("SUS2-SH runtime currently supports sh_l_max in [0,4]");
 		if (sh_k_max_ <= 0)

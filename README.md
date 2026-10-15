@@ -139,7 +139,7 @@ Main SH topology options:
 | `--species-count=<int>` | Number of atomic species in CFG type order. |
 | `--l-max=<int>` | Maximum SH angular index `l`; generator supports `0..6`, optimized runtimes are mainly validated for `l <= 4`. |
 | `--k-max=<int>` | Number of radial channels per `l`; `k` is indexed from `0` to `k_max-1`. |
-| `--scaling-map=K\|L\|LK` | Select the `scal/s` map. `K` shares one pairwise block across all `l` at fixed `k`; `L` shares one block across all `k` at fixed `l`; `LK` keeps one block per `(k,l)`. Default=`LK`. |
+| `--scaling-map=K\|L\|LK\|pair` | Select the `scal/s` map. `K` shares one pairwise block across all `l` at fixed `k`; `L` shares one block across all `k` at fixed `l`; `LK` keeps one block per `(k,l)`; `pair` shares across every `k,l` with one factor and shift per ordered element pair. Default=`LK`. |
 | `--body-order=<int>` | Maximum scalar body order, supported range `2..6`. |
 | `--body-l-max=<list>` | Body-specific angular cutoffs. Use four values for body orders `2..5`, or five values for `2..6`; example `3,3,2,2`. |
 | `--cutoff=<double>` / `--max-dist=<double>` | Main SH radial cutoff. `--cutoff` is the preferred spelling. |
@@ -165,6 +165,15 @@ Thus `scal[pair,b(mu)]` and `s[pair,b(mu)]` are shared across `l` only in
 product graph, gate channels, and optional outer/gate K-rank contractions all
 retain the complete \(\mu=(k,l)\) layout. Omitting `--scaling-map` preserves
 the release3 `LK` model and runtime path.
+
+`scaling_map=pair` uses `b_pair(mu)=0`: for `S` species it stores exactly
+`2*S*S` coordinate-warp parameters (factor plus shift). Central and neighbor
+species remain ordered, so `(a,b)` and `(b,a)` have independent parameters.
+The radial coefficients and all gate/mixer/head dimensions are unchanged.
+The grouped YAML equivalent is `model.radial.warp_sharing: pair`. New readers
+retain support for existing `K`, `L`, and `LK` files; older binaries cannot
+read the new `pair` topology. Training cannot change a loaded sharing map;
+initialize a new model with the desired map.
 
 Common training options:
 

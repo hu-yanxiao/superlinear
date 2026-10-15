@@ -1328,8 +1328,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("init-sh requires --k-max > 0.");
 	if (body_order < 2 || body_order > 6)
 		ERROR("init-sh supports --body-order from 2 to 6.");
-	if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK")
-		ERROR("init-sh --scaling-map should be K, L, or LK.");
+	if (scaling_map != "K" && scaling_map != "L" && scaling_map != "LK" && scaling_map != "pair")
+		ERROR("init-sh --scaling-map should be K, L, LK, or pair.");
 	if (pure_w_channelwise && !outer_k_rank_enabled)
 		ERROR("--superlinear-mode=pure-w-channelwise requires --outer-k-rank=<O> with O > 0 (O may exceed K).");
 	if (radial_coefficient_gate && !outer_k_rank_enabled)
@@ -1595,7 +1595,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	}
 	const int radial_func_count = kmax * (lmax + 1);
 	const int scaling_block_count =
-		(scaling_map == "K") ? kmax
+		(scaling_map == "pair") ? 1
+		: (scaling_map == "K") ? kmax
 		: (scaling_map == "L") ? (lmax + 1)
 		: radial_func_count;
 	ofs << "\tradial_funcs_count = " << radial_func_count << "\n";

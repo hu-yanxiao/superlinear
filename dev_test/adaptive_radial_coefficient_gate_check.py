@@ -675,11 +675,12 @@ run(
     expect_success=False,
 )
 
-for scaling_map in ("K", "L", "LK"):
+for scaling_map in ("K", "L", "LK", "pair"):
     check_case(scaling_map, kmax=2, outer=1, regularized=(scaling_map == "K"))
     check_case(scaling_map, kmax=2, outer=2)
 
 check_case("LK", kmax=3, outer=3, gate_rank=1)
 check_case("K", kmax=3, outer=2, gate_rank=1, decoupled=True)
+check_case("pair", kmax=3, outer=2, gate_rank=1, decoupled=True)
 
 print("PASS adaptive radial coefficient gate regression", flush=True)

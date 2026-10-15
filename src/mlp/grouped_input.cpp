@@ -28,7 +28,7 @@ const Rule rules[] = {
     {"model.radial.basis_size", "radial-basis-size", "positive-int"},
     {"model.radial.basis_scale", "scaling", "positive-real"},
     {"model.radial.reference_min_distance", "min-dist", "nonnegative-real"},
-    {"model.radial.warp_sharing", "scaling-map", "L=L|K=K|LK=LK|angular=L|channel=K|channel-angular=LK"},
+    {"model.radial.warp_sharing", "scaling-map", "L=L|K=K|LK=LK|pair=pair|angular=L|channel=K|channel-angular=LK"},
     {"model.coordination.enabled", "@coordination-enabled", "bool"},
     {"model.coordination.channels", "two-layer-gate-k-rank", "positive-int"},
     {"model.coordination.body_order", "two-layer-gate-body-order", "positive-int"},

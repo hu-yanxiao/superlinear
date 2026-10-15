@@ -264,6 +264,6 @@ if "$bin" init-sh "$tmp_dir/bad.mtp" "${common[@]}" \
   echo "invalid scaling_map=KL unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q "scaling-map should be K, L, or LK" "$tmp_dir/bad.err"
+grep -q "scaling-map should be K, L, LK, or pair" "$tmp_dir/bad.err"
 
 echo "scaling_map=L trainer checks passed"
