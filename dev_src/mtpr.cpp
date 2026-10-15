@@ -5479,12 +5479,22 @@ void MLMTPR::Load(const string& filename)
 		    || outer_k_rank1_product_begin_ > static_cast<int>(sh_products_.size()))
 			ERROR("SUS2-SH outer K-rank1 product range is invalid");
 	}
-	if (legacy_v18 && !OuterKRankEnabled() && tmpstr == "readout_mode") {
-		ifs.ignore(2); ifs >> readout_mode_; readout_mode_seen = true; ifs >> tmpstr;
+	if (legacy_v18 && !OuterKRankEnabled()
+	    && (tmpstr == "readout_mode" || tmpstr == "outer_channel_mode")) {
+		// Native Save writes readout first; the PT exporter writes outer modes
+		// first. Both existing layouts carry the same three explicit fields.
+		const bool readout_first = tmpstr == "readout_mode";
+		if (readout_first) {
+			ifs.ignore(2); ifs >> readout_mode_; readout_mode_seen = true; ifs >> tmpstr;
+		}
 		if (tmpstr != "outer_channel_mode") ERROR("Legacy readout metadata order is invalid");
 		ifs.ignore(2); ifs >> outer_channel_mode_; ifs >> tmpstr;
 		if (tmpstr != "outer_radial_mode") ERROR("Legacy radial metadata order is invalid");
 		ifs.ignore(2); ifs >> outer_radial_mode_; ifs >> tmpstr;
+		if (!readout_first) {
+			if (tmpstr != "readout_mode") ERROR("Legacy readout metadata order is invalid");
+			ifs.ignore(2); ifs >> readout_mode_; readout_mode_seen = true; ifs >> tmpstr;
+		}
 	}
 	if (is_sh_potential_ && tmpstr == "two_layer_gate_k_rank") {
 		ifs.ignore(2);
