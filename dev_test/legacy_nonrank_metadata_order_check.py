@@ -120,7 +120,12 @@ def run_binary(binary, folder):
         subprocess.run([binary, 'init-sh', str(initial), '--species-count=2', '--l-max=2',
                         '--k-max=3', '--body-order=3', '--readout-mode=' + head, '--write-sh-scalar-info'],
                        check=True, stdout=subprocess.DEVNULL)
-        original = initial.read_text()
+        # init-sh intentionally omits default parameter arrays. Materialize
+        # through the native writer before injecting metadata at species_coeffs.
+        materialized = folder / ('materialized-' + head + '.mtp')
+        subprocess.run([binary, 'roundtrip-model-dev', str(initial), str(materialized)],
+                       check=True, stdout=subprocess.DEVNULL)
+        original = materialized.read_text()
         assert 'outer_k_rank1_enabled' not in original
         if head == 'species':
             assert re.search(r'^version = 1\.8\.0$', original, re.M)
