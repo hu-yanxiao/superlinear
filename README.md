@@ -47,6 +47,10 @@ Leave `MLIP_CACHE_NEIGHBORHOODS` unset for automatic memory-aware neighbor
 caching. Two-layer edge/tanh caches and MKL linear-solver fast paths are already
 enabled when applicable; they need no extra enable flag.
 
+Native `coordination-effect` parameter gradients automatically use exact
+channelwise contractions where applicable. Set `SUS2_SH_EFFECT_PARAM_FAST=0`
+to use the reference implementation.
+
 ### Static radial — L3/K4/O2
 
 No coordination-effect layer: **K and O are used; R is absent**.
