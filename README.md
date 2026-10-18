@@ -54,7 +54,7 @@ model:
 training:
   profile: native-static-v1
   optimizer: bfgs
-  iterations: 2000
+  iterations: 100
 loss:
   energy_weight: 1
   force_weight: 0.01
@@ -94,7 +94,7 @@ model:
 training:
   profile: native-effect-v1
   optimizer: bfgs
-  iterations: 2000
+  iterations: 100
 loss:
   energy_weight: 1
   force_weight: 0.01

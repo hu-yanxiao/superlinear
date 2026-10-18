@@ -82,7 +82,7 @@ for index, family in enumerate(("static", "effect")):
         assert "coordination:" not in template
     else:
         assert "kind: coordination-effect" in template and "native-effect-v1" in template
-    config = yaml(family + ".yaml", template.replace("iterations: 2000", "iterations: 1"))
+    config = yaml(family + ".yaml", re.sub(r"iterations:\s*\d+", "iterations: 1", template, count=1))
     configs[family] = config
     first = final_path(run(family + "-check", ["train", config, "--check-config"]))
     second = final_path(run(family + "-check-repeat", ["train", config, "--check-config"]))
