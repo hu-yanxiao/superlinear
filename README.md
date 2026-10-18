@@ -29,6 +29,23 @@ cp examples/train-static.yaml train.yaml
 # mpirun -n 40 ./bin/mlp-sus2 train train.yaml > train.log 2>&1
 ```
 
+### Training acceleration
+
+These optional execution switches are **off by default**. Add them before the
+training command, or before `mpirun` in an LSF script:
+
+```bash
+export SUS2_SH_SITE_DER_CACHE=1        # Reuse site derivatives where applicable
+export SUS2_SH_ACCUM_SKIP_SITE_DERS=1  # Skip unused site-derivative output
+export SUS2_SH_PRODUCT_HVT_REVERSE=1   # Alternative product-graph derivative schedule
+```
+
+They do not change the model or loss. Applicability and speedup depend on the
+model's execution path; some paths already use their own caches.
+Leave `MLIP_CACHE_NEIGHBORHOODS` unset for automatic memory-aware neighbor
+caching. Two-layer edge/tanh caches and MKL linear-solver fast paths are already
+enabled when applicable; they need no extra enable flag.
+
 ### Static radial — L3/K4/O2
 
 No coordination-effect layer: **K and O are used; R is absent**.
