@@ -41,7 +41,8 @@ export SUS2_SH_PRODUCT_HVT_REVERSE=1   # Alternative product-graph derivative sc
 ```
 
 They do not change the model or loss. Applicability and speedup depend on the
-model's execution path; some paths already use their own caches.
+model's execution path. In `coordination-effect`, the default two-layer edge
+cache takes precedence over `SITE_DER_CACHE`; it does not add another cache.
 Leave `MLIP_CACHE_NEIGHBORHOODS` unset for automatic memory-aware neighbor
 caching. Two-layer edge/tanh caches and MKL linear-solver fast paths are already
 enabled when applicable; they need no extra enable flag.
