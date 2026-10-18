@@ -6,7 +6,7 @@ build_dir=$(mktemp -d "${TMPDIR:-/tmp}/sus2-kk-rank-work-overlay.XXXXXX")
 trap 'rm -rf "$build_dir"' EXIT
 
 ${CXX:-c++} -std=c++17 -O2 -Wall -Wextra -pedantic \
-  "$repo_dir/codex_tests/lammps_kk_rank_work_phase_overlay_check.cpp" \
+  "$repo_dir/native_tests/lammps_kk_rank_work_phase_overlay_check.cpp" \
   -o "$build_dir/lammps_kk_rank_work_phase_overlay_check"
 
 "$build_dir/lammps_kk_rank_work_phase_overlay_check" \

@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_optimizer_checkpoint"
+tmp_dir=".local_tmp/sh_optimizer_checkpoint"
 mkdir -p "$tmp_dir"
 
 cxx="${CXX:-c++}"
@@ -14,12 +14,12 @@ cxx="${CXX:-c++}"
   -Wextra \
   -pedantic \
   -I. \
-  codex_tests/optimizer_checkpoint_check.cpp \
+  native_tests/optimizer_checkpoint_check.cpp \
   -o "$tmp_dir/optimizer_checkpoint_check"
 
-"$tmp_dir/optimizer_checkpoint_check" "$tmp_dir/current.mtp"
+"$tmp_dir/optimizer_checkpoint_check" "$tmp_dir/current.sus2"
 
-if compgen -G "$tmp_dir/current.mtp.tmp.*" >/dev/null; then
+if compgen -G "$tmp_dir/current.sus2.tmp.*" >/dev/null; then
   echo "optimizer checkpoint test left a temporary file" >&2
   exit 1
 fi

@@ -1,0 +1,29 @@
+# Copy to train.yaml before editing; paths are relative to that file.
+schema_version: 1
+model:
+  kind: static-radial
+  species_count: 2                 # Number of CFG types (0, 1, ...)
+  l_max: 3                        # L
+  radial_channels: 4              # K
+  neighbor_cutoff: 6.5             # Angstrom
+  radial:
+    basis: chebyshev-sss
+    basis_size: 10
+    warp_sharing: K               # L / K / LK / pair
+  interaction:
+    channels: 2                   # O; 1 <= O <= K
+    body_order: 4
+    channel_coupling: cross        # Static mode uses cross
+  readout:
+    element_mode: per-element     # shared / per-element
+training:
+  profile: native-static-v1
+  optimizer: bfgs
+  iterations: 2000
+loss:
+  energy_weight: 1
+  force_weight: 0.01
+  virial_weight: 0.001
+data:
+  train: data/train.cfg
+  valid: data/val.cfg              # Remove if no validation set exists

@@ -2,7 +2,7 @@
 # Do not include model.* or a response/coordination architecture override.
 schema_version: 1
 data:
-  model: runs/native-static/final.mtp
+  model: runs/native-static/final.sus2
   train: train.cfg
   # valid: val.cfg
 training:

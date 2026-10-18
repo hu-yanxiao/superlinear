@@ -31,29 +31,29 @@ common_args=(
   --two-layer-gate-shared-radial
 )
 
-no_rank="$tmp_dir/no-rank.mtp"
-explicit_zero="$tmp_dir/explicit-zero.mtp"
-rank2="$tmp_dir/outer-rank2.mtp"
-gate1_outer1="$tmp_dir/gate1-outer1.mtp"
-rank4_identity="$tmp_dir/gate4-outer4.mtp"
-native_k1="$tmp_dir/native-k1.mtp"
+no_rank="$tmp_dir/no-rank.sus2"
+explicit_zero="$tmp_dir/explicit-zero.sus2"
+rank2="$tmp_dir/outer-rank2.sus2"
+gate1_outer1="$tmp_dir/gate1-outer1.sus2"
+rank4_identity="$tmp_dir/gate4-outer4.sus2"
+native_k1="$tmp_dir/native-k1.sus2"
 
 "$bin" init-sh "$no_rank" "${common_args[@]}" >/dev/null
 "$bin" init-sh "$explicit_zero" "${common_args[@]}" \
   --outer-k-rank=0 --two-layer-gate-k-rank=0 >/dev/null
 cmp "$no_rank" "$explicit_zero"
 
-if "$bin" init-sh "$tmp_dir/invalid.mtp" "${common_args[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid.sus2" "${common_args[@]}" \
      --outer-k-rank=1.5 >/dev/null 2>&1; then
   echo "fractional --outer-k-rank was accepted" >&2
   exit 1
 fi
-if "$bin" init-sh "$tmp_dir/invalid.mtp" "${common_args[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid.sus2" "${common_args[@]}" \
      --outer-k-rank1=false >/dev/null 2>&1; then
   echo "valued --outer-k-rank1 compatibility flag was accepted" >&2
   exit 1
 fi
-if "$bin" init-sh "$tmp_dir/invalid.mtp" "${common_args[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid.sus2" "${common_args[@]}" \
      --two-layer-gate-k-rank=1 >/dev/null 2>&1; then
   echo "gate rank without outer rank was accepted" >&2
   exit 1
@@ -178,7 +178,7 @@ fi
   --coeff-start="$rank2_begin" --coeff-end="$rank2_end" \
   --displacement=1.0e-5 --abs-tolerance=2.0e-5 --rel-tolerance=3.0e-3
 
-rank2_roundtrip="$tmp_dir/outer-rank2-roundtrip.mtp"
+rank2_roundtrip="$tmp_dir/outer-rank2-roundtrip.sus2"
 rank2_roundtrip_efs="$tmp_dir/outer-rank2-roundtrip.cfg"
 "$bin" roundtrip-model-dev "$rank2" "$rank2_roundtrip" >/dev/null
 "$bin" calc-efs "$rank2_roundtrip" "$one_cfg" "$rank2_roundtrip_efs" >/dev/null
@@ -207,7 +207,7 @@ if worst > 2.0e-11 * scale:
 print(f"rank4_identity_efs_worst={worst:.3e}")
 PY
 
-roundtrip="$tmp_dir/gate1-outer1-roundtrip.mtp"
+roundtrip="$tmp_dir/gate1-outer1-roundtrip.sus2"
 roundtrip_efs="$tmp_dir/gate1-outer1-roundtrip.cfg"
 base_efs="$tmp_dir/gate1-outer1-base.cfg"
 "$bin" roundtrip-model-dev "$gate1_outer1" "$roundtrip" >/dev/null
@@ -215,7 +215,7 @@ base_efs="$tmp_dir/gate1-outer1-base.cfg"
 "$bin" calc-efs "$roundtrip" "$one_cfg" "$roundtrip_efs" >/dev/null
 cmp "$base_efs" "$roundtrip_efs"
 
-active="$tmp_dir/gate1-outer1-active.mtp"
+active="$tmp_dir/gate1-outer1-active.sus2"
 python3 - "$roundtrip" "$active" <<'PY'
 import re
 import sys
@@ -344,7 +344,7 @@ done
   --displacement=1.0e-5 --abs-tolerance=3.0e-5 --rel-tolerance=3.0e-3
 
 for model in "$rank2" "$active" "$native_k1"; do
-  stem=$(basename "$model" .mtp)
+  stem=$(basename "$model" .sus2)
   descriptors="$tmp_dir/$stem-descriptors.txt"
   partial="$tmp_dir/$stem-partial.txt"
   eij="$tmp_dir/$stem-eij.txt"

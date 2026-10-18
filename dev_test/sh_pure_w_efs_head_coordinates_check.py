@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact head-coordinate regression; keeps all generated evidence in .codex_tmp."""
+"""Exact head-coordinate regression; keeps all generated evidence in .local_tmp."""
 import csv
 import math
 import os
@@ -11,9 +11,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / 'bin/mlp-sus2'
-(ROOT / '.codex_tmp').mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix='pure-w-efs-head-', dir=ROOT / '.codex_tmp'))
-CFG = ROOT / 'codex_tests/pure_w_regularization.cfg'
+(ROOT / '.local_tmp').mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix='pure-w-efs-head-', dir=ROOT / '.local_tmp'))
+CFG = ROOT / 'native_tests/pure_w_regularization.cfg'
 ENV = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
 
 
@@ -46,7 +46,7 @@ def startup(log):
 
 
 print(f'Evidence: {TMP}', flush=True)
-initial, seed = TMP / 'initial.mtp', TMP / 'seed.mtp'
+initial, seed = TMP / 'initial.sus2', TMP / 'seed.sus2'
 run('init', 'init-sh', initial, '--species-count=2', '--l-max=1', '--k-max=2',
     '--body-order=4', '--body-l-max=1,1,1,1', '--radial-basis-size=3', '--cutoff=5',
     '--scaling=0.3', '--superlinear-mode=pure-w-channelwise', '--outer-k-rank=2',
@@ -72,8 +72,8 @@ def train(label, mode='efs-head', extra=()):
                '--radial-parameterization=weight-norm',
                f'--bfgs-coordinate-normalization={mode}',
                f'--optimizer-trace-file={TMP / (label + ".csv")}',
-               f'--trained-pot-name={TMP / (label + ".mtp")}',
-               f'--curr-pot-name={TMP / (label + ".current.mtp")}', *extra)
+               f'--trained-pot-name={TMP / (label + ".sus2")}',
+               f'--curr-pot-name={TMP / (label + ".current.sus2")}', *extra)
 
 
 physical = train('physical', 'none')
@@ -119,10 +119,10 @@ weighted_head = train('weighted-head', 'efs-head', weighted_extra)
 assert abs(startup(weighted_head) - startup(weighted_physical)) <= 2e-12 * max(1.0, abs(startup(weighted_physical)))
 
 # Do not approximate a general checkpoint with unequal center prefactors.
-unequal = TMP / 'unequal.mtp'
+unequal = TMP / 'unequal.sus2'
 unequal.write_text(vector(src, 'species_coeffs', [1.7, 1.8]))
 run('unequal-rejected', 'train', unequal, CFG, *common,
     '--radial-parameterization=weight-norm', '--bfgs-coordinate-normalization=efs-head',
-    f'--trained-pot-name={TMP / "rejected.mtp"}',
+    f'--trained-pot-name={TMP / "rejected.sus2"}',
     failure='efs-head requires equal center linear prefactors')
 print('PASS efs-head exact deterministic columns, physical objective, WN and TrainLinear compatibility', flush=True)

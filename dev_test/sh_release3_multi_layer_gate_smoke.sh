@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_release3_multi_layer_gate"
+tmp_dir=".local_tmp/sh_release3_multi_layer_gate"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/release3_multi_gate.mtp"
-probe_model="$tmp_dir/release3_multi_gate_probe.mtp"
+model="$tmp_dir/release3_multi_gate.sus2"
+probe_model="$tmp_dir/release3_multi_gate_probe.sus2"
 train="$tmp_dir/one.cfg"
 pred="$tmp_dir/one_out.cfg"
 rm -f "$model" "$probe_model" "$train" "$pred"

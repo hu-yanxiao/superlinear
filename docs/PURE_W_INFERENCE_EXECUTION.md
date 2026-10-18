@@ -115,7 +115,7 @@ CSV traces were byte-identical. This short same-model check complements,
 rather than replaces, the separately run model-adapted historical gate
 500-configuration / 75-pretraining-plus-55-formal-step regression.
 
-Evidence: server checkout `.codex_tmp/pure_w_efs_optimization_20260906/r3/`,
+Evidence: server checkout `.local_tmp/pure_w_efs_optimization_20260906/r3/`,
 especially `formal_4251101/comparison.json` and the validation logs. Candidate
 native binary SHA256:
 `71272cdfd3a9f6049747cab192d0510e72d09708456db3d0b1f7fcd48df71198`.
@@ -256,7 +256,7 @@ execution from a mathematically valid fallback.
 ```bash
 python3 dev_test/sh_pure_w_execution_check.py /absolute/path/to/mlp-sus2
 bash dev_test/sh_pure_w_execution_state_check.sh MODEL CFG OBJECT_DIR
-c++ -std=c++11 -O2 -I. codex_tests/pure_w_packed_kernel_check.cpp \
+c++ -std=c++11 -O2 -I. native_tests/pure_w_packed_kernel_check.cpp \
   dev_src/pure_w_execution.cpp -o /tmp/packed-check
 /tmp/packed-check
 ```
@@ -311,9 +311,9 @@ The final guards do not change the default training arithmetic. The final
 source was rerun through all-width FD, EFS, reordered-graph and state tests.
 
 Evidence is under the server checkout's
-`.codex_tmp/pure_w_inference_20260905/r6/`, with `pilot_4246415/summary.json`,
+`.local_tmp/pure_w_inference_20260905/r6/`, with `pilot_4246415/summary.json`,
 `checks/`, `execution-check.log` and `candidate.sha256`. The corresponding
-local archive is under the workspace-level `.codex_tmp/pure_w_inference_20260905/`.
+local archive is under the workspace-level `.local_tmp/pure_w_inference_20260905/`.
 Linux binary SHA256:
 `5dfa614ab7dbba17bda6f09c73dcae911f7136717851b0bd6b6de8679fc07aca`.
 

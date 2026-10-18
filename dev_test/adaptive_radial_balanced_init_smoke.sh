@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 bin="${1:-$repo_root/bin/mlp-sus2}"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/adaptive-radial-balanced-init-XXXXXX")"
 one_cfg="$tmp_dir/one.cfg"
-trained="$tmp_dir/balanced.mtp"
+trained="$tmp_dir/balanced.sus2"
 log="$tmp_dir/train.log"
 
 awk 'BEGIN {n=0} {print} /^END_CFG/ {n++; if (n==1) exit}' \
@@ -96,7 +96,7 @@ if "$bin" train "$one_cfg" \
   --two-layer-gate-mode=mu-scalar-full \
   --two-layer-gate-body-order=4 \
   --two-layer-gate-k-rank=2 \
-  --trained-pot-name="$tmp_dir/invalid-gate-x.mtp" \
+  --trained-pot-name="$tmp_dir/invalid-gate-x.sus2" \
   --max-iter=0 \
   --init-params=same \
   --adaptive-radial-initialization=balanced \

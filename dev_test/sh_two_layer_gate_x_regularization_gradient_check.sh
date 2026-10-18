@@ -3,12 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_x_regularization_gradient"
+tmp_dir=".local_tmp/sh_two_layer_gate_x_regularization_gradient"
 mkdir -p "$tmp_dir"
 
 train="$tmp_dir/one.cfg"
-node_model="$tmp_dir/gate_x_node.mtp"
-edge_model="$tmp_dir/gate_x_edge_l1.mtp"
+node_model="$tmp_dir/gate_x_node.sus2"
+edge_model="$tmp_dir/gate_x_edge_l1.sus2"
 rm -f "$train" "$node_model" "$edge_model"
 cat > "$train" <<'CFG'
 BEGIN_CFG

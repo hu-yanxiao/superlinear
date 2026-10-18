@@ -148,9 +148,9 @@ common_init=(
 
 prepare_model() {
   local name="$1"; shift
-  local init="$tmp_dir/$name.init.mtp"
-  local materialized="$tmp_dir/$name.materialized.mtp"
-  local model="$tmp_dir/$name.lmp.mtp"
+  local init="$tmp_dir/$name.init.sus2"
+  local materialized="$tmp_dir/$name.materialized.sus2"
+  local model="$tmp_dir/$name.lmp.sus2"
   "$MLP_BIN" init-sh "$init" "${common_init[@]}" "$@" >/dev/null || return
   "$MLP_BIN" roundtrip-model-dev "$init" "$materialized" >/dev/null || return
   python3 - "$materialized" "$model" "$name" "$PARITY_K_MAX" \

@@ -77,11 +77,19 @@ int main(int argc, char *argv[])
 		std::vector<char*> pointers;
 		for (auto& token : normalized) pointers.push_back(&token[0]);
 		ParseOptions(static_cast<int>(pointers.size()), pointers.data(), args, opts);
-		const bool check_only = superlinear_input::Resolve(command, args, opts, mpi_rank == 0 ? &std::cout : nullptr);
+		std::string run_token;
+		if (mpi_rank == 0) run_token = superlinear_input::GenerateRunToken();
+#ifdef MLIP_MPI
+		int token_size = static_cast<int>(run_token.size());
+		MPI_Bcast(&token_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+		run_token.resize(token_size);
+		MPI_Bcast(&run_token[0], token_size, MPI_CHAR, 0, MPI_COMM_WORLD);
+#endif
+		const bool check_only = superlinear_input::Resolve(command, args, opts, mpi_rank == 0 ? &std::cout : nullptr, run_token);
 #ifdef MLIP_MPI
 		// All ranks must finish grouped output-reuse checks before rank 0 can
 		// create the inline model. Otherwise a late rank mistakes the new
-		// initial.mtp for output left by an earlier run and aborts the world.
+		// initial.sus2 for output left by an earlier run and aborts the world.
 		MPI_Barrier(MPI_COMM_WORLD);
 #endif
 		if (!check_only)

@@ -69,7 +69,7 @@ void CheckPureActiveLayout(MLMTPR& model)
 int main(int argc, char** argv)
 {
 	try {
-		Require(argc == 5, "usage: core-contract pure.mtp legacy.mtp rank1.mtp output.mtp");
+		Require(argc == 5, "usage: core-contract pure.sus2 legacy.sus2 rank1.sus2 output.sus2");
 		MLMTPR model(argv[1]);
 		CheckPureActiveLayout(model);
 		const int matrix_offset = model.TwoLayerGateRadialMixingCoeffOffset();

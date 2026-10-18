@@ -3,14 +3,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_decoupled_scaling"
+tmp_dir=".local_tmp/sh_two_layer_gate_decoupled_scaling"
 mkdir -p "$tmp_dir"
 
-base_model="$tmp_dir/gated_decoupled.mtp"
-lmp_model="$tmp_dir/gated_decoupled_lmp.mtp"
-bad_model="$tmp_dir/bad_multi_decoupled.mtp"
-shared_init="$tmp_dir/shared_init.mtp"
-shared_model="$tmp_dir/shared_complete.mtp"
+base_model="$tmp_dir/gated_decoupled.sus2"
+lmp_model="$tmp_dir/gated_decoupled_lmp.sus2"
+bad_model="$tmp_dir/bad_multi_decoupled.sus2"
+shared_init="$tmp_dir/shared_init.sus2"
+shared_model="$tmp_dir/shared_complete.sus2"
 train="$tmp_dir/one.cfg"
 base_pred="$tmp_dir/base_pred.cfg"
 lmp_pred="$tmp_dir/lmp_pred.cfg"

@@ -56,7 +56,7 @@ layout.
 The development command
 
 ```bash
-mlp-sus2 convert-adaptive-readout-dev shared.mtp species.mtp --readout-mode=species
+mlp-sus2 convert-adaptive-readout-dev shared.sus2 species.sus2 --readout-mode=species
 ```
 
 converts a trained adaptive shared-readout model without changing its EFS

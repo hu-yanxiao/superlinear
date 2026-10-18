@@ -1,9 +1,9 @@
-# Legacy：配位环境乘性修正；没有 Adaptive U。
+# Effect：配位环境乘性修正；没有 Adaptive U。
 # L=角动量截断，K=原始径向通道，R=配位投影通道，O=外层通道。
 schema_version: 1
 model:
-  kind: coordination-legacy
-  name: SUS2-SL-Legacy
+  kind: coordination-effect
+  name: SUS2-SL-Effect
   elements: [H, O]                 # 必须与 CFG type 顺序一致
   l_max: 3
   radial_channels: 8
@@ -32,7 +32,7 @@ training:
   engine: native
   device: cpu
   dtype: float64
-  profile: native-legacy-v1
+  profile: native-effect-v1
   optimizer: bfgs
   iterations: 2000
   convergence_tolerance: 1e-5

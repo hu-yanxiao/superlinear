@@ -181,9 +181,9 @@ PY
 }
 
 for basis in RBChebyshev_sss RBLaguerre_log1p RBJacobi_sss; do
-  l_init="$tmp_dir/${basis}-L-init.mtp"
-  l_model="$tmp_dir/${basis}-L.mtp"
-  lk_model="$tmp_dir/${basis}-LK-expanded.mtp"
+  l_init="$tmp_dir/${basis}-L-init.sus2"
+  l_model="$tmp_dir/${basis}-L.sus2"
+  lk_model="$tmp_dir/${basis}-LK-expanded.sus2"
   "$bin" init-sh "$l_init" "${common[@]}" \
     --radial-basis-type="$basis" --scaling-map=L >/dev/null
   "$bin" roundtrip-model-dev "$l_init" "$l_model" >/dev/null
@@ -194,7 +194,7 @@ for basis in RBChebyshev_sss RBLaguerre_log1p RBJacobi_sss; do
   "$bin" calc-efs "$lk_model" "$one_cfg" "$tmp_dir/${basis}-LK.cfg" >/dev/null
   compare_cfg "$tmp_dir/${basis}-L.cfg" "$tmp_dir/${basis}-LK.cfg"
 
-  roundtrip="$tmp_dir/${basis}-L-roundtrip.mtp"
+  roundtrip="$tmp_dir/${basis}-L-roundtrip.sus2"
   "$bin" roundtrip-model-dev "$l_model" "$roundtrip" >/dev/null
   check_counts "$roundtrip" L 24
   "$bin" calc-efs "$roundtrip" "$one_cfg" "$tmp_dir/${basis}-roundtrip.cfg" >/dev/null
@@ -212,9 +212,9 @@ done
 
 # Exercise L together with independent gate and outer K ranks.  The rank graph
 # remains in its contracted domain; only scal/s sharing changes.
-rank_l_init="$tmp_dir/rank-L-init.mtp"
-rank_l="$tmp_dir/rank-L.mtp"
-rank_lk="$tmp_dir/rank-LK-expanded.mtp"
+rank_l_init="$tmp_dir/rank-L-init.sus2"
+rank_l="$tmp_dir/rank-L.sus2"
+rank_lk="$tmp_dir/rank-LK-expanded.sus2"
 "$bin" init-sh "$rank_l_init" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss --scaling-map=L \
   --two-layer-gate --outer-k-rank=2 --two-layer-gate-k-rank=1 >/dev/null
@@ -226,9 +226,9 @@ compare_cfg "$tmp_dir/rank-L.cfg" "$tmp_dir/rank-LK.cfg"
 
 # Activate the model, prove the L/LK expansion still agrees, and check the
 # shared-L scal/s gradient so contributions from every k are accumulated.
-active_l="$tmp_dir/active-L.mtp"
-active_lk="$tmp_dir/active-LK-expanded.mtp"
-"$bin" train "$tmp_dir/RBChebyshev_sss-L.mtp" "$one_cfg" \
+active_l="$tmp_dir/active-L.sus2"
+active_lk="$tmp_dir/active-LK-expanded.sus2"
+"$bin" train "$tmp_dir/RBChebyshev_sss-L.sus2" "$one_cfg" \
   --trained-pot-name="$active_l" --scaling-map=L \
   --max-iter=1 --skip-preinit --shift \
   --energy-weight=1 --force-weight=0.2 --stress-weight=0 \
@@ -238,7 +238,7 @@ active_lk="$tmp_dir/active-LK-expanded.mtp"
   echo "training did not save the requested active model (requires DEV binary)" >&2
   exit 1
 }
-python3 - "$tmp_dir/RBChebyshev_sss-L.mtp" "$active_l" <<'PY'
+python3 - "$tmp_dir/RBChebyshev_sss-L.sus2" "$active_l" <<'PY'
 import re
 import sys
 
@@ -252,9 +252,9 @@ before, after = map(parameters, sys.argv[1:])
 if not before or len(before) != len(after) or before == after:
     raise SystemExit("training must change model parameters before the active-model checks")
 PY
-"$bin" roundtrip-model-dev "$active_l" "$tmp_dir/active-L-roundtrip.mtp" >/dev/null
+"$bin" roundtrip-model-dev "$active_l" "$tmp_dir/active-L-roundtrip.sus2" >/dev/null
 "$bin" calc-efs "$active_l" "$probe_cfg" "$tmp_dir/active-L-before-roundtrip.cfg" >/dev/null
-"$bin" calc-efs "$tmp_dir/active-L-roundtrip.mtp" "$probe_cfg" \
+"$bin" calc-efs "$tmp_dir/active-L-roundtrip.sus2" "$probe_cfg" \
   "$tmp_dir/active-L-after-roundtrip.cfg" >/dev/null
 compare_cfg "$tmp_dir/active-L-before-roundtrip.cfg" "$tmp_dir/active-L-after-roundtrip.cfg"
 expand_l_to_lk "$active_l" "$active_lk"
@@ -282,7 +282,7 @@ scaling_begin=$((scaling_end - scaling_count))
   --displacement=1.0e-4 --abs-tolerance=2.0e-5 --rel-tolerance=2.0e-4 |
   grep 'checked_coeffs='
 
-if "$bin" init-sh "$tmp_dir/bad.mtp" "${common[@]}" \
+if "$bin" init-sh "$tmp_dir/bad.sus2" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss --scaling-map=KL \
   >"$tmp_dir/bad.out" 2>"$tmp_dir/bad.err"; then
   echo "invalid scaling_map=KL unexpectedly succeeded" >&2

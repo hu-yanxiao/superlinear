@@ -11,10 +11,10 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-calc-eij-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL="$WORKDIR/l2k2_b4.mtp"
-LMP_MODEL="$WORKDIR/l2k2_b4_lmp.mtp"
-GATE_MODEL="$WORKDIR/l2k2_b4_gate.mtp"
-GATE_LMP_MODEL="$WORKDIR/l2k2_b4_gate_lmp.mtp"
+MODEL="$WORKDIR/l2k2_b4.sus2"
+LMP_MODEL="$WORKDIR/l2k2_b4_lmp.sus2"
+GATE_MODEL="$WORKDIR/l2k2_b4_gate.sus2"
+GATE_LMP_MODEL="$WORKDIR/l2k2_b4_gate_lmp.sus2"
 ONE_CFG="$WORKDIR/one.cfg"
 PARTIAL="$WORKDIR/partial.txt"
 EIJ="$WORKDIR/eij.txt"

@@ -9,7 +9,7 @@ if [[ ! -x "$bin" ]]; then
   exit 2
 fi
 
-tmp_dir=".codex_tmp/sh_init_random_seed_radial_mixing"
+tmp_dir=".local_tmp/sh_init_random_seed_radial_mixing"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 awk '{print} /^END_CFG/{exit}' example/train.cfg >"$tmp_dir/one.cfg"
@@ -38,8 +38,8 @@ run_init() {
   local seed=$2
   local mixing=$3
   local scale=$4
-  local model="$tmp_dir/${label}.mtp"
-  local inline="$tmp_dir/${label}-topology.mtp"
+  local model="$tmp_dir/${label}.sus2"
+  local inline="$tmp_dir/${label}-topology.sus2"
   local args=("${common[@]}")
   if [[ "$mixing" == 1 ]]; then
     args+=(--two-layer-gate-radial-mixing=full)
@@ -75,7 +75,7 @@ scale = float(sys.argv[2])
 number = r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?"
 
 def vectors(name):
-    text = (root / f"{name}.mtp").read_text(encoding="utf-8")
+    text = (root / f"{name}.sus2").read_text(encoding="utf-8")
     result = {}
     for match in re.finditer(r"(?ms)^\s*([A-Za-z0-9_]+)\s*=\s*\{([^}]*)\}", text):
         result[match.group(1)] = tuple(float(x) for x in re.findall(number, match.group(2)))
@@ -84,7 +84,7 @@ def vectors(name):
         text,
     )
     if not radial:
-        raise SystemExit(f"missing radial_coeffs block in {name}.mtp")
+        raise SystemExit(f"missing radial_coeffs block in {name}.sus2")
     radial_rows = re.findall(r"\{([^}]*)\}", radial.group(1))
     result["radial_coeffs"] = tuple(
         float(x)
@@ -92,7 +92,7 @@ def vectors(name):
         for x in re.findall(number, row)
     )
     if not result["radial_coeffs"]:
-        raise SystemExit(f"empty radial_coeffs block in {name}.mtp")
+        raise SystemExit(f"empty radial_coeffs block in {name}.sus2")
     return result
 
 models = {name: vectors(name) for name in ("a1", "a2", "b1", "b2", "bzero", "other")}
@@ -141,7 +141,7 @@ PY
 
 if "$bin" train "$tmp_dir/one.cfg" "${common[@]}" \
     --init-random-seed=not-a-number \
-    --trained-pot-name="$tmp_dir/invalid-seed.mtp" \
+    --trained-pot-name="$tmp_dir/invalid-seed.sus2" \
     >"$tmp_dir/invalid-seed.log" 2>&1; then
   echo "invalid random seed was accepted" >&2
   exit 1
@@ -152,7 +152,7 @@ if "$bin" train "$tmp_dir/one.cfg" "${common[@]}" \
     --two-layer-gate-radial-mixing=full \
     --two-layer-gate-radial-mixing-init-scale=-1e-4 \
     --init-random-seed="$seed" \
-    --trained-pot-name="$tmp_dir/negative-scale.mtp" \
+    --trained-pot-name="$tmp_dir/negative-scale.sus2" \
     >"$tmp_dir/negative-scale.log" 2>&1; then
   echo "negative radial mixing initialization scale was accepted" >&2
   exit 1

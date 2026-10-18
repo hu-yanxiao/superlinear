@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "mtp.h"
+#include "model_path.h"
 
 
 using namespace std;
@@ -46,19 +47,19 @@ void MTP::ReadRadialBasisOldFormat(ifstream& ifs)
 	double min_dist=0, max_dist=0;
 	ifs >> tmpstr;
 	if (tmpstr != "min_dist")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> min_dist;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	ifs >> tmpstr;
 	if (tmpstr != "max_dist")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> max_dist;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	p_RadialBasis = new RadialBasis_Shapeev(min_dist, max_dist, default_radial_basis_size);
 
@@ -80,11 +81,11 @@ void MTP::ReadRadialCoeffs(std::ifstream & ifs)
 	// Radial functions count reading block
 	ifs >> tmpstr;
 	if (tmpstr != "radial_funcs_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> radial_funcs_count;
 	if (radial_funcs_count <= 0 || radial_funcs_count > p_RadialBasis->rb_size)
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	radial_coeffs.resize(radial_funcs_count, p_RadialBasis->rb_size);
 
 	// Radial coefficients reading block
@@ -93,9 +94,9 @@ void MTP::ReadRadialCoeffs(std::ifstream & ifs)
 	{
 		ifs >> tmpstr;
 		if (tmpstr != "0-0")
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		for (int i=0; i<radial_funcs_count; i++)
 		{
 			ifs.ignore(1000, '{');
@@ -127,23 +128,23 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 	{
 		ifs >> tmpstr;
 		if (ifs.eof() || ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 	}
 
 	if (tmpstr != "alpha_moments_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_moments_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_basic_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_index_basic_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	alpha_index_basic = new int[alpha_index_basic_count][4];	// !!!
 	if (alpha_index_basic == nullptr)
@@ -151,7 +152,7 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_basic")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 	for (int i = 0; i < alpha_index_basic_count; i++)
 	{
@@ -159,7 +160,7 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 		ifs.ignore(1000, '{');
 		ifs >> alpha_index_basic[i][0] >> tmpch >> alpha_index_basic[i][1] >> tmpch >> alpha_index_basic[i][2] >> tmpch >> alpha_index_basic[i][3];
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 	}
 	ifs.ignore(1000, '\n');
 
@@ -168,15 +169,15 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 	for (int i=0; i<alpha_index_basic_count; i++)
 		max_ind = __max(max_ind, alpha_index_basic[i][0]);
 	if (max_ind+1 > radial_funcs_count)
-		ERROR(".mtp file is inconsistent. Wrong radial_funcs_count?");
+		ERROR(".sus2 file is inconsistent. Wrong radial_funcs_count?");
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_times_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_index_times_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	alpha_index_times = new int[alpha_index_times_count][4];	///!!!
 	if (alpha_index_times == nullptr)
@@ -184,7 +185,7 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_times")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 	for (int i = 0; i < alpha_index_times_count; i++)
 	{
@@ -192,18 +193,18 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 		ifs.ignore(1000, '{');
 		ifs >> alpha_index_times[i][0] >> tmpch >> alpha_index_times[i][1] >> tmpch >> alpha_index_times[i][2] >> tmpch >> alpha_index_times[i][3];
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 	}
 
 	ifs.ignore(1000, '\n');
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_scalar_moments")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_scalar_moments;
 	if (alpha_index_times_count < 0)
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	alpha_moment_mapping = new int[alpha_scalar_moments];
 	if (alpha_moment_mapping == nullptr)
@@ -211,14 +212,14 @@ void MTP::ReadMTPBasis(ifstream& ifs)
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_moment_mapping")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 	for (int i = 0; i < alpha_scalar_moments; i++)
 	{
 		char tmpch = ' ';
 		ifs >> alpha_moment_mapping[i] >> tmpch;
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 	}
 	ifs.ignore(1000, '\n');
 
@@ -652,7 +653,7 @@ void MTP::ReadRegressCoeffs(ifstream& ifs)
 
 		ifs >> tmpstr;
 		if (tmpstr != "moment_coeffs")
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 
 		ifs.ignore(1000, '{');
 		char foo = ' ';
@@ -719,7 +720,7 @@ void MTP::Load(const std::string& filename)
 
 		// species count reading block	
 		if (tmpstr != "species_count")
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		ifs.ignore(2);
 		int spec_cnt=-1;
 		ifs >> spec_cnt;
@@ -740,11 +741,11 @@ void MTP::Load(const std::string& filename)
 
 		// RadialBasis reading and initialization block
 		if (tmpstr != "radial_basis_type")
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		ifs.ignore(2);
 		ifs >> tmpstr;
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 			if (tmpstr == "RBShapeev")
 				p_RadialBasis = new RadialBasis_Shapeev(ifs);
 			else if (tmpstr == "RBChebyshev")
@@ -821,6 +822,7 @@ void MTP::Load(const std::string& filename)
 
 void MTP::Save(const std::string& filename)
 {
+	sus2::ValidateModelOutputPath(filename);
 	ofstream ofs(filename);
 
 	if (!ofs.is_open())

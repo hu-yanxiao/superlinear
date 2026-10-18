@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_double_mode"
+tmp_dir=".local_tmp/sh_two_layer_gate_double_mode"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/double_rejected.mtp"
+model="$tmp_dir/double_rejected.sus2"
 log="$tmp_dir/double_rejected.log"
 rm -f "$model" "$log"
 

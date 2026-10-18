@@ -1,12 +1,16 @@
 #include "grouped_input.h"
+#include "../model_path.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -18,7 +22,7 @@ namespace {
 typedef std::map<std::string, std::string> Values;
 struct Rule { const char* key; const char* option; const char* type; };
 const Rule rules[] = {
-    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate|coordination-legacy=legacy|legacy=legacy|static-radial=legacy"},
+    {"model.kind", "superlinear-mode", "coordination-adaptive=radial-coefficient-gate|coordination-effect=legacy|effect=legacy|coordination-legacy=legacy|legacy=legacy|static-radial=legacy"},
     {"model.name", "potential-name", "text"},
     {"model.species_count", "species-count", "positive-int"},
     {"model.l_max", "l-max", "int"},
@@ -68,7 +72,7 @@ const Rule rules[] = {
     {"training.engine", "@fixed", "native=native"},
     {"training.device", "@fixed", "cpu=cpu"},
     {"training.dtype", "@fixed", "float64=float64"},
-    {"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-legacy-v1=native-legacy-v1|native-static-v1=native-static-v1"},
+    {"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-effect-v1=native-effect-v1|native-legacy-v1=native-effect-v1|native-static-v1=native-static-v1"},
     {"loss.profile", "@fixed", "sus2-legacy=sus2-legacy"},
     {"regularization.radial_smoothness", "@fixed:0.000001", "nonnegative-real"},
     {"regularization.radial_smoothness_grid", "@fixed:128", "positive-int"},
@@ -407,7 +411,18 @@ std::vector<std::string> NormalizeArguments(int argc, char* argv[]) {
     return result;
 }
 
-bool Resolve(const std::string& command, std::vector<std::string>& args, Values& opts, std::ostream* output) {
+std::string GenerateRunToken() {
+    static std::atomic<unsigned long long> sequence(0);
+    std::random_device random;
+    std::ostringstream token;
+    token << std::hex << std::chrono::high_resolution_clock::now().time_since_epoch().count()
+          << '-' << ::getpid() << '-' << sequence.fetch_add(1)
+          << '-' << random() << random();
+    return token.str();
+}
+
+bool Resolve(const std::string& command, std::vector<std::string>& args, Values& opts, std::ostream* output,
+             const std::string& run_token) {
     if (command != "train" && command != "init-sh") return false;
     std::string config;
     const auto file = opts.find("config");
@@ -449,15 +464,15 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     const bool coordination_enabled = settings.count("model.coordination.enabled")
         ? Convert(Rule{"model.coordination.enabled", "@coordination-enabled", "bool"}, settings.at("model.coordination.enabled")) == "true"
         : kind != "static-radial";
-    const bool legacy_kind = kind == "coordination-legacy" || kind == "legacy";
-    const std::string profile = settings.count("training.profile") ? Scalar(settings.at("training.profile"))
+    const bool legacy_kind = kind == "coordination-effect" || kind == "effect" || kind == "coordination-legacy" || kind == "legacy";
+    const std::string profile = settings.count("training.profile") ? Convert(Rule{"training.profile", "@profile", "native-adaptive-v1=native-adaptive-v1|native-effect-v1=native-effect-v1|native-legacy-v1=native-effect-v1|native-static-v1=native-static-v1"}, settings.at("training.profile"))
         : ((!continuation && !coordination_enabled) ? "native-static-v1"
-            : ((!continuation && legacy_kind) ? "native-legacy-v1" : "native-adaptive-v1"));
+            : ((!continuation && legacy_kind) ? "native-effect-v1" : "native-adaptive-v1"));
     const bool static_profile = profile == "native-static-v1";
-    const bool legacy_profile = profile == "native-legacy-v1";
+    const bool legacy_profile = profile == "native-effect-v1";
     if (!continuation && (static_profile == coordination_enabled ||
         (coordination_enabled && legacy_profile != legacy_kind)))
-        Fail("training.profile must match model.kind and coordination.enabled (native-static-v1 for false, native-legacy-v1 for coordination-legacy, native-adaptive-v1 for coordination-adaptive)");
+        Fail("training.profile must match model.kind and coordination.enabled (native-static-v1 for false, native-effect-v1 for coordination-effect, native-adaptive-v1 for coordination-adaptive)");
     if (kind == "static-radial" && coordination_enabled)
         Fail("static-radial requires coordination.enabled: false");
     if (!continuation && !coordination_enabled) {
@@ -471,7 +486,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     if (!continuation && legacy_kind)
         for (const auto& value : settings)
             if (Starts(value.first, "model.response."))
-                Fail(value.first + " is unavailable for coordination-legacy; Legacy has no adaptive U projection");
+                Fail(value.first + " is unavailable for coordination-effect; this model has no adaptive U projection");
     Values paths; std::string elements;
     for (const auto& value : settings) {
         if (!KnownKey(value.first)) Fail("unknown setting '" + value.first + "'");
@@ -534,11 +549,11 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
                  {"two-layer-gate-radial-mode", "shared-radial"}})
                 Put(opts, option.first, option.second);
             if (opts.count("tensor-message-lmax") && GetInt(opts, "tensor-message-lmax", 0) != 0)
-                Fail("coordination-legacy does not support tensor messages");
+                Fail("coordination-effect does not support tensor messages");
             // Explicit zero is metadata, not an unsupported architecture flag.
             opts.erase("tensor-message-lmax");
             if (opts.count("joint-readout") && opts.at("joint-readout") != "false")
-                Fail("coordination-legacy does not support joint readout");
+                Fail("coordination-effect does not support joint readout");
             // New grouped models share the Adaptive graph defaults; old
             // positional native CLI/model defaults remain untouched.
             if (!opts.count("sh-factor-pruning")) Put(opts, "sh-factor-pruning", "same-k");
@@ -588,17 +603,48 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     if (command == "train" && (static_profile || legacy_profile)) {
         if (static_profile && opts.count("trainable-groups")) Fail("trainable_groups requires an adaptive checkpoint, not native-static-v1");
         if (opts.count("init-random-seed") && (continuation || opts.at("init-params") != "random"))
-            Fail("Legacy/static initialization.seed requires a fresh model with initialization.parameters: random");
+            Fail("Effect/static initialization.seed requires a fresh model with initialization.parameters: random");
         // Keep native static rescale/linear warmup, but no hidden 75-step
-        // pretraining or unscoped ini.mtp output outside the declared run paths.
+        // pretraining or unscoped ini.sus2 output outside the declared run paths.
         opts["skip-preinit"] = "true";
+    }
+    if (command == "train" && !paths.count("@directory")) {
+        int explicit_models = 0;
+        for (const char* key : {"inline-sh-model", "curr-pot-name", "best-pot-name", "trained-pot-name"})
+            if (opts.count(key)) ++explicit_models;
+        const int required_models = continuation ? 3 : 4;
+        if (explicit_models && explicit_models != required_models)
+            Fail("partial explicit model outputs require output.directory; otherwise specify every model output");
+        if (!explicit_models) {
+            std::string label;
+            if (continuation) {
+                const std::string checkpoint = paths.count("@model") ? paths.at("@model") : args.at(0);
+                label = checkpoint.substr(checkpoint.find_last_of("/\\") + 1);
+                const auto dot = label.find_last_of('.');
+                if (dot != std::string::npos) label.resize(dot);
+                for (char& ch : label)
+                    if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                          (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')) ch = '-';
+                label = "resume-" + (label.empty() ? "checkpoint" : label);
+            } else {
+                label = !coordination_enabled ? "static-radial" : legacy_kind ? "coordination-effect" : "coordination-adaptive";
+                label += "-l" + std::to_string(GetInt(opts, "l-max", 3))
+                    + "-k" + std::to_string(GetInt(opts, "k-max", 3));
+                if (coordination_enabled) label += "-r" + std::to_string(GetInt(opts, "two-layer-gate-k-rank", GetInt(opts, "k-max", 3)));
+                label += "-o" + std::to_string(GetInt(opts, "outer-k-rank", 0));
+            }
+            const std::string token = run_token.empty() ? GenerateRunToken() : run_token;
+            if (token.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos)
+                Fail("invalid shared run token");
+            paths["@directory"] = Absolute("runs/" + label + "-" + token, base);
+        }
     }
     const std::string dir = paths.count("@directory") ? paths["@directory"] : "";
     if (!dir.empty()) {
         if (command == "init-sh") {
-            if (!paths.count("@output")) paths["@output"] = dir + "/initial.mtp";
+            if (!paths.count("@output")) paths["@output"] = dir + "/initial.sus2";
         } else {
-            for (const auto& p : Values{{"inline-sh-model", "initial.mtp"}, {"curr-pot-name", "current.mtp"}, {"best-pot-name", "best.mtp"}, {"trained-pot-name", "final.mtp"}, {"optimizer-trace-file", "optimizer.csv"}})
+            for (const auto& p : Values{{"inline-sh-model", "initial.sus2"}, {"curr-pot-name", "current.sus2"}, {"best-pot-name", "best.sus2"}, {"trained-pot-name", "final.sus2"}, {"optimizer-trace-file", "optimizer.csv"}})
                 if ((!continuation || p.first != "inline-sh-model") && !opts.count(p.first)) opts[p.first] = dir + "/" + p.second;
         }
     }
@@ -624,13 +670,22 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         if (paths.count("@output")) args.push_back(paths["@output"]);
         if (args.size() != 1) Fail("init-sh requires output.model or one positional output path");
     }
+    // Validate model suffixes even for the read-only configuration check.
+    const auto require_model_output = [](const std::string& path) {
+        if (!sus2::HasModelOutputSuffix(path))
+            Fail("model output paths must end in .sus2: " + path);
+    };
+    if (command == "init-sh") require_model_output(args.at(0));
+    else for (const char* key : {"inline-sh-model", "curr-pot-name", "best-pot-name", "trained-pot-name"})
+        if (opts.count(key)) require_model_output(opts.at(key));
     if (output) {
         *output << "Grouped input schema=1 command=" << command << " mode=" << (continuation ? "continue" : "fresh") << '\n';
+        if (!dir.empty()) *output << "output_directory=" << Quoted(dir) << '\n';
         if (!elements.empty()) *output << "elements_in_cfg_type_order=" << elements << " (does not enable ZBL)\n";
         *output << "resolved_arguments:"; for (const std::string& arg : args) *output << " " << Quoted(arg); *output << '\n';
         for (const auto& option : opts) *output << "resolved_option --" << option.first << "=" << Quoted(option.second) << '\n';
         if (command == "train") {
-            if (legacy_profile) *output << "native-legacy-v1: ranked Legacy coordination and interaction; K/R/O share Adaptive meanings; physical radial coordinates; native vibrations weighting; no adaptive U or 75-step pretraining; iterations are BFGS steps, not epochs\n";
+            if (legacy_profile) *output << "native-effect-v1: ranked coordination effect and interaction; K/R/O share Adaptive meanings; physical radial coordinates; native vibrations weighting; no adaptive U or 75-step pretraining; iterations are BFGS steps, not epochs\n";
             else if (static_profile) *output << "native-static-v1: no coordination/response; physical radial coordinates; native vibrations weighting; radial_smoothness defaults to 1e-6; energy_readout_l2 defaults to 0; no 75-step pretraining; iterations are BFGS steps, not epochs\n";
             else *output << "native-adaptive-v1: fixed RMS; force-RMS output scale; radial_smoothness=1e-6; energy_readout_l2=1e-5; coordination_response_l2=1e-4; iterations are BFGS steps, not epochs\n";
         }
@@ -661,21 +716,22 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
 }
 
 const char* Help() {
-    return "Grouped physical input (native adaptive, Legacy or static-radial models):\n"
+    return "Grouped physical input (native adaptive, coordination-effect or static-radial models):\n"
            "  mlp-sus2 train run.yaml [--check-config]\n"
            "  mlp-sus2 train --config run.yaml [--check-config]\n"
            "  mlp-sus2 init-sh model.yaml [--check-config]\n"
            "  New CLI names: --model.kind coordination-adaptive --radial-channels K\n"
            "    --coord-channels R --interaction-channels O --neighbor-cutoff ANGSTROM\n"
            "    Compact aliases: --L L --K K --R R --O O (identical meanings in both families)\n"
-           "    --model.kind coordination-legacy: ranked Legacy, no adaptive response U\n"
+           "    --model.kind coordination-effect (or effect): ranked environment effect, no adaptive response U\n"
            "    --coord-coupling cross|diagonal --interaction-coupling cross|diagonal\n"
            "    --coord-enabled false: static radial weights, no coordination/response keys\n"
-           "    --distance-warp-sharing L|K|LK (default LK; semantic aliases remain valid)\n"
+           "    --distance-warp-sharing L|K|LK|pair (default LK; semantic aliases remain valid)\n"
            "    --response-layout full|shared-n (default full); --model.response.latent_channels d\n"
-           "  All grouped scalar keys also accept --group.key=value. Legacy flags remain valid.\n"
+           "  All grouped scalar keys also accept --group.key=value. Historical flags remain valid.\n"
            "  Conflicting values, unknown keys and unsupported native/PT-only options are errors.\n"
            "  Configuration paths are relative to the YAML directory; no output is overwritten.\n"
+           "  Training without output paths creates runs/<model-and-channels>-<unique-token>.\n"
            "  Continue with data.model; omit model.* and inherit the saved architecture.\n"
            "  See docs/grouped-native-input.md and examples/grouped-native-*.yaml.\n";
 }

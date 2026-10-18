@@ -3,13 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_upgrade"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_upgrade"
 mkdir -p "$tmp_dir"
 
-init_base="$tmp_dir/init_gate.mtp"
-base="$tmp_dir/base_gate.mtp"
-upgraded="$tmp_dir/upgraded_edge_l1_gate.mtp"
-edge_ref="$tmp_dir/edge_l1_reference.mtp"
+init_base="$tmp_dir/init_gate.sus2"
+base="$tmp_dir/base_gate.sus2"
+upgraded="$tmp_dir/upgraded_edge_l1_gate.sus2"
+edge_ref="$tmp_dir/edge_l1_reference.sus2"
 train="$tmp_dir/one.cfg"
 base_pred="$tmp_dir/base_pred.cfg"
 upgraded_pred="$tmp_dir/upgraded_pred.cfg"

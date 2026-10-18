@@ -4,12 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 bin="${MLP_BIN:-./bin/mlp-sus2}"
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_linear_components"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_linear_components"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/edge_l1_linear_components_init.mtp"
-trained_model="$tmp_dir/edge_l1_linear_components_trained.mtp"
-model="$tmp_dir/edge_l1_linear_components.mtp"
+init_model="$tmp_dir/edge_l1_linear_components_init.sus2"
+trained_model="$tmp_dir/edge_l1_linear_components_trained.sus2"
+model="$tmp_dir/edge_l1_linear_components.sus2"
 cfg="$tmp_dir/non_symmetric.cfg"
 train_log="$tmp_dir/train.log"
 trained_readout_log="$tmp_dir/trained_readout.log"

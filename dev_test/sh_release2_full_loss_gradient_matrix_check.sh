@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MLP=${MLP:-./bin/mlp-sus2}
-tmp_dir=".codex_tmp/release2_full_loss_gradient_matrix"
+tmp_dir=".local_tmp/release2_full_loss_gradient_matrix"
 log_dir="$tmp_dir/logs"
 rm -rf "$tmp_dir"
 mkdir -p "$log_dir"
@@ -59,15 +59,15 @@ common_init=(
   --write-sh-scalar-info
 )
 
-"$MLP" init-sh "$tmp_dir/nogate.mtp" "${common_init[@]}" >/dev/null
-"$MLP" init-sh "$tmp_dir/gate_body.mtp" "${common_init[@]}" --two-layer-gate >/dev/null
-"$MLP" init-sh "$tmp_dir/gate_full.mtp" "${common_init[@]}" \
+"$MLP" init-sh "$tmp_dir/nogate.sus2" "${common_init[@]}" >/dev/null
+"$MLP" init-sh "$tmp_dir/gate_body.sus2" "${common_init[@]}" --two-layer-gate >/dev/null
+"$MLP" init-sh "$tmp_dir/gate_full.sus2" "${common_init[@]}" \
   --two-layer-gate --two-layer-gate-mode=mu-scalar-full >/dev/null
-"$MLP" init-sh "$tmp_dir/gate_edge_l1.mtp" "${common_init[@]}" \
+"$MLP" init-sh "$tmp_dir/gate_edge_l1.sus2" "${common_init[@]}" \
   --two-layer-gate --two-layer-gate-mode=mu-scalar-full \
   --two-layer-gate-edge-l1 >/dev/null
 
-python3 - "$tmp_dir/gate_body.mtp" "$tmp_dir/gate_full.mtp" "$tmp_dir/gate_edge_l1.mtp" <<'PY'
+python3 - "$tmp_dir/gate_body.sus2" "$tmp_dir/gate_full.sus2" "$tmp_dir/gate_edge_l1.sus2" <<'PY'
 import re
 import sys
 
@@ -153,10 +153,10 @@ run_direction_check() {
 }
 
 models=(
-  "nogate:$tmp_dir/nogate.mtp"
-  "gate_body:$tmp_dir/gate_body.mtp"
-  "gate_full:$tmp_dir/gate_full.mtp"
-  "gate_edge_l1:$tmp_dir/gate_edge_l1.mtp"
+  "nogate:$tmp_dir/nogate.sus2"
+  "gate_body:$tmp_dir/gate_body.sus2"
+  "gate_full:$tmp_dir/gate_full.sus2"
+  "gate_edge_l1:$tmp_dir/gate_edge_l1.sus2"
 )
 
 for entry in "${models[@]}"; do
@@ -232,25 +232,25 @@ if [[ -n "${SUS2_SH_ACTIVE_BLOCK_MODEL:-}" && -n "${SUS2_SH_ACTIVE_BLOCK_CFG:-}"
     | tee "$log_dir/external_guard_block_active.log"
 fi
 
-run_direction_check "nogate_radial_smooth" "$tmp_dir/nogate.mtp" \
+run_direction_check "nogate_radial_smooth" "$tmp_dir/nogate.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --radial-smooth=1e-6 --radial-smooth-grid=64
-run_direction_check "nogate_scalar_head_l2" "$tmp_dir/nogate.mtp" \
+run_direction_check "nogate_scalar_head_l2" "$tmp_dir/nogate.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --scalar-head-l2=1e-3
-run_direction_check "gate_body_gate_scalar_l2" "$tmp_dir/gate_body.mtp" \
+run_direction_check "gate_body_gate_scalar_l2" "$tmp_dir/gate_body.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --gate-scalar-l2=1e-3
-run_direction_check "gate_body_gate_mix_l2" "$tmp_dir/gate_body.mtp" \
+run_direction_check "gate_body_gate_mix_l2" "$tmp_dir/gate_body.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --gate-mix-l2=1e-3
-run_direction_check "gate_full_gate_full_l2" "$tmp_dir/gate_full.mtp" \
+run_direction_check "gate_full_gate_full_l2" "$tmp_dir/gate_full.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --gate-full-l2=1e-3
-run_direction_check "gate_full_gate_x_l2" "$tmp_dir/gate_full.mtp" \
+run_direction_check "gate_full_gate_x_l2" "$tmp_dir/gate_full.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --gate-x-l2=1
-run_direction_check "gate_edge_l1_gate_x_l2" "$tmp_dir/gate_edge_l1.mtp" \
+run_direction_check "gate_edge_l1_gate_x_l2" "$tmp_dir/gate_edge_l1.sus2" \
   --energy-weight=0 --force-weight=0 --stress-weight=0 \
   --gate-x-l2=1
 

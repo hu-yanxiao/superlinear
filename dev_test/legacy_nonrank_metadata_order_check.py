@@ -116,13 +116,13 @@ def run_static(folder):
 def run_binary(binary, folder):
     bases = {}
     for head in ('species', 'shared'):
-        initial = folder / ('initial-' + head + '.mtp')
+        initial = folder / ('initial-' + head + '.sus2')
         subprocess.run([binary, 'init-sh', str(initial), '--species-count=2', '--l-max=2',
                         '--k-max=3', '--body-order=3', '--readout-mode=' + head, '--write-sh-scalar-info'],
                        check=True, stdout=subprocess.DEVNULL)
         # init-sh intentionally omits default parameter arrays. Materialize
         # through the native writer before injecting metadata at species_coeffs.
-        materialized = folder / ('materialized-' + head + '.mtp')
+        materialized = folder / ('materialized-' + head + '.sus2')
         subprocess.run([binary, 'roundtrip-model-dev', str(initial), str(materialized)],
                        check=True, stdout=subprocess.DEVNULL)
         original = materialized.read_text()
@@ -138,9 +138,9 @@ def run_binary(binary, folder):
         assert bases[head].count('species_coeffs =') == 1
     for index, (label, metadata, expected) in enumerate(cases()):
         stripped = bases['shared' if re.search(r'^readout_mode = shared$', metadata, re.M) else 'species']
-        path = folder / ('case' + str(index) + '.mtp')
+        path = folder / ('case' + str(index) + '.sus2')
         path.write_text(stripped.replace('species_coeffs =', metadata + 'species_coeffs =', 1))
-        result = subprocess.run([binary, 'roundtrip-model-dev', str(path), str(folder / ('saved' + str(index) + '.mtp'))],
+        result = subprocess.run([binary, 'roundtrip-model-dev', str(path), str(folder / ('saved' + str(index) + '.sus2'))],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         assert (result.returncode == 0) == expected, (label, result.stdout)
     return len(cases())

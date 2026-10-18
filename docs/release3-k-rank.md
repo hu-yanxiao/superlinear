@@ -1,5 +1,7 @@
 # Release3 K-channel contraction
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Release3 formally supports gate-free outer K-rank and ranked edge-L1 in the
 standalone executable. These two combinations are opt-in model topologies.
 They have not been ported to or validated in the LAMMPS and GPUMD interfaces,
@@ -123,7 +125,7 @@ The previous generic-rank candidate medians were 13.1178 s for rank one and
 14.0463 s for rank two. The exact direct-main and active-range-clear changes
 therefore reduced their median loop times by 12.53% and 15.53%, respectively.
 The benchmark artifacts are stored under
-`codex_release3_rank_cpu_direct_sparse_20260722_3966177` on the reference
+`archived_release3_rank_cpu_direct_sparse_20260722_3966177` on the reference
 server.
 
 For context, an initial six-repeat comparison found the fixed release2 CPU
@@ -139,7 +141,7 @@ favored release3 by 1.43%. Because the release2 repeats in that run had a
 regression is gone, not that release3 has a reproducible one-percent speedup.
 All preflight energy, pressure, and force values agreed, and all formal-run
 stderr files were empty. The final artifacts are under
-`codex_release2_vs_release3_guard_20260722_3966235` on the reference server.
+`archived_release2_vs_release3_guard_20260722_3966235` on the reference server.
 
 The compiled release2 Kokkos binary is also compatible with the same full-`K4`
 model. On one A100 with 105,456 atoms, six balanced old/new repeats measured
@@ -170,7 +172,7 @@ old/new energy controls passed, with maximum absolute difference
 profiles localized the gain to first/main clear and cache work; the main
 physical compute stages remained approximately one-to-one. The benchmark
 artifacts are under
-`codex_release3_rank_gpu_active_clear_ab_20260722/job_3966685`.
+`archived_release3_rank_gpu_active_clear_ab_20260722/job_3966685`.
 
 The final overflow-safe binary adds only a rank-off wide-cache fallback to
 that active-clear candidate. It independently passed the complete CPU/Kokkos
@@ -229,7 +231,7 @@ LAMMPS/Kokkos atom, ghost, neighbor, and pair workspace of the actual system.
 Gate-free outer rank needs only the outer contraction option:
 
 ```bash
-bin/mlp-sus2 init-sh outer_rank4.mtp \
+bin/mlp-sus2 init-sh outer_rank4.sus2 \
   --species-count=2 \
   --l-max=4 \
   --k-max=8 \
@@ -245,7 +247,7 @@ with an outer contraction while leaving the gate graph at full K, initialize
 all three topology features together:
 
 ```bash
-bin/mlp-sus2 init-sh edge_outer_rank4.mtp \
+bin/mlp-sus2 init-sh edge_outer_rank4.sus2 \
   --species-count=2 \
   --l-max=4 \
   --k-max=8 \
@@ -263,7 +265,7 @@ To contract both the gate and outer channel spaces, add the independent gate
 rank:
 
 ```bash
-bin/mlp-sus2 init-sh edge_gate4_outer4.mtp \
+bin/mlp-sus2 init-sh edge_gate4_outer4.sus2 \
   --species-count=2 \
   --l-max=4 \
   --k-max=8 \

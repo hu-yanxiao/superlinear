@@ -2,10 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_rotation"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_rotation"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/edge_l1_rotation.mtp"
+model="$tmp_dir/edge_l1_rotation.sus2"
 cfg="$tmp_dir/original.cfg"
 rot_cfg="$tmp_dir/rotated.cfg"
 pred="$tmp_dir/original_pred.cfg"

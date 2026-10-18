@@ -3,12 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_initial_linear_warmup"
+tmp_dir=".local_tmp/sh_initial_linear_warmup"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/init.mtp"
-trained_model="$tmp_dir/trained.mtp"
-continued_model="$tmp_dir/continued.mtp"
+init_model="$tmp_dir/init.sus2"
+trained_model="$tmp_dir/trained.sus2"
+continued_model="$tmp_dir/continued.sus2"
 train="$tmp_dir/one.cfg"
 init_log="$tmp_dir/init_train.log"
 continued_log="$tmp_dir/continued_train.log"

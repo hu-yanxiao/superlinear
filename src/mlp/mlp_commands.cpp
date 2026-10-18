@@ -23,7 +23,7 @@
 #include "../../src/mlp/train.h"
 #include "../../src/mlp/calc_errors.h"
 
-const char version_str[] = "SUS2-SH Release 3 (2026-07-23)";
+const char version_str[] = "SUS2.superlinear (2026-10-18)";
 
 using namespace std;
 
@@ -557,8 +557,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 
 	BEGIN_COMMAND("train",
 		"fits a SUS2 potential",
-		"mlp-sus2 train potential.mtp train_set.cfg [options]:\n"
-		"  trains potential.mtp on the training set from train_set.cfg\n"
+		"mlp-sus2 train potential.sus2 train_set.cfg [options]:\n"
+		"  trains potential.sus2 on the training set from train_set.cfg\n"
 		"mlp-sus2 train train_set.cfg --init-sh [SH model options] [training options]:\n"
 		"  builds the initial SUS2-SH model from the same options as init-sh,\n"
 		"  then runs the ordinary SUS2 training flow\n"
@@ -590,8 +590,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"    --max-iter=<int>: maximal number of iterations. Default=1000\n"
 		"    --curr-pot-name=<string>: save potential on each iteration if <string> not empty.\n"
 		"    --best-pot-name=<string>: best fully evaluated boundary/accepted model path. By default,\n"
-		"                              derive a .best.mtp path from --curr-pot-name and archive older best files.\n"
-		"    --trained-pot-name=<string>: filename for trained potential. Default=Trained.mtp_\n"
+		"                              derive a .best.sus2 path from --curr-pot-name and archive older best files.\n"
+		"    --trained-pot-name=<string>: filename for trained potential. Default=Trained.sus2\n"
                 "    --distribution-weight=<double>: weight of distribution in fitting. Default=1\n"
 		"    --std-weight=<double>: weight of joint std regularization term.\n"
 		"    --stdd-weight=<double>: weight of center-std regularization term.\n"
@@ -792,8 +792,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 
 	BEGIN_COMMAND("calc-errors",
 		"compares EFS calculated by the current potential with EFS from the database",
-		"mlp-sus2 calc-errors pot.mtp db.cfg:\n"
-		"calculates errors of \"pot.mtp\" on the database \"db.cfg\"\n"
+		"mlp-sus2 calc-errors pot.sus2 db.cfg:\n"
+		"calculates errors of \"pot.sus2\" on the database \"db.cfg\"\n"
 	) {
 
 		if (args.size() != 2) {

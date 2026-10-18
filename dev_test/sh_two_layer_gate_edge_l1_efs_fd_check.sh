@@ -2,10 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_efs_fd"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_efs_fd"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/edge_l1_efs_fd.mtp"
+model="$tmp_dir/edge_l1_efs_fd.sus2"
 cfg="$tmp_dir/random_non_symmetric.cfg"
 
 ./bin/mlp-sus2 init-sh "$model" \

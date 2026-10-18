@@ -1,5 +1,5 @@
 // Standalone server-side qualification:
-// c++ -O3 -std=c++11 -Idev_src codex_tests/rd_m0_angular_check.cpp -o rd_m0_check
+// c++ -O3 -std=c++11 -Idev_src native_tests/rd_m0_angular_check.cpp -o rd_m0_check
 // env -u SUS2_SH_ANGULAR_BACKEND ./rd_m0_check --expect-ry
 // SUS2_SH_ANGULAR_BACKEND=ry ./rd_m0_check --expect-ry
 // SUS2_SH_ANGULAR_BACKEND=ry-new ./rd_m0_check --expect-ry-new

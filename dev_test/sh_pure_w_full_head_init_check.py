@@ -8,7 +8,7 @@ For O=1,2,4,8, every control starts from the same raw incomplete seed:
   diagonal efs-head chart / full-Gram efs-head-full chart
 
 This checks causal boundaries and CLI wiring, not convergence quality. All
-evidence is retained below the worktree's ignored .codex_tmp directory. Set
+evidence is retained below the worktree's ignored .local_tmp directory. Set
 SUS2_TEST_LAUNCHER='mpirun -np 2' to repeat the whole test with two MPI ranks.
 """
 
@@ -25,9 +25,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "bin/mlp-sus2"
-CFG = ROOT / "codex_tests/pure_w_regularization.cfg"
-(ROOT / ".codex_tmp").mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix="pure-w-full-head-controls-", dir=ROOT / ".codex_tmp"))
+CFG = ROOT / "native_tests/pure_w_regularization.cfg"
+(ROOT / ".local_tmp").mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix="pure-w-full-head-controls-", dir=ROOT / ".local_tmp"))
 LAUNCHER = shlex.split(os.environ.get("SUS2_TEST_LAUNCHER", ""))
 RANKS = (1, 2, 4, 8)
 SOLVES = ("efs", "full-quadratic")
@@ -102,7 +102,7 @@ def make_seed(rank):
     directory, _ = run(
         f"O{rank}/seed",
         "init-sh",
-        "seed.mtp",
+        "seed.sus2",
         "--species-count=2",
         "--l-max=1",
         "--k-max=2",
@@ -120,7 +120,7 @@ def make_seed(rank):
         "--write-sh-scalar-info",
         "--superlinear-mode=pure-w-channelwise",
     )
-    seed = directory / "seed.mtp"
+    seed = directory / "seed.sus2"
     assert seed.is_file() and "moment_coeffs" not in seed.read_text()
     return seed
 
@@ -152,8 +152,8 @@ def train(rank, seed, solve, coordinate):
         f"--bfgs-coordinate-normalization={coordinate}",
         *solve_option,
         "--max-iter=1",
-        "--trained-pot-name=trained.mtp",
-        "--curr-pot-name=current.mtp",
+        "--trained-pot-name=trained.sus2",
+        "--curr-pot-name=current.sus2",
         "--optimizer-trace-file=trace.csv",
     )
     for forbidden in (
@@ -205,8 +205,8 @@ def train(rank, seed, solve, coordinate):
     else:
         assert quadratic_builds == 0
 
-    ini = directory / "ini.mtp"
-    trained = directory / "trained.mtp"
+    ini = directory / "ini.sus2"
+    trained = directory / "trained.sus2"
     assert ini.is_file() and trained.is_file()
     with (directory / "trace.csv").open() as stream:
         trace = list(csv.DictReader(stream))

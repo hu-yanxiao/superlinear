@@ -1,12 +1,14 @@
 # SUS2-SH Development Notes
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Current implementation target
 
 SUS2-SH is developed by copying the SUS2-MLIP developer version and replacing the angular expression with real spherical harmonics. The original training flow remains the driver: `mlp-sus2 train`, E/F/S equations, nonlinear BFGS, linear sub-solve, model save/load, and MPI execution stay in the SUS2 code path.
 
 ## Exact-body mu two-layer gate
 
-The `codex/mu-body-order-gate` branch has an experimental exact-body gate for
+The `<historical-branch>` branch has an experimental exact-body gate for
 SUS2-SH. The gate signal is per atom and per mu channel:
 
 \[
@@ -109,10 +111,10 @@ bash dev_test/sh_two_layer_gate_forward_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_force_fd_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_train_weight_check.sh ./bin/mlp-sus2
 bash dev_test/sh_two_layer_gate_loss_gradient_check.sh ./bin/mlp-sus2
-LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+LAMMPS_BIN=<historical-path> \
   bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 GATE_SITE_MODE=double \
-LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+LAMMPS_BIN=<historical-path> \
   bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 ```
 
@@ -128,7 +130,7 @@ make mlp -j2 USE_MPI=0 CXX_EXE=g++ CC_EXE=gcc FC_EXE=true \
 Remote server validation was run in:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 The MPI build must include `-DMLIP_MPI`; `USE_MPI=1` selects the MPI object
@@ -144,11 +146,11 @@ make mlp -j8 USE_MPI=1 CXX_EXE=mpicxx CC_EXE=mpicc FC_EXE=true \
 The MPI build completed and the same six gate scripts passed against:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 Additional derivative checks on the previous nonzero-gate failure model
-`codex_two_layer_gate_500x100/gate_100_p.mtp`:
+`archived_two_layer_gate_500x100/gate_100_p.sus2`:
 
 ```text
 gate force-loss gradient block: checked_coeffs=54, worst_index=-1
@@ -194,11 +196,11 @@ Result:
 Benchmark paths:
 
 ```text
-plain/pre-fix: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100
-fixed run    : /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_fix3
+plain/pre-fix: <historical-path>
+fixed run    : <historical-path>
 fixed job id : 3740179
-stable chainfix: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_blas_stable
-directed-edge cache: /work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_edgeprimitive
+stable chainfix: <historical-path>
+directed-edge cache: <historical-path>
 directed-edge job id: 3740785
 ```
 
@@ -236,8 +238,8 @@ instability.
 Server verification after the accepted cache used:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_final_chainfix
+<historical-path>
+<historical-path>
 ```
 
 Key checker results:
@@ -254,10 +256,10 @@ One-step 120-rank profile comparison on the same 500-configuration subset:
 
 | profile | path suffix | avg_us_total | avg_us_moment | avg_us_hvt_reverse | runtime_sec | status |
 |---|---|---:|---:|---:|---:|---|
-| original two-layer profile | `codex_two_layer_gate_profile_1step` | 258.569 | 169.974 | 16.3229 | 27 | reference |
-| scalar cache only | `codex_two_layer_gate_profile_1step_gatecache` | 258.053 | 170.196 | 16.0840 | 24 | measured |
-| accepted scalar+moment cache | `codex_two_layer_gate_profile_1step_momentcache` | 255.885 | 167.429 | 15.9410 | 24 | accepted |
-| rejected directional-cache trial | `codex_two_layer_gate_profile_1step_directioncache` | 257.064 | 168.175 | 16.0600 | 26 | reverted |
+| original two-layer profile | `archived_two_layer_gate_profile_1step` | 258.569 | 169.974 | 16.3229 | 27 | reference |
+| scalar cache only | `archived_two_layer_gate_profile_1step_gatecache` | 258.053 | 170.196 | 16.0840 | 24 | measured |
+| accepted scalar+moment cache | `archived_two_layer_gate_profile_1step_momentcache` | 255.885 | 167.429 | 15.9410 | 24 | accepted |
+| rejected directional-cache trial | `archived_two_layer_gate_profile_1step_directioncache` | 257.064 | 168.175 | 16.0600 | 26 | reverted |
 
 Two-layer-specific profile timers were added with
 `SUS2_SH_TWO_LAYER_PROFILE=1` and `SUS2_SH_TWO_LAYER_PROFILE_INTERVAL=<n>`.
@@ -265,7 +267,7 @@ They report only the new gate paths: gate preparation, gated final SH
 accumulation, final site-energy adjoints, gate scalar directional derivatives,
 mixed final-layer tangent gradients, gate-weight gradients, scalar-parameter
 gate-chain gradients, and the two-layer linear-component correction. On
-`codex_two_layer_gate_profile_1step_finalcache`, the gradient-side profile was:
+`archived_two_layer_gate_profile_1step_finalcache`, the gradient-side profile was:
 
 ```text
 avg_us_total=242634
@@ -282,7 +284,7 @@ An edge-primitive cache inside the two-layer-only final tangent gradient reuses
 per-neighbor SH values, radial-basis values, and contracted radial
 value/sigma/shift derivatives between the tangent seed pass and the coefficient
 gradient pass. It does not change the generic single-layer SH accumulator. On
-`codex_two_layer_gate_profile_1step_edgecache`, the same 1-step profile became:
+`archived_two_layer_gate_profile_1step_edgecache`, the same 1-step profile became:
 
 ```text
 avg_us_total=225239
@@ -306,7 +308,7 @@ The gate scalar directional derivative path was then fused so it computes
 first-layer gate moment values and their directional tangent in one required
 neighbor loop, followed by a single required-product pass that propagates both
 the value and tangent. This removes the separate value-only gate pass from the
-directional stage. On `codex_two_layer_gate_profile_1step_dirfuse`, the same
+directional stage. On `archived_two_layer_gate_profile_1step_dirfuse`, the same
 profile became:
 
 ```text
@@ -337,7 +339,7 @@ scalar-parameter pass scales this vector by `energy_gate_adjoint` and skips the
 duplicated neighbor derivative pass plus product tangent propagation; the final
 edge-level coefficient-gradient pass is still evaluated directly. This keeps the
 chain rule exact while avoiding reuse of an insufficient scalar-only tangent. On
-`codex_two_layer_gate_profile_1step_tangentcache`, the same profile became:
+`archived_two_layer_gate_profile_1step_tangentcache`, the same profile became:
 
 ```text
 avg_us_total=185140
@@ -378,7 +380,7 @@ runs unchanged. It now feeds gate preparation, final gated SH accumulation,
 final energy adjoints, gate directional derivatives, final-layer tangent
 gradients, scalar-parameter gate-chain gradients, and the two-layer
 force-chain correction. On
-`codex_two_layer_gate_profile_1step_edgeprimitive`, the same 1-step profile
+`archived_two_layer_gate_profile_1step_edgeprimitive`, the same 1-step profile
 became:
 
 ```text
@@ -402,7 +404,7 @@ two-layer-only optimizations reduce the gradient-side total by about 55%
 ## Residual staged two-layer mode
 
 This is a historical note for the previous direct-scale gate experiment. The
-`codex/mu-body-order-gate` branch rejects `--two-layer-residual` together with
+`<historical-branch>` branch rejects `--two-layer-residual` together with
 `--two-layer-gate`, because that mode depended on legacy `two_layer_gate_bias`
 and direct-scale metadata that are not part of the exact-body mu gate.
 
@@ -493,7 +495,7 @@ Implementation notes:
 Server validation used:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 Build command:
@@ -540,7 +542,7 @@ The 500-configuration, 100-step comparison used the first 500 structures from
 plain reference run is:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_residual_staged_500x100_stagecompact
+<historical-path>
 plain_100.log
 ```
 
@@ -564,7 +566,7 @@ are from the formal block's final step.
 The residual staged run is:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_residual_staged_500x100_stagefast
+<historical-path>
 job id: 3741968
 residual_100.log
 ```
@@ -598,7 +600,7 @@ TrainLinear[residual stage B E1 residual solve] n=1004 full_n=2012
 There are no `rescale bracket`, `rescale fine trial`, or `bfgs refresh step 0`
 linear solves inside A/B, and no `TrainLinear` after stage C starts. The older
 correctness-first residual run under
-`codex_residual_staged_500x100_readoutfix` took `runtime_sec=995` with force
+`archived_residual_staged_500x100_readoutfix` took `runtime_sec=995` with force
 MAE `281.395 meV/A`; the current staged-speed run is therefore about `3.18x`
 faster and has lower force error for this short 100-step comparison. The plain
 SH reference remains more accurate at 100 formal steps. Do not use the `316s`
@@ -624,7 +626,7 @@ Two-layer-only optimization notes from the read-only performance audit:
 
 ## Training model
 
-The training `.mtp` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.
+The training `.sus2` keeps the ordinary SUS2 radial/scaling/linear parameters and adds `potential_tag = SUS2-SH`. For SH models, `alpha_index_basic` stores `{k, l, m}`. Internally this is converted to `mu = k * (l_max + 1) + l`, so the radial channel is still compatible with the SUS2 coefficient layout.
 
 ```text
 B[k,l,m] = sum_j R_{k,l}(r_ij) Y_lm_real(rhat_ij)
@@ -674,19 +676,19 @@ Current SH support is implemented for `l <= 4`. The l=4 implementation uses the 
 Server project:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 Training path:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/run_cuzr_l3k3_b5_l3322
+<historical-path>
 ```
 
 Model initialization:
 
 ```bash
-../bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.mtp \
+../bin/mlp-sus2 init-sh untrained_sus2sh_l3k3_b5_l3322.sus2 \
   --species-count=2 \
   --l-max=3 \
   --k-max=3 \
@@ -726,7 +728,7 @@ starting model for continued training; a missing file is created from the
 
 ```bash
 ../bin/mlp-sus2 train train.cfg --init-sh \
-  --inline-sh-model=untrained_sus2sh_l3k3_b5_l3322.mtp \
+  --inline-sh-model=untrained_sus2sh_l3k3_b5_l3322.sus2 \
   --species-count=2 \
   --l-max=3 \
   --k-max=3 \
@@ -741,16 +743,16 @@ starting model for continued training; a missing file is created from the
   --do-samp \
   --do-lin \
   --do-lin-rescale \
-  --curr-pot-name=current.mtp \
-  --trained-pot-name=p.mtp
+  --curr-pot-name=current.sus2 \
+  --trained-pot-name=p.sus2
 ```
 
-The corrected generated model has 48 basic SH channels, 1416 product graph records, 525 total moment nodes, and 261 scalar basis functions. The previous bad graph with 317 scalar basis functions was archived as `untrained_sus2sh_l3k3_b5_l3322.bad-shgraph.mtp`; it kept zero intermediate tensors such as nodes 171/172/173 and produced structural zero descriptor columns.
+The corrected generated model has 48 basic SH channels, 1416 product graph records, 525 total moment nodes, and 261 scalar basis functions. The previous bad graph with 317 scalar basis functions was archived as `untrained_sus2sh_l3k3_b5_l3322.bad-shgraph.sus2`; it kept zero intermediate tensors such as nodes 171/172/173 and produced structural zero descriptor columns.
 
 The l=4 probe model was generated with:
 
 ```bash
-../bin/mlp-sus2 init-sh untrained_sus2sh_l4k3_b5_l4422.mtp \
+../bin/mlp-sus2 init-sh untrained_sus2sh_l4k3_b5_l4422.sus2 \
   --species-count=2 \
   --l-max=4 \
   --k-max=3 \
@@ -777,8 +779,8 @@ The active run uses 160 MPI ranks across four 40-core nodes, uses Hydra with the
 
 ```bash
 mpiexec.hydra -machinefile $LSB_DJOB_HOSTFILE -np $NP \
-  /work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2 train \
-  untrained_sus2sh_l3k3_b5_l3322.mtp \
+  <historical-path> train \
+  untrained_sus2sh_l3k3_b5_l3322.sus2 \
   /work/phy-weigw/hyx/cu-zr/sus2-sh/train.cfg \
   --energy-weight=1 \
   --force-weight=0.01 \
@@ -792,8 +794,8 @@ mpiexec.hydra -machinefile $LSB_DJOB_HOSTFILE -np $NP \
   --do-lin-steps=5000 \
   --do-lin-freq=50 \
   --max-iter=10000 \
-  --curr-pot-name=current.mtp \
-  --trained-pot-name=p.mtp
+  --curr-pot-name=current.sus2 \
+  --trained-pot-name=p.sus2
 ```
 
 The first 40-rank test job was stopped and its logs were preserved under `killed_3657712/`. The bad-graph 160-rank job `3657721` was stopped and archived under `killed_3657721_bad_sh_graph/`. The corrected 261-scalar job is `3657797`.
@@ -815,21 +817,21 @@ The current safe optimizations keep the SH mathematical basis, CG coupling graph
 Validation against the pre-optimization universal binary:
 
 - `smoke5.cfg` `calc-efs`: exact file match.
-- `smoke5.cfg` one-step training: identical `current.mtp`.
+- `smoke5.cfg` one-step training: identical `current.sus2`.
 - First 1000 Cu-Zr training structures `calc-efs`: numeric token max absolute difference `0.0`; text diff only showed `+0.00000/-0.00000` stress formatting.
-- First 1000 Cu-Zr training structures one-step training: same metrics; `current.mtp` max numeric token difference `1.735e-18`.
+- First 1000 Cu-Zr training structures one-step training: same metrics; `current.sus2` max numeric token difference `1.735e-18`.
 - First 1000 Cu-Zr training structures timing on one rank: `calc-efs` improved from about `9.05 s` to `7.01 s`; one-step training improved from about `67.07 s` to `57.38 s`.
-- Stress-gating validation with `--stress-weight=0`: `smoke5.cfg` one-step linear path produced identical `current.mtp`. A 300-structure l=4 linear solve reduced elapsed time from about `136.3 s` to `126.3 s`.
-- Stress-active validation with synthetic `PlusStress` and `--stress-weight=0.01`: `current.mtp` matched the pre-gating binary exactly.
+- Stress-gating validation with `--stress-weight=0`: `smoke5.cfg` one-step linear path produced identical `current.sus2`. A 300-structure l=4 linear solve reduced elapsed time from about `136.3 s` to `126.3 s`.
+- Stress-active validation with synthetic `PlusStress` and `--stress-weight=0.01`: `current.sus2` matched the pre-gating binary exactly.
 - l=4 regression: `calc-efs` and one-step training completed on `smoke5.cfg`; finite-difference force validation on six atom/direction components gave max absolute error about `5.0e-7 eV/A`.
 - Direct-real SH formula check: independent pointwise comparison against the previous complex evaluator found l=4 value differences around `4.4e-16` and derivative differences around `5.3e-15`.
 - Direct-real runtime regression against the complex-evaluator backup: l3/l4 `calc-efs` matched exactly; deterministic one-step BFGS from complete models matched exactly for l3 and to about `1.7e-11` max numeric token difference for l4.
 - Direct-real final finite-difference l=4 check: six force components retained max absolute error about `5.0e-7 eV/A`.
 - Direct-real `calc-efs` timing on the first 1000 Cu-Zr structures, one rank, four alternating old/new samples: complex-evaluator mean `6.82 s`, direct-real mean `6.37 s` (about `1.07x`). The login-node timing is noisy, so this should be treated as indicative rather than a hard benchmark.
 - Direct-real one-step BFGS timing on 300 structures from a complete model did not improve in the short run (`26.0 s` old vs `26.8 s` new), while the trained parameter files matched to `2.6e-18`. This suggests the current training bottleneck is dominated by coefficient-gradient assembly and linear algebra around the SH values, not by complex-vs-real SH evaluation alone.
-- SH neighbor-cache validation against `bin/mlp-sus2.before-sh-neighbor-cache-20260513`: l3 `smoke5.cfg` with fixed `ini.mtp --skip-preinit` matched exactly for `calc-efs`, `current.mtp`, and `p.mtp`.
-- SH neighbor-cache l4 validation with the l4/body-l-max `4,4,2,2` model matched exactly for `calc-efs`, `current.mtp`, and `p.mtp`.
-- SH neighbor-cache 300-structure BFGS timing from fixed `ini.mtp --skip-preinit`: old runs `26.23 s`, `24.90 s`; new runs `21.19 s`, `20.70 s`; mean speedup about `1.22x`. The resulting `current.mtp` numeric max difference was `1.735e-18`.
+- SH neighbor-cache validation against `bin/mlp-sus2.before-sh-neighbor-cache-20260513`: l3 `smoke5.cfg` with fixed `ini.sus2 --skip-preinit` matched exactly for `calc-efs`, `current.sus2`, and `p.sus2`.
+- SH neighbor-cache l4 validation with the l4/body-l-max `4,4,2,2` model matched exactly for `calc-efs`, `current.sus2`, and `p.sus2`.
+- SH neighbor-cache 300-structure BFGS timing from fixed `ini.sus2 --skip-preinit`: old runs `26.23 s`, `24.90 s`; new runs `21.19 s`, `20.70 s`; mean speedup about `1.22x`. The resulting `current.sus2` numeric max difference was `1.735e-18`.
 
 Rejected or not-yet-retained optimization attempts:
 

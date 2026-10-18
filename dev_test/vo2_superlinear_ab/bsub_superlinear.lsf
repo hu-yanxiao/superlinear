@@ -18,8 +18,8 @@ export SUS2_SH_SITE_DER_CACHE=1
 export SUS2_SH_ACCUM_SKIP_SITE_DERS=1
 export SUS2_SH_PRODUCT_HVT_REVERSE=1
 
-BIN=/work/phy-weigw/20260321_Test/superlinear-work-codex/bin/mlp-sus2
-START_MODEL=../seed/superlinear_zero.mtp
+BIN=${SUPERLINEAR_BIN:?set SUPERLINEAR_BIN to the native mlp-sus2 executable}
+START_MODEL=../seed/superlinear_zero.sus2
 TRAIN_CFG=../seed/train.cfg
 LOG=train.log
 
@@ -42,9 +42,9 @@ cmd=(
   --std-weight=0.100
   --do-samp
   --max-iter=100
-  --curr-pot-name=current.mtp
-  --best-pot-name=current.best.mtp
-  --trained-pot-name=trained.mtp
+  --curr-pot-name=current.sus2
+  --best-pot-name=current.best.sus2
+  --trained-pot-name=trained.sus2
   --optimizer=bfgs
   --bfgs-line-search=wolfe
 )
@@ -52,7 +52,7 @@ cmd=(
 {
   date -Is
   echo "variant=superlinear_B"
-  echo "source_model=superlinear_zero.mtp"
+  echo "source_model=superlinear_zero.sus2"
   echo "max_iter=100"
   sha256sum "$BIN" "$START_MODEL" "$TRAIN_CFG"
   printf 'command='

@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 patched_bin=${PATCHED_BIN:-./bin/mlp-sus2}
 old_bin=${OLD_BIN:-}
-tmp_dir=".codex_tmp/sh_superlinear_radial_mixing_product_graph_fd"
+tmp_dir=".local_tmp/sh_superlinear_radial_mixing_product_graph_fd"
 
 if [[ ! -x "$patched_bin" ]]; then
   echo "missing patched binary: $patched_bin" >&2
@@ -20,8 +20,8 @@ rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
 cfg="$tmp_dir/asym8.cfg"
-zero_model="$tmp_dir/full-radial-zero.mtp"
-active_model="$tmp_dir/full-radial-active.mtp"
+zero_model="$tmp_dir/full-radial-zero.sus2"
+active_model="$tmp_dir/full-radial-active.sus2"
 zero_out="$tmp_dir/full-radial-zero.efs.cfg"
 active_out="$tmp_dir/full-radial-active.efs.cfg"
 

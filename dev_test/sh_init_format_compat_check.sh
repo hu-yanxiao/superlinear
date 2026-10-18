@@ -22,7 +22,7 @@ COMMON_OPTS=(
   --init-params=same
 )
 
-LEGACY_MODEL="$WORKDIR/legacy_plain.mtp"
+LEGACY_MODEL="$WORKDIR/legacy_plain.sus2"
 "$BIN" init-sh "$LEGACY_MODEL" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=legacy >/dev/null
 grep -q "alpha_scalar_moments = 1004" "$LEGACY_MODEL"
@@ -32,8 +32,8 @@ if grep -q "sh_scalar_info" "$LEGACY_MODEL"; then
   exit 1
 fi
 
-DEFAULT_MODEL="$WORKDIR/default_qtotal_plain.mtp"
-EXPLICIT_TOTAL_MODEL="$WORKDIR/explicit_qtotal_plain.mtp"
+DEFAULT_MODEL="$WORKDIR/default_qtotal_plain.sus2"
+EXPLICIT_TOTAL_MODEL="$WORKDIR/explicit_qtotal_plain.sus2"
 "$BIN" init-sh "$DEFAULT_MODEL" "${COMMON_OPTS[@]}" >/dev/null
 "$BIN" init-sh "$EXPLICIT_TOTAL_MODEL" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total >/dev/null
@@ -41,7 +41,7 @@ grep -q "alpha_scalar_moments = 2059" "$DEFAULT_MODEL"
 grep -q "alpha_moments_count = 3313" "$DEFAULT_MODEL"
 cmp "$DEFAULT_MODEL" "$EXPLICIT_TOTAL_MODEL"
 
-TOTAL_MODEL="$WORKDIR/qtotal_metadata.mtp"
+TOTAL_MODEL="$WORKDIR/qtotal_metadata.sus2"
 "$BIN" init-sh "$TOTAL_MODEL" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --write-sh-scalar-info >/dev/null

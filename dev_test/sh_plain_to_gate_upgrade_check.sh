@@ -3,17 +3,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_plain_to_gate_upgrade"
+tmp_dir=".local_tmp/sh_plain_to_gate_upgrade"
 mkdir -p "$tmp_dir"
 
-plain_init="$tmp_dir/plain_init.mtp"
+plain_init="$tmp_dir/plain_init.sus2"
 train="$tmp_dir/one.cfg"
-upgraded="$tmp_dir/upgraded_shared_gate.mtp"
+upgraded="$tmp_dir/upgraded_shared_gate.sus2"
 upgrade_log="$tmp_dir/upgrade_train.log"
-plain_metadata="$tmp_dir/plain_metadata.mtp"
-upgraded_mixed="$tmp_dir/upgraded_mixed_gate.mtp"
+plain_metadata="$tmp_dir/plain_metadata.sus2"
+upgraded_mixed="$tmp_dir/upgraded_mixed_gate.sus2"
 mixed_upgrade_log="$tmp_dir/mixed_upgrade_train.log"
-upgraded_inherit="$tmp_dir/upgraded_inherited_gate.mtp"
+upgraded_inherit="$tmp_dir/upgraded_inherited_gate.sus2"
 inherit_upgrade_log="$tmp_dir/inherit_upgrade_train.log"
 rm -f "$plain_init" "$train" "$upgraded" "$upgrade_log" \
   "$plain_metadata" "$upgraded_mixed" "$mixed_upgrade_log" \

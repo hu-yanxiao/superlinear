@@ -25,7 +25,7 @@ export SUS2_SH_TWO_LAYER_PROFILE=1
 export SUS2_SH_TWO_LAYER_PROFILE_INTERVAL=20
 
 RELEASE3_BIN=/work/phy-weigw/app/release3/mlp-sus2
-SUPERLINEAR_BIN=/work/phy-weigw/20260321_Test/superlinear-work-codex/bin/mlp-sus2
+SUPERLINEAR_BIN=${SUPERLINEAR_BIN:?set SUPERLINEAR_BIN to the native mlp-sus2 executable}
 TRAIN_CFG=/work/phy-weigw/hyx/vo2/9.1/train.cfg
 LIVE_VO2_DIR=/work/phy-weigw/hyx/vo2/9.1
 PROFILE_ITERS=${PROFILE_ITERS:-3}
@@ -45,7 +45,7 @@ do
     exit 2
   fi
 done
-if [[ ! -s seed/A.raw.mtp || ! -s seed/B0.raw.mtp || ! -s seed/B.raw.mtp ]]; then
+if [[ ! -s seed/A.raw.sus2 || ! -s seed/B0.raw.sus2 || ! -s seed/B.raw.sus2 ]]; then
   echo "fresh seed artifacts are missing" >&2
   exit 2
 fi
@@ -88,9 +88,9 @@ run_variant() {
     mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$NP"
     "$binary" train "$model" "$TRAIN_CFG"
     "${COMMON[@]}"
-    --curr-pot-name="$run_dir/current.mtp"
-    --best-pot-name="$run_dir/current.best.mtp"
-    --trained-pot-name="$run_dir/trained.mtp"
+    --curr-pot-name="$run_dir/current.sus2"
+    --best-pot-name="$run_dir/current.best.sus2"
+    --trained-pot-name="$run_dir/trained.sus2"
     --bfgs-trace-file="$run_dir/trace.csv"
   )
   {
@@ -121,14 +121,14 @@ run_variant() {
   fi
 }
 
-run_variant round1/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round1/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round1/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
-run_variant round1/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
+run_variant round1/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.sus2"
+run_variant round1/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.sus2"
+run_variant round1/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.sus2"
+run_variant round1/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.sus2"
 
-run_variant round2/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.mtp"
-run_variant round2/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.mtp"
-run_variant round2/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.mtp"
-run_variant round2/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.mtp"
+run_variant round2/superlinear_mix superlinear_mix "$SUPERLINEAR_BIN" "$PWD/seed/B.raw.sus2"
+run_variant round2/superlinear_zero superlinear_zero "$SUPERLINEAR_BIN" "$PWD/seed/B0.raw.sus2"
+run_variant round2/superlinear_off superlinear_off "$SUPERLINEAR_BIN" "$PWD/seed/A.raw.sus2"
+run_variant round2/release3 release3 "$RELEASE3_BIN" "$PWD/seed/A.raw.sus2"
 
 exit "$overall_rc"

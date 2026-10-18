@@ -3,12 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_lmp_table"
+tmp_dir=".local_tmp/sh_two_layer_gate_lmp_table"
 mkdir -p "$tmp_dir"
 
-base_model="$tmp_dir/gated_base.mtp"
-nonzero_model="$tmp_dir/gated_nonzero.mtp"
-lmp_model="$tmp_dir/gated_lmp.mtp"
+base_model="$tmp_dir/gated_base.sus2"
+nonzero_model="$tmp_dir/gated_nonzero.sus2"
+lmp_model="$tmp_dir/gated_lmp.sus2"
 train="$tmp_dir/one.cfg"
 base_pred="$tmp_dir/base_pred.cfg"
 lmp_pred="$tmp_dir/lmp_pred.cfg"

@@ -181,8 +181,8 @@ class NativeCheck:
     def check(self):
         self.cfg = self.out / "asymmetric.cfg"
         write_fixture(self.cfg)
-        shared_top = self.out / "shared.topology.mtp"
-        species_top = self.out / "species.topology.mtp"
+        shared_top = self.out / "shared.topology.sus2"
+        species_top = self.out / "species.topology.sus2"
         for mode, path in (("shared", shared_top), ("species", species_top)):
             self.run(f"init-{mode}", "init-sh", path, *topology_args(readout=mode))
         a, b = shared_top.read_text(), species_top.read_text()
@@ -191,7 +191,7 @@ class NativeCheck:
         for key in GRAPH_FIELDS:
             assert assignment(a, key) == assignment(b, key), key
         self.record("raw_graph_unchanged", {"fields": list(GRAPH_FIELDS)})
-        fresh = self.out/"fresh-zeroiter.mtp"
+        fresh = self.out/"fresh-zeroiter.sus2"
         profile_args = ["--max-iter=0", "--init-params=same", "--init-random-seed=20260910",
                         "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
                         "--std-weight=0", "--stdd-weight=0", "--readout-mode=species"]
@@ -199,7 +199,7 @@ class NativeCheck:
                              f"--trained-pot-name={fresh}", *profile_args)
         assert "[adaptive-pytorch-profile] fresh=1" in fresh_log
         assert assignment(fresh.read_text(),"readout_mode")=="species"
-        resumed = self.out/"resumed-zeroiter.mtp"
+        resumed = self.out/"resumed-zeroiter.sus2"
         resume_log = self.run("resume-profile", "train", fresh, self.cfg,
                               f"--trained-pot-name={resumed}", *profile_args)
         assert "[adaptive-pytorch-profile] fresh=0" in resume_log
@@ -208,14 +208,14 @@ class NativeCheck:
         # Resume the unmodified fresh checkpoint. Two accepted points (steps
         # 0 and 1) include an actual update, rather than merely the initial
         # evaluated point. Keep the normal production normalization/profile.
-        gauge_trained=self.out/"gauge-two-step.mtp"
+        gauge_trained=self.out/"gauge-two-step.sus2"
         gauge_trace=self.out/"gauge-two-step.csv"
         gauge_log=self.run("gauge-two-step","train",fresh,self.cfg,
                           *[a for a in profile_args if not a.startswith("--max-iter=")],
                           "--max-iter=2","--optimizer=bfgs","--bfgs-line-search=wolfe",
                           "--optimizer-conv-tol=0",f"--trained-pot-name={gauge_trained}",
-                          f"--curr-pot-name={self.out/'gauge-current.mtp'}",
-                          f"--best-pot-name={self.out/'gauge-best.mtp'}",
+                          f"--curr-pot-name={self.out/'gauge-current.sus2'}",
+                          f"--best-pot-name={self.out/'gauge-best.sus2'}",
                           f"--bfgs-trace-file={gauge_trace}",timeout=300)
         assert "[adaptive-pytorch-profile] fresh=0" in gauge_log
         with gauge_trace.open(newline="") as stream:
@@ -237,16 +237,16 @@ class NativeCheck:
         self.calc("gauge-trained-efs",gauge_trained)
         self.record("native-trained-gauge",{"accepted_points":2,"steps":[0,1],"h_exactly_unchanged":True,
                                             "active_max_abs_changes":changed,"timeout_seconds":300})
-        shared = self.out / "shared.mtp"
+        shared = self.out / "shared.sus2"
         self.run("materialize", "roundtrip-model-dev", shared_top, shared)
         text = asymmetric_shared_text(shared.read_text())
         shared.write_text(text)
         q = int(assignment(text, "alpha_scalar_moments"))
         converted = put(put(text, "version", "1.3.0"), "readout_mode", "species")
         converted = put_numbers(converted, "moment_coeffs", (np.array([-.7, 1.3])[:, None] * numbers(text, "moment_coeffs")[None, :]).ravel())
-        species = self.out / "species.converted.mtp"
+        species = self.out / "species.converted.sus2"
         species.write_text(converted)
-        command_converted = self.out / "species.native-converted.mtp"
+        command_converted = self.out / "species.native-converted.sus2"
         self.run("native-conversion", "convert-adaptive-readout-dev", shared, command_converted, "--readout-mode=species")
         conversion_text = command_converted.read_text()
         for key in ("shift_coeffs", "scal_coeffs", "species_coeffs", "adaptive_radial_amplitudes",
@@ -267,23 +267,23 @@ class NativeCheck:
         np.testing.assert_allclose(shared_efs,self.calc("native-converted-efs",command_converted),atol=2e-10,rtol=2e-10)
         assert np.linalg.norm(species_efs[1:10]) > 1e-8, "vacuous force fixture"
         self.record("shared_to_species", {"Q": q, "max_abs": float(abs(shared_efs-species_efs).max())})
-        zero_shared, zero_species = self.out/"zero-h.shared.mtp", self.out/"zero-h.species.mtp"
+        zero_shared, zero_species = self.out/"zero-h.shared.sus2", self.out/"zero-h.species.sus2"
         zero_shared.write_text(put_numbers(text, "species_coeffs", [0., 1.3]))
         zero_head = numbers(converted, "moment_coeffs").reshape(2, q).copy(); zero_head[0] = 0.
         zero_species.write_text(put_numbers(put_numbers(converted, "species_coeffs", [0., 1.3]), "moment_coeffs", zero_head.ravel()))
         np.testing.assert_allclose(self.calc("zero-shared", zero_shared), self.calc("zero-species", zero_species), atol=2e-10, rtol=2e-10)
-        zero_native = self.out/"zero-h.native-converted.mtp"
+        zero_native = self.out/"zero-h.native-converted.sus2"
         self.run("zero-h-native-conversion","convert-adaptive-readout-dev",zero_shared,zero_native,"--readout-mode=species")
         np.testing.assert_allclose(self.calc("zero-native",zero_native),self.calc("zero-species-check",zero_species),atol=2e-10,rtol=2e-10)
         self.record("zero_h_conversion", {"division_by_h": False})
         # Free rows not restricted to the shared rank-one manifold.
-        free = self.out / "species.free.mtp"
+        free = self.out / "species.free.sus2"
         head = numbers(converted, "moment_coeffs").reshape(2, q)
         head[1] += .06 * np.cos(np.arange(q) * .37 + .1)
         free.write_text(put_numbers(converted, "moment_coeffs", head.ravel()))
         base = self.calc("free-efs", free)
         for z, count in enumerate((2, 1)):
-            bias_model = self.out / f"bias{z}.mtp"
+            bias_model = self.out / f"bias{z}.sus2"
             biases = np.array([-.7, 1.3]); biases[z] += .17
             bias_model.write_text(put_numbers(free.read_text(), "species_coeffs", biases))
             changed = self.calc(f"bias{z}-efs", bias_model)
@@ -319,24 +319,24 @@ class NativeCheck:
             "invalid-mode": put(converted, "readout_mode", "banana"),
         }
         for name, content in bad.items():
-            path = self.out / f"bad-{name}.mtp"; path.write_text(content)
-            self.run(name, "roundtrip-model-dev", path, self.out/f"bad-{name}.out.mtp", fail=True)
-        self.run("nonadaptive-species", "init-sh", self.out/"nonadaptive.mtp",
+            path = self.out / f"bad-{name}.sus2"; path.write_text(content)
+            self.run(name, "roundtrip-model-dev", path, self.out/f"bad-{name}.out.sus2", fail=True)
+        self.run("nonadaptive-species", "init-sh", self.out/"nonadaptive.sus2",
                  "--species-count=2", "--l-max=1", "--k-max=2", "--body-order=3",
                  "--readout-mode=species", fail=True)
-        default = self.out / "default-shared.mtp"
+        default = self.out / "default-shared.sus2"
         default.write_text(re.sub(r"(?m)^readout_mode[^\n]*\n?", "", text))
         np.testing.assert_allclose(self.calc("default-shared", default), shared_efs, atol=2e-10, rtol=2e-10)
         if self.old_cpp:
             np.testing.assert_allclose(self.calc("old-default-shared", default, binary=self.old_cpp), shared_efs,
                                        atol=2e-10, rtol=2e-10)
-            self.run("old-reject-species", "roundtrip-model-dev", species, self.out/"old-species.out.mtp",
+            self.run("old-reject-species", "roundtrip-model-dev", species, self.out/"old-species.out.sus2",
                      binary=self.old_cpp, fail=True)
-            mono_top = self.out/"mono-species.topology.mtp"
+            mono_top = self.out/"mono-species.topology.sus2"
             self.run("mono-init", "init-sh", mono_top, *topology_args(species_count=1, readout="species"))
-            mono = self.out/"mono-species.mtp"
+            mono = self.out/"mono-species.sus2"
             self.run("mono-materialize", "roundtrip-model-dev", mono_top, mono)
-            self.run("old-reject-mono-species", "roundtrip-model-dev", mono, self.out/"old-mono.out.mtp",
+            self.run("old-reject-mono-species", "roundtrip-model-dev", mono, self.out/"old-mono.out.sus2",
                      binary=self.old_cpp, fail=True)
         self.record("schema_rejection", {"cases": list(bad), "old_binary_checked": bool(self.old_cpp)})
         self.check_pruning_combinations(shared, free, layout)
@@ -353,23 +353,23 @@ class NativeCheck:
             "gate_same_outer_same": {
                 "gate_pruning": "same-k", "outer_pruning": "same-k",
                 "shared": str(same_shared), "species": str(same_free),
-                "converted": str(self.out/"species.native-converted.mtp"),
+                "converted": str(self.out/"species.native-converted.sus2"),
                 "layout": same_layout,
                 "directions": {name:self.report["checks"][name+"_mixed_fd"] for name in direction_names},
             }
         }
         for gate, outer in (("same-k", "q-total"), ("q-total", "same-k"), ("q-total", "q-total")):
             label=f"gate_{'same' if gate=='same-k' else 'cross'}_outer_{'same' if outer=='same-k' else 'cross'}"
-            paths={mode:self.out/f"{label}.{mode}.topology.mtp" for mode in ("shared", "species")}
+            paths={mode:self.out/f"{label}.{mode}.topology.sus2" for mode in ("shared", "species")}
             for mode,path in paths.items():
                 self.run(label+"-init-"+mode,"init-sh",path,
                          *topology_args(readout=mode,gate_pruning=gate,outer_pruning=outer))
             for key in GRAPH_FIELDS:
                 assert assignment(paths["shared"].read_text(),key)==assignment(paths["species"].read_text(),key),(label,key)
-            shared=self.out/f"{label}.shared.mtp"
+            shared=self.out/f"{label}.shared.sus2"
             self.run(label+"-materialize","roundtrip-model-dev",paths["shared"],shared)
             shared.write_text(asymmetric_shared_text(shared.read_text()))
-            converted=self.out/f"{label}.converted.mtp"
+            converted=self.out/f"{label}.converted.sus2"
             self.run(label+"-convert","convert-adaptive-readout-dev",shared,converted,"--readout-mode=species")
             shared_values=self.calc(label+"-shared",shared)
             converted_values=self.calc(label+"-converted",converted)
@@ -378,7 +378,7 @@ class NativeCheck:
             expected_head=np.array([-.7,1.3])[:,None]*numbers(shared.read_text(),"moment_coeffs")[None,:]
             np.testing.assert_allclose(numbers(text,"moment_coeffs").reshape(2,q),expected_head,atol=0.,rtol=2e-15)
             head=expected_head.copy(); head[1]+=.06*np.cos(np.arange(q)*.37+.1)
-            free=self.out/f"{label}.species-free.mtp"
+            free=self.out/f"{label}.species-free.sus2"
             free.write_text(put_numbers(text,"moment_coeffs",head.ravel()))
             values=self.calc(label+"-free",free)
             assert np.linalg.norm(values[1:10])>1e-8,(label,"vacuous force fixture")

@@ -583,14 +583,17 @@ std::string InlineSHModelFilename(const std::map<std::string, std::string>& opts
 {
 	std::map<std::string, std::string>::const_iterator requested = opts.find("inline-sh-model");
 	if (requested != opts.end() && !requested->second.empty())
+	{
+		sus2::ValidateModelOutputPath(requested->second);
 		return requested->second;
+	}
 
 	std::ostringstream oss;
 	oss << ".sus2sh_inline_init_"
 	    << static_cast<long long>(std::time(nullptr))
 	    << "_"
 	    << static_cast<long long>(getpid())
-	    << ".mtp";
+	    << ".sus2";
 	return oss.str();
 }
 
@@ -1923,9 +1926,14 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		optimizer_trace_fnm = opts["bfgs-trace-file"];
 	}
 
-	string trained_fnm = "Trained.mtp_";
+	string trained_fnm = "Trained.sus2";
 	if (opts["trained-pot-name"] != "")
 		trained_fnm = opts["trained-pot-name"];
+	sus2::ValidateModelOutputPath(trained_fnm);
+	if (!curr_fnm.empty())
+		sus2::ValidateModelOutputPath(curr_fnm);
+	if (!best_fnm.empty())
+		sus2::ValidateModelOutputPath(best_fnm);
 	const string resolved_cli_best_fnm = best_fnm.empty()
 		? sus2::DefaultBestCheckpointPath(curr_fnm)
 		: best_fnm;
@@ -2280,14 +2288,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			&& !mtpr.TwoLayerResidualEnabled() && !mtpr.TensorMessageEnabled()
 			&& !mtpr.JointReadoutEnabled();
 		const bool static_profile = opts.at("grouped-profile") == "native-static-v1";
-		const bool legacy_profile = opts.at("grouped-profile") == "native-legacy-v1";
+		const bool legacy_profile = opts.at("grouped-profile") == "native-effect-v1"
+			|| opts.at("grouped-profile") == "native-legacy-v1";
 		const bool legacy_model = mtpr.IsSHPotential() && mtpr.TwoLayerGateEnabled()
 			&& !adaptive_pytorch_profile && !mtpr.OuterUsesPureRadialMatrix()
 			&& !mtpr.MultiLayerGateEnabled() && !mtpr.TwoLayerResidualEnabled()
 			&& !mtpr.TensorMessageEnabled() && !mtpr.JointReadoutEnabled();
 		if (static_profile ? !static_radial_model : (legacy_profile ? !legacy_model : !adaptive_pytorch_profile))
 			ERROR("Grouped training.profile does not match the checkpoint architecture; "
-			      "use native-static-v1 for a gate-free ranked SH model or native-adaptive-v1 for an adaptive model");
+			      "use native-static-v1 for a gate-free ranked SH model, native-effect-v1 "
+			      "for an effect-gated model, or native-adaptive-v1 for an adaptive model");
 		if (opts.at("grouped-input") == "continue" && !loaded_complete_parameters)
 			ERROR("Grouped continuation requires a complete checkpoint, not an uninitialized topology");
 	}
@@ -2885,7 +2895,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	trainer.force_log_cosh_scale = force_log_cosh_scale;
 
 	if (prank == 0)
-		std::cout << "SUS2-SH Release 3 (2026-07-23)"
+		std::cout << "SUS2.superlinear (2026-10-18)"
 		          << " | potential from " << args[0]
 		          << ", database: " << args[1] << std::endl;
 	if (prank == 0 && inline_sh_model)
@@ -3325,7 +3335,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				          << "no Rescale or 75-step pretraining"
 				          << std::endl;
 			save_model_atomically_collective(
-				maxits == 0 ? trained_fnm : "ini.mtp",
+				maxits == 0 ? trained_fnm : "ini.sus2",
 				"balanced adaptive radial initialized model");
 		}
 		if (adaptive_pytorch_profile && loaded_complete_parameters) {
@@ -3425,7 +3435,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			          << "; head_solve=" << pure_w_head_solve
 			          << "; no Rescale or 75-step pretraining" << std::endl;
 		save_model_atomically_collective(
-			maxits == 0 ? trained_fnm : "ini.mtp", "balanced pure-W initialized model");
+			maxits == 0 ? trained_fnm : "ini.sus2", "balanced pure-W initialized model");
 	}
 	if (two_layer_gate_readout_linear_init) {
 		if (prank == 0)
@@ -3489,16 +3499,16 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 //		trainer.random_sample(prank, training_set);
 //		if (prank == 0){
 //		                        mtpr.Save(trained_fnm);
-//		                                                mtpr.Save_2("unfixed1.mtp");
+//		                                                mtpr.Save_2("unfixed1.sus2");
 //		                                                                  
 //
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp()
-			          << "] Saving ini.mtp start" << std::endl;
-		save_model_atomically_collective("ini.mtp", "initial model");
+			          << "] Saving ini.sus2 start" << std::endl;
+		save_model_atomically_collective("ini.sus2", "initial model");
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp()
-			          << "] Saving ini.mtp done" << std::endl;
+			          << "] Saving ini.sus2 done" << std::endl;
 
 	       if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] Entering Rescale" << std::endl;
@@ -3676,33 +3686,33 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				                             "final",
 				                             prank);
 			}
-			//string train_name = "pp.mtp";
+			//string train_name = "pp.sus2";
 //		if (prank == 0)
-//			mtpr.Save("loop_1.mtp");
+//			mtpr.Save("loop_1.sus2");
 //		if (prank == 0) {std::cout << "loop_2 start:" << std::endl;}
 //		//trainer.std_scaling *= 10 ;
 //		trainer.TrainLinear(prank, training_set);
 //		Rescale(trainer, mtpr);
  //               trainer.Train(training_set);
-  //              if (prank == 0) {mtpr.Save("loop_2.mtp");}
+  //              if (prank == 0) {mtpr.Save("loop_2.sus2");}
 //                        
 //                if (prank == 0) {std::cout << "loop_3 start:" << std::endl;}
 //                //trainer.std_scaling *= 10 ;
 //                trainer.TrainLinear(prank, training_set);
 //                Rescale(trainer, mtpr);
 //                trainer.Train(training_set);
-//                if (prank == 0) {mtpr.Save("loop_3.mtp");}
+//                if (prank == 0) {mtpr.Save("loop_3.sus2");}
 //                if (prank == 0) {std::cout << "loop_4 start:" << std::endl;}
                 //trainer.std_scaling *= 100 ;
 //                trainer.TrainLinear(prank, training_set);
  //               Rescale(trainer, mtpr);
   //              trainer.Train(training_set);
-   //             if (prank == 0) {mtpr.Save("loop_4.mtp");}
+   //             if (prank == 0) {mtpr.Save("loop_4.sus2");}
 
 		save_model_atomically_collective(trained_fnm, "final trained model");
-     //                   mtpr.Save_2("unfixed1.mtp");
+     //                   mtpr.Save_2("unfixed1.sus2");
      //           Rescale(trainer, mtpr);
-     //           if (prank==0){ mtpr.Save_2("unfixed2.mtp");
+     //           if (prank==0){ mtpr.Save_2("unfixed2.sus2");
       //                 }
 	}
 	if (zbl_training_residualized) {

@@ -1,5 +1,7 @@
 # ML-SUS2 LAMMPS Install Standard
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 This file records the current server-side LAMMPS build convention for `ML-SUS2`.
 
 ## Naming
@@ -31,7 +33,7 @@ Do not treat `ML-SUS2-MTP` as the active name in new work except when removing o
 - Interface tarball:
 
 ```bash
-/work/phy-weigw/20260321_Test/SUS2-MLIP-release-work-codex/sus2-interface-20260410.tar.gz
+<historical-path>
 ```
 
 ## CPU Rule
@@ -80,14 +82,14 @@ Use a clean CMake build directory and submit the GPU rebuild on a GPU node throu
 Current SUS2-SH LAMMPS runtime/build tree:
 
 ```bash
-/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex
+<historical-path>
 ```
 
 Current validated binaries:
 
 ```bash
-/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_kk_sm80
-/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
+<historical-path>
+<historical-path>
 ```
 
 Use an `_lmp` radial-basis name to select the table path under the default

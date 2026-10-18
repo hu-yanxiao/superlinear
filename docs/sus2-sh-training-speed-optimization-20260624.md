@@ -1,5 +1,7 @@
 # SUS2-SH Training Speed Optimization 2026-06-24
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Scope
 
 This note records an exact `TrainLinear` optimization for SUS2-SH gate-mode
@@ -30,7 +32,7 @@ still calls `SymmetrizeSLAE()` before solving.
 Server build tree:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-train-speed-opt-work-codex
+<historical-path>
 ```
 
 Correctness command:
@@ -83,7 +85,7 @@ job 3834854, dsyr/dsyrk + packed upper reduction:
 ```
 
 For job `3834854`, accepted-step loss and MAE lines were identical between the
-main and optimized binaries. Final `main_force_p.mtp` and `opt_force_p.mtp`
+main and optimized binaries. Final `main_force_p.sus2` and `opt_force_p.sus2`
 were byte-identical by SHA256.
 
 ## Notes

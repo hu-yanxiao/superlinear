@@ -5,21 +5,21 @@ cd "$(dirname "$0")/.."
 
 bash dev_test/diagonal_coordinate_scaling_check.sh
 
-tmp_dir=".codex_tmp/sh_release3_bfgs_coordinate_normalization"
+tmp_dir=".local_tmp/sh_release3_bfgs_coordinate_normalization"
 mkdir -p "$tmp_dir"
 
-initial_model="$tmp_dir/initial.mtp"
-seed_model="$tmp_dir/seed.mtp"
+initial_model="$tmp_dir/initial.sus2"
+seed_model="$tmp_dir/seed.sus2"
 train_cfg="$tmp_dir/one.cfg"
 physical_trace="$tmp_dir/physical.csv"
 normalized_trace="$tmp_dir/normalized.csv"
 normalized_repeat_trace="$tmp_dir/normalized_repeat.csv"
-normalized_model="$tmp_dir/normalized.mtp"
-normalized_repeat_model="$tmp_dir/normalized_repeat.mtp"
-combined_model="$tmp_dir/combined_weight_norm.mtp"
+normalized_model="$tmp_dir/normalized.sus2"
+normalized_repeat_model="$tmp_dir/normalized_repeat.sus2"
+combined_model="$tmp_dir/combined_weight_norm.sus2"
 linear_physical_log="$tmp_dir/linear_physical.log"
 linear_normalized_log="$tmp_dir/linear_normalized.log"
-rm -f "$tmp_dir"/*.mtp "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
+rm -f "$tmp_dir"/*.sus2 "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
 
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
 
@@ -63,7 +63,7 @@ common_train_args=(
   "${common_train_args[@]}" \
   --bfgs-coordinate-normalization=none \
   --optimizer-trace-file="$physical_trace" \
-  --trained-pot-name="$tmp_dir/physical.mtp" \
+  --trained-pot-name="$tmp_dir/physical.sus2" \
   >"$tmp_dir/physical.log" 2>&1
 
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
@@ -73,7 +73,7 @@ common_train_args=(
   --bfgs-coordinate-floor=1e-6 \
   --optimizer-trace-file="$normalized_trace" \
   --curr-pot-name="$normalized_model" \
-  --trained-pot-name="$tmp_dir/normalized_trained.mtp" \
+  --trained-pot-name="$tmp_dir/normalized_trained.sus2" \
   >"$tmp_dir/normalized.log" 2>&1
 
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
@@ -83,7 +83,7 @@ common_train_args=(
   --bfgs-coordinate-floor=1e-6 \
   --optimizer-trace-file="$normalized_repeat_trace" \
   --curr-pot-name="$normalized_repeat_model" \
-  --trained-pot-name="$tmp_dir/normalized_repeat_trained.mtp" \
+  --trained-pot-name="$tmp_dir/normalized_repeat_trained.sus2" \
   >"$tmp_dir/normalized_repeat.log" 2>&1
 
 grep -q "BFGS coordinate normalization: efs-gn probes=2 floor=1e-06" \
@@ -137,7 +137,7 @@ grep -q "BFGS coordinate normalization initialized mode=efs-gn" \
   --do-lin-steps=1 \
   --do-lin-freq=1 \
   --bfgs-coordinate-normalization=none \
-  --trained-pot-name="$tmp_dir/linear_physical.mtp" \
+  --trained-pot-name="$tmp_dir/linear_physical.sus2" \
   >"$linear_physical_log" 2>&1
 
 ./bin/mlp-sus2 train "$seed_model" "$train_cfg" \
@@ -148,7 +148,7 @@ grep -q "BFGS coordinate normalization initialized mode=efs-gn" \
   --do-lin-freq=1 \
   --bfgs-coordinate-normalization=efs-gn \
   --bfgs-coordinate-probes=2 \
-  --trained-pot-name="$tmp_dir/linear_normalized.mtp" \
+  --trained-pot-name="$tmp_dir/linear_normalized.sus2" \
   >"$linear_normalized_log" 2>&1
 
 grep -q "TrainLinear solve done" "$linear_normalized_log"

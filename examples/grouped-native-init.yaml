@@ -20,4 +20,4 @@ model:
     # latent_channels: 1       # shared-n: 1=single projection; 2..basis_size=multiple
 output:
   directory: ../runs/topology
-  model: ../runs/topology/initial.mtp
+  model: ../runs/topology/initial.sus2

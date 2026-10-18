@@ -1,17 +1,19 @@
 # Two-layer gate shared-radial optimization notes (2026-06-02)
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Repository branch: `developer`
 
 Server tree:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 Server binary after the kept changes:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+<historical-path>
 sha256: 82048c3493ff72b9e83455f74175b72ded487ad3ce14e0e502ce146adb9e19dd
 ```
 
@@ -58,10 +60,10 @@ bash dev_test/sh_two_layer_residual_force_fd_check.sh
 bash dev_test/sh_two_layer_gate_shared_radial_check.sh
 bash dev_test/sh_two_layer_gate_loss_gradient_check.sh
 bash dev_test/sh_two_layer_residual_loss_gradient_check.sh
-bash .codex_tmp/shared_radial_loss_gradient_check.sh
+bash .local_tmp/shared_radial_loss_gradient_check.sh
 ./bin/mlp-sus2 check-linear-components-fd-dev \
-  .codex_tmp/sh_two_layer_gate_shared_radial_loss_gradient/shared_nonzero.mtp \
-  .codex_tmp/sh_two_layer_gate_shared_radial_loss_gradient/one.cfg \
+  .local_tmp/sh_two_layer_gate_shared_radial_loss_gradient/shared_nonzero.sus2 \
+  .local_tmp/sh_two_layer_gate_shared_radial_loss_gradient/one.cfg \
   --max-configs=1 --max-atoms=1 --displacement=1.0e-5 \
   --abs-tolerance=5.0e-5 --rel-tolerance=5.0e-4
 ```
@@ -91,10 +93,10 @@ Additional checks for the rejected energy-adjoint / `df/dM0` cache candidates:
 bash dev_test/sh_two_layer_gate_loss_gradient_check.sh
 bash dev_test/sh_two_layer_gate_force_fd_check.sh
 bash dev_test/sh_two_layer_gate_shared_radial_check.sh
-bash .codex_tmp/shared_radial_loss_gradient_check.sh
+bash .local_tmp/shared_radial_loss_gradient_check.sh
 ./bin/mlp-sus2 check-linear-components-fd-dev \
-  .codex_tmp/sh_two_layer_gate_shared_radial_loss_gradient/shared_nonzero.mtp \
-  .codex_tmp/sh_two_layer_gate_shared_radial_loss_gradient/one.cfg \
+  .local_tmp/sh_two_layer_gate_shared_radial_loss_gradient/shared_nonzero.sus2 \
+  .local_tmp/sh_two_layer_gate_shared_radial_loss_gradient/one.cfg \
   --max-configs=1 --max-atoms=1 --displacement=1.0e-5 \
   --abs-tolerance=5.0e-5 --rel-tolerance=5.0e-4
 ```
@@ -111,13 +113,13 @@ inline energy adjoint + df/dM0 cache: 16b2dd2e939c25a143cdb3a695799b5e4685c0d669
 500-sample active two-layer shared-radial profile command was based on:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_shared_radial_profile_active_500x55_linearcache_basisreuse_20260602_045923
+<historical-path>
 ```
 
 Clean reference:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_shared_radial_profile_active_500x55_clean_20260602_0405
+<historical-path>
 avg_us_total ~= 412635
 avg_us_main_components ~= 229895
 avg_us_gate_adjoints ~= 90148
@@ -127,7 +129,7 @@ TrainLinear build_s at step 50 ~= 2.148 s
 Kept direct/cache/basis-reuse profile:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_shared_radial_profile_active_500x55_linearcache_basisreuse_20260602_045923
+<historical-path>
 avg_us_total ~= 375481
 avg_us_main_components ~= 201274
 avg_us_gate_adjoints ~= 90128
@@ -137,7 +139,7 @@ TrainLinear build_s at step 50 ~= 1.976 s
 Kept skip-basis-zero profile:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_shared_radial_profile_active_500x55_skip_basis_zero_20260602_053729
+<historical-path>
 avg_us_total ~= 369464
 avg_us_main_components ~= 195490
 avg_us_gate_adjoints ~= 90190
@@ -147,7 +149,7 @@ TrainLinear build_s at step 50 ~= 1.952 s
 Kept row-local gate-adjoint profile:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_shared_radial_profile_active_500x55_rowlocal_gateadj_20260602_0815
+<historical-path>
 exit_code=0
 runtime_sec=534
 avg_us_total ~= 366544

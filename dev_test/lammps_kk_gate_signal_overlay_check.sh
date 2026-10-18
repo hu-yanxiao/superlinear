@@ -7,7 +7,7 @@ trap 'rm -rf "$build_dir"' EXIT
 
 cxx=${CXX:-c++}
 "$cxx" -std=c++17 -O2 -Wall -Wextra -pedantic \
-  "$repo_dir/codex_tests/lammps_kk_gate_signal_overlay_check.cpp" \
+  "$repo_dir/native_tests/lammps_kk_gate_signal_overlay_check.cpp" \
   -o "$build_dir/lammps_kk_gate_signal_overlay_check"
 
 "$build_dir/lammps_kk_gate_signal_overlay_check" \

@@ -1,7 +1,7 @@
 # Final PyTorch weights to C++ continuation: VO2 9.1
 
 Server-only continuation of the completed epoch-500 adaptive-radial O2/O4/O8
-`current.best.mtp` files, not the older Sep 6 inference snapshots.
+`current.best.sus2` files, not the older Sep 6 inference snapshots.
 Each independent LSF job requests queue 33, 200 MPI ranks (5 hosts x 40), and
 5000 accepted optimizer steps maximum. No GPU or model initialization is used.
 
@@ -36,11 +36,11 @@ three frozen 9.1 configurations, then starts the full-data 5000-step run from
 the untouched input. The optimizer itself checks the coordinate-chart physical
 roundtrip before its first proposal. A zero-step adaptive `train` command is
 not used because this CLI does not export a same-checkpoint zero-step model.
-`current.mtp`, `best.mtp`,
-and `trained.mtp` are separate native-model outputs; accepted steps are recorded
+`current.sus2`, `best.sus2`,
+and `trained.sus2` are separate native-model outputs; accepted steps are recorded
 in `trace.csv` and `training_result.txt`. An early successful return is not
 equivalent to completing all 5000 steps: check the actual accepted count.
-CPU `best.mtp` uses optimizer total loss; PyTorch selected its input checkpoint
+CPU `best.sus2` uses optimizer total loss; PyTorch selected its input checkpoint
 by full-training force MAE. These are different best-checkpoint criteria.
 
 After syncing the committed scripts, run `prepare.sh FULL_SCRIPT_COMMIT` on

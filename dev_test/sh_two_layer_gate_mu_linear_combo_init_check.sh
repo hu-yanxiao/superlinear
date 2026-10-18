@@ -3,9 +3,9 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mlp="${1:-$root/bin/mlp-sus2}"
-tmp_dir="$root/.codex_tmp/sh_two_layer_gate_mu_linear_combo_init"
+tmp_dir="$root/.local_tmp/sh_two_layer_gate_mu_linear_combo_init"
 mkdir -p "$tmp_dir"
-model="$tmp_dir/gate.mtp"
+model="$tmp_dir/gate.sus2"
 
 "$mlp" init-sh "$model" \
   --species-count=2 \

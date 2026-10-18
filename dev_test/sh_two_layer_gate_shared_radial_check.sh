@@ -3,12 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_shared_radial"
+tmp_dir=".local_tmp/sh_two_layer_gate_shared_radial"
 mkdir -p "$tmp_dir"
 
-plain="$tmp_dir/plain.mtp"
-shared="$tmp_dir/shared.mtp"
-saved="$tmp_dir/shared.saved.mtp"
+plain="$tmp_dir/plain.sus2"
+shared="$tmp_dir/shared.sus2"
+saved="$tmp_dir/shared.saved.sus2"
 train="$tmp_dir/one.cfg"
 plain_pred="$tmp_dir/plain_pred.cfg"
 shared_pred="$tmp_dir/shared_pred.cfg"

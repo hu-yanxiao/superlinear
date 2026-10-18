@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/bfgs_restart_state"
+tmp_dir=".local_tmp/bfgs_restart_state"
 mkdir -p "$tmp_dir"
 
 cxx="${CXX:-c++}"
@@ -18,7 +18,7 @@ read -r -a extra_ldflags <<< "${BFGS_TEST_LDFLAGS:--lblas}"
   -pedantic \
   -I. \
   "${extra_cppflags[@]}" \
-  codex_tests/bfgs_restart_state_check.cpp \
+  native_tests/bfgs_restart_state_check.cpp \
   src/common/bfgs.cpp \
   "${extra_ldflags[@]}" \
   -o "$tmp_dir/bfgs_restart_state_check"

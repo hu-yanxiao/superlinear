@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "../src/model_path.h"
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -55,7 +56,8 @@ inline std::string DefaultBestCheckpointPath(
 {
 	if (current_checkpoint_path.empty())
 		return std::string();
-	const std::string extension = ".mtp";
+	ValidateModelOutputPath(current_checkpoint_path);
+	const std::string extension = ".sus2";
 	if (current_checkpoint_path.size() >= extension.size()
 	    && current_checkpoint_path.compare(
 	        current_checkpoint_path.size() - extension.size(),
@@ -65,7 +67,7 @@ inline std::string DefaultBestCheckpointPath(
 		           0, current_checkpoint_path.size() - extension.size())
 			+ ".best" + extension;
 	}
-	return current_checkpoint_path + ".best.mtp";
+	return current_checkpoint_path + ".best.sus2";
 }
 
 inline bool CheckpointFileExists(const std::string& path)
@@ -248,15 +250,14 @@ inline void SyncCheckpointDirectory(const std::string& path)
 template <typename Writer>
 void AtomicWriteCheckpoint(const std::string& destination, Writer writer)
 {
-	if (destination.empty())
-		throw std::invalid_argument("checkpoint destination is empty");
+	ValidateModelOutputPath(destination);
 	static unsigned long long write_counter = 0;
 	std::string temporary = destination + ".tmp";
 #ifndef _WIN32
 	temporary += "." + std::to_string(
 		static_cast<unsigned long long>(::getpid()));
 #endif
-	temporary += "." + std::to_string(++write_counter);
+	temporary += "." + std::to_string(++write_counter) + ".sus2";
 	std::remove(temporary.c_str());
 	try {
 		writer(temporary);
@@ -302,11 +303,12 @@ inline std::string ArchiveExistingCheckpoint(
 {
 	if (path.empty() || !CheckpointFileExists(path))
 		return std::string();
-	std::string archive = path + archive_suffix;
+	const std::string stem = ModelOutputStem(path);
+	std::string archive = stem + archive_suffix + ".sus2";
 	int disambiguator = 1;
 	while (CheckpointFileExists(archive)) {
-		archive = path + archive_suffix + "."
-			+ std::to_string(disambiguator++);
+		archive = stem + archive_suffix + "."
+			+ std::to_string(disambiguator++) + ".sus2";
 	}
 	AtomicWriteCheckpoint(archive, [&](const std::string& temporary) {
 		std::ifstream input(path.c_str(), std::ios::binary);

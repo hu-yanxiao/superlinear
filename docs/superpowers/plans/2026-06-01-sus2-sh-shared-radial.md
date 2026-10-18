@@ -1,5 +1,7 @@
 # SUS2-SH Shared-Radial Gate Implementation Notes
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 **Goal:** Add an optional two-layer gate radial mode where the inner gate reuses
 the same bottom radial basis, scaling, shift, and SH primitive cache as the
 outer SUS2-SH path, but owns independent radial contraction coefficients.
@@ -41,7 +43,7 @@ The gate radial count is `radial_func_count * radial_basis_size`.
   radial count is zero unless the new metadata/flag is enabled.
 
 **Server validation:** The server tree was synced and built at
-`/work/phy-weigw/20260321_Test/SUS2-SH-work-codex`.
+`<historical-path>`.
 
 ```bash
 rm -rf obj/mpi

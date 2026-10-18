@@ -30,7 +30,7 @@ def main():
     import torch
     import adaptive_tensor_message_check as helper
     from sus2shpt.io.cfg import load_cfg
-    from sus2shpt.io.mtp import MTPParseError, load_mtp_model, save_mtp_model
+    from sus2shpt.io.sus2 import MTPParseError, load_mtp_model, save_mtp_model
     from sus2shpt.model.sus2_sh import SUS2SHPyTorch, _apply_product_levels
     from sus2shpt.model.neighbor import build_pair_list
     from sus2shpt.topology_init import TopologyInitializationOptions, materialize_topology_parameters
@@ -129,7 +129,7 @@ def main():
         radial=obj._raw_radial_values(geometry.pair_r,geometry.center_types,geometry.neighbor_types)
         B=obj.tensor_message_coeffs
         assert torch.equal(obj.tensor_message_irrep_scale,torch.ones_like(obj.tensor_message_irrep_scale))
-        gb=int(obj.mtp.spec.two_layer_gate_k_rank_basic_begin); ob=int(obj.mtp.spec.outer_k_rank1_basic_begin)
+        gb=int(obj.sus2.spec.two_layer_gate_k_rank_basic_begin); ob=int(obj.sus2.spec.outer_k_rank1_basic_begin)
         G,O=obj.gate_k_rank,obj.outer_k_rank; contributions=[]; targets=[]
         for l in range(obj.lmax+1):
             for o in range(O):
@@ -185,7 +185,7 @@ def main():
         close(label+"-reference-EFS",current,efs(reference,cfg))
         close(label+"-literal-contract-EFS",current,oracle_efs(obj,cfg))
         if label=="same_same_species_K":
-            columns=[i for i,info in enumerate(obj.mtp.spec.sh_scalar_info) if info.body_order==6]
+            columns=[i for i,info in enumerate(obj.sus2.spec.sh_scalar_info) if info.body_order==6]
             assert columns,"small fixture must retain sixth-order outer invariants"
             saved=obj.moment_coeffs.detach().clone()
             with torch.no_grad(): obj.moment_coeffs[...,columns]=0.
@@ -276,7 +276,7 @@ def main():
         close("normalized-"+label+"-energy",value[:1],before[:1])
         close("normalized-"+label+"-forces",value[1:10].reshape(3,3),F@qt.T)
         close("normalized-"+label+"-virial",value[-9:].reshape(3,3),qt@S@qt.T)
-    folded=out/"folded.mtp"; save_mtp_model(obj.to_mtp_model(),folded)
+    folded=out/"folded.sus2"; save_mtp_model(obj.to_mtp_model(),folded)
     close("folded-PT",efs(model(folded),cfg),before)
     close("folded-native",native_efs("folded-native",folded,native.cfg),before,atol=8e-6,rtol=5e-7)
     # Disposable zero-B optimizer proves learnability from the prescribed init.
@@ -293,12 +293,12 @@ def main():
         torch.nn.utils.clip_grad_norm_(train.parameters(),10.); optimizer.step(); losses.append(float(loss.detach()))
     assert not torch.equal(start_B,train.tensor_message_coeffs)
     close("Adam-frozen-h",train.species_coeffs,h,atol=0,rtol=0)
-    trained=out/"adam3.mtp"; save_mtp_model(train.to_mtp_model(),trained)
+    trained=out/"adam3.sus2"; save_mtp_model(train.to_mtp_model(),trained)
     close("Adam-export",native_efs("Adam-native",trained,native.cfg),efs(train,cfg),atol=8e-6,rtol=5e-7)
     record("Adam3",{"losses":losses,"B_updated":True,"B_max_abs":float(train.tensor_message_coeffs.abs().max().detach())})
 
     if args.stage=="full":
-        bad_paths=sorted(native_artifacts.glob("bad-*.mtp"))
+        bad_paths=sorted(native_artifacts.glob("bad-*.sus2"))
         assert bad_paths
         for path in bad_paths:
             try: load_mtp_model(path)
@@ -318,7 +318,7 @@ def main():
         selected_path.write_text("\n".join(chunks)); selected=load_cfg(selected_path)
         tops={}
         for msg in (0,2):
-            top=out/f"production-m{msg}.topology.mtp"
+            top=out/f"production-m{msg}.topology.sus2"
             native.run(f"production-init{msg}","init-sh",top,*helper.topology_args(production=True,message=msg)); tops[msg]=top
         options=TopologyInitializationOptions(init_params="same",seed=20260910,head_scale=.1,scaling_slope_start=3.5,scaling_slope_stop=1.5)
         init={msg:materialize_topology_parameters(load_mtp_model(top),options) for msg,top in tops.items()}
@@ -331,9 +331,9 @@ def main():
         close("production-fresh-B",on.tensor_message_coeffs,torch.zeros_like(on.tensor_message_coeffs),atol=0,rtol=0)
         for name in names[1:]: close("production-no-RNG-change-"+name,getattr(off,name),getattr(on,name),atol=0,rtol=0)
         for msg,objp in production.items():
-            save_mtp_model(objp.to_mtp_model(),out/("production-disabled.mtp" if msg==0 else "production-zero.mtp"))
+            save_mtp_model(objp.to_mtp_model(),out/("production-disabled.sus2" if msg==0 else "production-zero.sus2"))
         with torch.no_grad(): on.tensor_message_coeffs.copy_(.017*torch.sin(torch.arange(128,device=on.device_arg,dtype=on.dtype).reshape(2,8,8)*.31+.2))
-        path=out/"production-nonzero.mtp"; save_mtp_model(on.to_mtp_model(),path)
+        path=out/"production-nonzero.sus2"; save_mtp_model(on.to_mtp_model(),path)
         all_efs=torch.cat([efs(on,c) for c in selected]); zero_efs=torch.cat([efs(off,c) for c in selected])
         assert float((all_efs-zero_efs).abs().max())>1e-10
         close("production-native-EFS",all_efs,native_efs("production-native",path,selected_path),atol=8e-6,rtol=5e-7)

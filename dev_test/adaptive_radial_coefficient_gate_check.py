@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "bin/mlp-sus2"
 DEFAULT_OLD_BIN = ROOT.parent / "superlinear-pure-w-channelwise-wt/bin/mlp-sus2"
 OLD_BIN = Path(os.environ.get("OLD_BIN", DEFAULT_OLD_BIN)).resolve()
-(ROOT / ".codex_tmp").mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix="adaptive-radial-coeff-gate-", dir=ROOT / ".codex_tmp"))
+(ROOT / ".local_tmp").mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix="adaptive-radial-coeff-gate-", dir=ROOT / ".local_tmp"))
 CFG = TMP / "asym_two_species.cfg"
 ENV = dict(
     os.environ,
@@ -193,8 +193,8 @@ def make_model(mapping, kmax, outer, gate_rank=None, decoupled=False):
     if gate_rank is None:
         gate_rank = kmax
     tag = f"{mapping}-k{kmax}-o{outer}-g{gate_rank}-dec{int(decoupled)}"
-    initial = TMP / f"{tag}.initial.mtp"
-    model = TMP / f"{tag}.mtp"
+    initial = TMP / f"{tag}.initial.sus2"
+    model = TMP / f"{tag}.sus2"
     args = [
         "init-sh",
         initial,
@@ -408,7 +408,7 @@ def gauge_fold_model(tag, src):
     ]
     out = replace_vector(src, "adaptive_radial_amplitudes", folded_a)
     out = replace_vector(out, "adaptive_radial_weights", folded_u)
-    model = TMP / f"{tag}.gauge-folded.mtp"
+    model = TMP / f"{tag}.gauge-folded.sus2"
     model.write_text(out, encoding="utf-8")
     return model
 
@@ -461,12 +461,12 @@ def check_case(mapping, kmax, outer, gate_rank=None, decoupled=False, regularize
     if max(map(abs, reference[1:16])) <= 1e-6 or max(map(abs, reference[16:])) <= 1e-7:
         raise AssertionError(f"{tag}: fixture did not activate force and stress branches")
 
-    zero_u = TMP / f"{tag}.zero-u.mtp"
+    zero_u = TMP / f"{tag}.zero-u.sus2"
     zero_u.write_text(
         replace_vector(src, "adaptive_radial_weights", [0.0] * len(vector(src, "adaptive_radial_weights"))),
         encoding="utf-8",
     )
-    zero_a = TMP / f"{tag}.zero-a.mtp"
+    zero_a = TMP / f"{tag}.zero-a.sus2"
     zero_a.write_text(
         replace_vector(src, "adaptive_radial_amplitudes", [0.0] * len(vector(src, "adaptive_radial_amplitudes"))),
         encoding="utf-8",
@@ -478,7 +478,7 @@ def check_case(mapping, kmax, outer, gate_rank=None, decoupled=False, regularize
             raise AssertionError((tag, name, "adaptive branch is inactive", signal))
         run_gradient(tag + "-" + name + "-gradient", ablated, cache_on)
 
-    roundtrip = TMP / f"{tag}.roundtrip.mtp"
+    roundtrip = TMP / f"{tag}.roundtrip.sus2"
     run(tag + "-roundtrip", "roundtrip-model-dev", model, roundtrip)
     close(reference, predict(tag + "-roundtrip-predict", roundtrip, cache_on), tag + " model IO")
 
@@ -529,7 +529,7 @@ def check_case(mapping, kmax, outer, gate_rank=None, decoupled=False, regularize
     if max(abs(zu_u), abs(zu_fd)) <= 1e-10:
         raise AssertionError((tag, "zero-U with nonzero a should keep U gradient active", zu_last))
 
-    unit_center = TMP / f"{tag}.unit-center.mtp"
+    unit_center = TMP / f"{tag}.unit-center.sus2"
     unit_center.write_text(
         replace_vector(src, "species_coeffs", [1.0] * len(vector(src, "species_coeffs"))),
         encoding="utf-8",
@@ -592,8 +592,8 @@ def legacy_unmodified_parity():
     if not OLD_BIN.exists() or not BIN.exists():
         print(f"SKIP legacy parity: old={OLD_BIN.exists()} new={BIN.exists()}", flush=True)
         return
-    old_model = TMP / "legacy-pure-w-old.mtp"
-    old_roundtrip = TMP / "legacy-pure-w-old.roundtrip.mtp"
+    old_model = TMP / "legacy-pure-w-old.sus2"
+    old_roundtrip = TMP / "legacy-pure-w-old.roundtrip.sus2"
     run_bin(
         OLD_BIN,
         "legacy-old-init",
@@ -640,7 +640,7 @@ for invalid_outer in (3,):
     run(
         f"invalid-o{invalid_outer}-gt-k",
         "init-sh",
-        TMP / "invalid.mtp",
+        TMP / "invalid.sus2",
         "--species-count=2",
         "--l-max=2",
         "--k-max=2",
@@ -659,7 +659,7 @@ for invalid_outer in (3,):
 run(
     "invalid-o4-gt-rawk-with-gate-rank1",
     "init-sh",
-    TMP / "invalid-o4-k3-g1.mtp",
+    TMP / "invalid-o4-k3-g1.sus2",
     "--species-count=2",
     "--l-max=2",
     "--k-max=3",

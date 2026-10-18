@@ -1,5 +1,6 @@
 bin/
 build/
+.local_tmp/
 obj/
 obj_noipo/
 lib/
@@ -16,11 +17,11 @@ bench*/
 .tmp*
 ._*
 *.swp
-/*.mtp
-current.mtp
-trained.mtp
-p.mtp
-ini.mtp
+/*.sus2
+current.sus2
+trained.sus2
+p.sus2
+ini.sus2
 logout
 time.txt
 command.txt

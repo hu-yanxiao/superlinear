@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a SUS2 LK-style untrained .mtp basis file.
+"""Generate a SUS2 LK-style untrained .sus2 basis file.
 
 This generator keeps the important mixed-mu detail explicit:
 when two moments with different mu channels are lifted to a higher-rank object,
@@ -3834,7 +3834,7 @@ class Generator:
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a general LK-style SUS2 untrained .mtp basis. "
+            "Generate a general LK-style SUS2 untrained .sus2 basis. "
             "The generator keeps mixed-mu uplift tensors block-ordered instead of "
             "forcing them into a fully symmetric tensor basis."
         )
@@ -3855,7 +3855,7 @@ def parse_args():
         "--output",
         type=Path,
         default=None,
-        help="Write the generated .mtp to this path. Defaults to stdout.",
+        help="Write the generated .sus2 to this path. Defaults to stdout.",
     )
     parser.add_argument(
         "--potential-name",
@@ -3954,6 +3954,16 @@ def parse_args():
         help="Do not print the generation summary to stderr.",
     )
     args = parser.parse_args()
+
+    if args.output is not None:
+        output_name = args.output.name
+        if (
+            args.output.suffix != ".sus2"
+            or output_name == ".sus2"
+            or "\x00" in str(args.output)
+            or output_name[:-5].endswith("\\")
+        ):
+            parser.error("--output must have a nonempty model basename ending in .sus2 (case-sensitive)")
 
     if args.k <= 0:
         parser.error("--k must be positive")

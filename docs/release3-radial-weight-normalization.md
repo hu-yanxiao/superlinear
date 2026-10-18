@@ -1,5 +1,7 @@
 # Release3 radial weight normalization
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Release3 provides an opt-in optimizer parameterization for the outer radial
 coefficient rows and, when present, the independent gate1 radial contraction
 rows:
@@ -162,7 +164,7 @@ coordinate systems intentionally produce different BFGS trajectories.
 ### Recorded server validation (2026-07-16)
 
 The Intel/MPI release3 build at
-`/work/phy-weigw/20260321_Test/SUS2-SH-release3-radial-weight-norm-work-codex`
+`<historical-path>`
 passed the regression above. Additional checks used the trained model in
 `release3/2/1-layer/5bd/2`:
 

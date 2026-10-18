@@ -2,10 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_loss_gradient"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_loss_gradient"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/edge_l1_grad.mtp"
+model="$tmp_dir/edge_l1_grad.sus2"
 cfg="$tmp_dir/random_non_symmetric.cfg"
 range_file="$tmp_dir/edge_l1_range.txt"
 source_range_file="$tmp_dir/edge_l1_source_ranges.txt"

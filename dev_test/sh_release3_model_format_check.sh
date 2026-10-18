@@ -30,9 +30,9 @@ common_args=(
   --init-params=same
 )
 
-no_extension=$tmp_dir/no-extension.mtp
-rank2=$tmp_dir/rank2.mtp
-readout=$tmp_dir/readout.mtp
+no_extension=$tmp_dir/no-extension.sus2
+rank2=$tmp_dir/rank2.sus2
+readout=$tmp_dir/readout.sus2
 
 "$bin" init-sh "$no_extension" "${common_args[@]}" >/dev/null
 "$bin" init-sh "$rank2" "${common_args[@]}" --outer-k-rank=2 >/dev/null
@@ -54,28 +54,28 @@ assert_version "$rank2" 1.2.0
 assert_version "$readout" 1.2.0
 
 for model in "$no_extension" "$rank2" "$readout"; do
-  roundtrip=$tmp_dir/$(basename "${model%.mtp}")-roundtrip.mtp
+  roundtrip=$tmp_dir/$(basename "${model%.sus2}")-roundtrip.sus2
   "$bin" roundtrip-model-dev "$model" "$roundtrip" >/dev/null
 done
-assert_version "$tmp_dir/no-extension-roundtrip.mtp" 1.1.0
-assert_version "$tmp_dir/rank2-roundtrip.mtp" 1.2.0
-assert_version "$tmp_dir/readout-roundtrip.mtp" 1.2.0
+assert_version "$tmp_dir/no-extension-roundtrip.sus2" 1.1.0
+assert_version "$tmp_dir/rank2-roundtrip.sus2" 1.2.0
+assert_version "$tmp_dir/readout-roundtrip.sus2" 1.2.0
 
 # Both supported headers remain readable. Saving canonicalizes the header from
 # the actual feature set, so a legacy rank file is upgraded and a feature-free
 # 1.2 file is downgraded.
-legacy_rank=$tmp_dir/rank2-header-1.1.mtp
-extended_plain=$tmp_dir/no-extension-header-1.2.mtp
+legacy_rank=$tmp_dir/rank2-header-1.1.sus2
+extended_plain=$tmp_dir/no-extension-header-1.2.sus2
 sed '2s/1\.2\.0/1.1.0/' "$rank2" > "$legacy_rank"
 sed '2s/1\.1\.0/1.2.0/' "$no_extension" > "$extended_plain"
-"$bin" roundtrip-model-dev "$legacy_rank" "$tmp_dir/legacy-rank-roundtrip.mtp" >/dev/null
-"$bin" roundtrip-model-dev "$extended_plain" "$tmp_dir/extended-plain-roundtrip.mtp" >/dev/null
-assert_version "$tmp_dir/legacy-rank-roundtrip.mtp" 1.2.0
-assert_version "$tmp_dir/extended-plain-roundtrip.mtp" 1.1.0
+"$bin" roundtrip-model-dev "$legacy_rank" "$tmp_dir/legacy-rank-roundtrip.sus2" >/dev/null
+"$bin" roundtrip-model-dev "$extended_plain" "$tmp_dir/extended-plain-roundtrip.sus2" >/dev/null
+assert_version "$tmp_dir/legacy-rank-roundtrip.sus2" 1.2.0
+assert_version "$tmp_dir/extended-plain-roundtrip.sus2" 1.1.0
 
-unsupported=$tmp_dir/unsupported-version.mtp
+unsupported=$tmp_dir/unsupported-version.sus2
 sed '2s/1\.2\.0/9.9.9/' "$rank2" > "$unsupported"
-if "$bin" roundtrip-model-dev "$unsupported" "$tmp_dir/should-not-exist.mtp" \
+if "$bin" roundtrip-model-dev "$unsupported" "$tmp_dir/should-not-exist.sus2" \
      >"$tmp_dir/unsupported.log" 2>&1; then
   echo "standalone reader accepted an unsupported SUS2-SH model version" >&2
   exit 1

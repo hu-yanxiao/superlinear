@@ -13,7 +13,7 @@ unit test must qualify EvalD through L=6 separately.
 
 Usage (inside an LSF compute allocation):
   python dev_test/rd_m0_backend_check.py /path/to/mlp-sus2 --outdir NEW_DIRECTORY
-Optional MODEL_PATHS is a JSON list of {"model": "/abs/model.mtp", "cfg":
+Optional MODEL_PATHS is a JSON list of {"model": "/abs/model.sus2", "cfg":
 "/abs/data.cfg"}; exactly the first two complete configurations are copied to
 the new result directory.  Sources are never modified.  This is a correctness
 suite, not a benchmark or a deployment certificate.
@@ -333,7 +333,7 @@ class Check:
         directory = self.out / name
         directory.mkdir()
         record = self.report["cases"][name] = {"status": "RUNNING", "spec": spec}
-        top, materialized, model = [directory / x for x in ("topology.mtp", "materialized.mtp", "patterned.mtp")]
+        top, materialized, model = [directory / x for x in ("topology.sus2", "materialized.sus2", "patterned.sus2")]
         self.run(directory, "init-sh", "init-sh", top, *topology_options(spec))
         self.run(directory, "materialize", "roundtrip-model-dev", top, materialized)
         model.write_text(patterned(materialized.read_text(), spec))
@@ -342,7 +342,7 @@ class Check:
         assert float(np.linalg.norm(values[0][1:-6])) > 1e-8, "vacuous force fixture"
         roundtrips = []
         for backend in MODES:
-            path = directory / f"roundtrip-{backend}.mtp"
+            path = directory / f"roundtrip-{backend}.sus2"
             self.run(directory, "roundtrip-" + backend, "roundtrip-model-dev", model, path, backend=backend)
             roundtrips.append(path.read_bytes())
         assert all(value == roundtrips[0] for value in roundtrips), "backend leaked into serialized model format/parameters"
@@ -426,7 +426,7 @@ class Check:
         counterfactuals = record["nonzero_feature_sensitivity"] = {}
         for key in ("tensor_message_coeffs", "joint_readout_coeffs", "adaptive_radial_weights"):
             text = model.read_text()
-            path = directory / ("zero-" + key + ".mtp")
+            path = directory / ("zero-" + key + ".sus2")
             path.write_text(put_numbers(text, key, np.zeros_like(numbers(text, key))))
             alternate = self.calc(directory, "zero-" + key, path, backend="rd-m0")
             effect = float(np.max(np.abs(alternate[0] - baseline[0])))
@@ -458,21 +458,21 @@ class Check:
         for backend in MODES:
             work = directory / backend
             work.mkdir()
-            initialized = work / "initialized.mtp"
-            trained = work / "trained.mtp"
+            initialized = work / "initialized.sus2"
+            trained = work / "trained.sus2"
             shared = ["--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
                       "--std-weight=0", "--stdd-weight=0", "--optimizer=bfgs",
                       "--bfgs-line-search=wolfe", "--optimizer-conv-tol=0"]
             output, _ = self.run(work, "initialize", "train", topology, self.cfg,
                 "--max-iter=0", "--init-params=same", f"--init-random-seed={SEED}", *shared,
-                f"--trained-pot-name={initialized}", f"--curr-pot-name={work/'init-current.mtp'}",
-                f"--best-pot-name={work/'init-best.mtp'}", backend=backend, calculation=True)
+                f"--trained-pot-name={initialized}", f"--curr-pot-name={work/'init-current.sus2'}",
+                f"--best-pot-name={work/'init-best.sus2'}", backend=backend, calculation=True)
             assert "[adaptive-pytorch-profile] fresh=1" in output
             trace = work / "trace.csv"
             initialized_sha = sha(initialized)
             output, _ = self.run(work, "train-one-update", "train", initialized, self.cfg,
                 "--max-iter=2", *shared, f"--trained-pot-name={trained}",
-                f"--curr-pot-name={work/'current.mtp'}", f"--best-pot-name={work/'best.mtp'}",
+                f"--curr-pot-name={work/'current.sus2'}", f"--best-pot-name={work/'best.sus2'}",
                 f"--bfgs-trace-file={trace}", backend=backend, calculation=True)
             assert "[adaptive-pytorch-profile] fresh=0" in output
             with trace.open(newline="") as stream:
@@ -542,11 +542,11 @@ class Check:
             directory / "invalid.prediction.cfg", "--no-loss", backend="not-a-backend", allow_failure=True)
         assert code != 0 and "SUS2_SH_ANGULAR_BACKEND must be ry, ry-new, hybrid or rd-m0" in output
         spec = {"lmax": 6}
-        top = directory / "L6.topology.mtp"
+        top = directory / "L6.topology.sus2"
         self.run(directory, "L6-init", "init-sh", top, *topology_options(spec))
         for backend in MODES:
             output, code = self.run(directory, "L6-load-" + backend, "roundtrip-model-dev", top,
-                directory / ("L6-" + backend + ".mtp"), backend=backend, allow_failure=True)
+                directory / ("L6-" + backend + ".sus2"), backend=backend, allow_failure=True)
             assert code != 0 and "supports sh_l_max in [0,4]" in output
         self.report["extra"]["runtime_L6"] = {"status": "EXPECTED_UNSUPPORTED",
             "numerical_pass": False, "reason": "native model loader retains L<=4; angular unit test is separate"}
@@ -561,7 +561,7 @@ class Check:
             source_model, source_cfg = Path(entry["model"]).resolve(strict=True), Path(entry["cfg"]).resolve(strict=True)
             directory = self.out / f"actual-{index:02d}"
             directory.mkdir()
-            model, cfg = directory / "frozen.mtp", directory / "first-two.input.cfg"
+            model, cfg = directory / "frozen.sus2", directory / "first-two.input.cfg"
             model.write_bytes(source_model.read_bytes())
             blocks, current = [], []
             with source_cfg.open() as stream:

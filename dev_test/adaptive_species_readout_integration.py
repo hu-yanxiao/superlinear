@@ -22,7 +22,7 @@ def main():
     import numpy as np
     import torch
     from sus2shpt.io.cfg import load_cfg
-    from sus2shpt.io.mtp import MTPParseError, load_mtp_model, save_mtp_model, convert_shared_readout_to_species
+    from sus2shpt.io.sus2 import MTPParseError, load_mtp_model, save_mtp_model, convert_shared_readout_to_species
     from sus2shpt.model.sus2_sh import SUS2SHPyTorch
     from sus2shpt.topology_init import TopologyInitializationOptions, materialize_topology_parameters
     from sus2shpt.training import (TrainingOptions, rescale_initial_parameters,
@@ -91,22 +91,22 @@ def main():
         return reloaded
 
     cfg = load_cfg(native.cfg)[0]
-    fresh_native=native.out/"fresh-zeroiter.mtp"
+    fresh_native=native.out/"fresh-zeroiter.sus2"
     close("native-fresh-fixed-profile-PT",efs(model(fresh_native),cfg),native_values("fresh-fixed-profile",fresh_native,native.cfg),serialized=True)
-    for path in sorted(native.out.glob("bad-*.mtp")):
-        if path.name.endswith(".out.mtp"): continue
+    for path in sorted(native.out.glob("bad-*.sus2")):
+        if path.name.endswith(".out.sus2"): continue
         try:
             load_mtp_model(path)
         except MTPParseError:
             pass
         else:
             raise AssertionError(f"PyTorch accepted invalid schema: {path.name}")
-    record("PT-invalid-schema",{"rejected": [p.name for p in sorted(native.out.glob("bad-*.mtp")) if not p.name.endswith(".out.mtp")]})
-    shared_path, free_path = native.out/"shared.mtp", native.out/"species.free.mtp"
+    record("PT-invalid-schema",{"rejected": [p.name for p in sorted(native.out.glob("bad-*.sus2")) if not p.name.endswith(".out.sus2")]})
+    shared_path, free_path = native.out/"shared.sus2", native.out/"species.free.sus2"
     shared = load_mtp_model(shared_path)
     converted = convert_shared_readout_to_species(shared)
     assert converted.spec.readout_mode == "species"
-    conversion_path = out/"pt-converted.mtp"; save_mtp_model(converted, conversion_path)
+    conversion_path = out/"pt-converted.sus2"; save_mtp_model(converted, conversion_path)
     close("PT-shared-conversion", efs(model(shared_path), cfg), efs(model(conversion_path), cfg))
     # The exact structural invariant belongs to the in-memory conversion.
     # Comparing against a saved/reparsed model would also test text rounding
@@ -134,7 +134,7 @@ def main():
         g=torch.autograd.grad(getattr(value,field).square().sum(),obj.species_coeffs,retain_graph=True,allow_unused=True)[0]
         if g is not None: np.testing.assert_array_equal(g.detach().cpu().numpy(),np.zeros(2))
     record("h-force-virial-gradient",{"exact_zero":True})
-    body6=[i for i,info in enumerate(obj.mtp.spec.sh_scalar_info) if info.body_order==6]
+    body6=[i for i,info in enumerate(obj.sus2.spec.sh_scalar_info) if info.body_order==6]
     assert body6,"fixture lost sixth-order readout paths"
     saved_head=obj.moment_coeffs.detach().clone()
     with torch.no_grad(): obj.moment_coeffs[:,body6]=0.
@@ -217,7 +217,7 @@ def main():
     parametrize_adaptive_amplitudes(obj)
     _maybe_parametrize_radial_weight_norm(obj,TrainingOptions(radial_weight_norm=True))
     close("fixed-RMS-output-weightnorm-preserve",efs(obj,cfg),before)
-    folded=out/"folded.mtp"; save_mtp_model(obj.to_mtp_model(),folded)
+    folded=out/"folded.sus2"; save_mtp_model(obj.to_mtp_model(),folded)
     close("folded-PT",efs(model(folded),cfg),before)
     close("folded-native",native_values("folded-native",folded,native.cfg),before,serialized=True)
     native.run("folded-linear-components","check-linear-readout-dev",folded,native.cfg,
@@ -242,7 +242,7 @@ def main():
         losses.append(float(objective.detach()))
     assert not torch.equal(initial_head,obj.moment_coeffs)
     np.testing.assert_array_equal(initial_h.cpu().numpy(),obj.species_coeffs.detach().cpu().numpy())
-    adam=out/"adam3.mtp"; save_mtp_model(obj.to_mtp_model(),adam)
+    adam=out/"adam3.sus2"; save_mtp_model(obj.to_mtp_model(),adam)
     close("Adam-export-native",native_values("adam-native",adam,native.cfg),efs(obj,cfg),serialized=True)
     record("Adam3",{"steps":3,"losses":losses,"h_exactly_unchanged":True,"head_updated":True,
                     "formal_initialization_reused":False})
@@ -273,7 +273,7 @@ def main():
     for label,case in combinations.items():
         free_case=Path(case["species"]); shared_case=Path(case["shared"])
         opt=model(free_case); reference=model(free_case,"reference")
-        mtp=opt.mtp
+        mtp=opt.sus2
         assert mtp.spec.readout_mode=="species"
         assert mtp.spec.two_layer_gate_factor_pruning==case["gate_pruning"]
         assert mtp.spec.outer_channel_mode==("same-channel" if case["outer_pruning"]=="same-k" else "cross-channel")
@@ -287,7 +287,7 @@ def main():
         current_efs=efs(opt,cfg)
         close(label+"-native-EFS",current_efs,native_values(label+"-native",free_case,native.cfg),serialized=True)
         close(label+"-reference-EFS",current_efs,efs(reference,cfg))
-        pt_converted=out/(label+".PT-converted.mtp")
+        pt_converted=out/(label+".PT-converted.sus2")
         save_mtp_model(convert_shared_readout_to_species(load_mtp_model(shared_case)),pt_converted)
         close(label+"-PT-conversion",efs(model(shared_case),cfg),efs(model(pt_converted),cfg))
         close(label+"-conversion-native-parity",efs(model(pt_converted),cfg),
@@ -333,7 +333,7 @@ def main():
     selected=lossless(selected_path,[source_cfg[0],source_cfg[-1]])
     top={}
     for mode in ("shared","species"):
-        top[mode]=out/f"production-{mode}.topology.mtp"
+        top[mode]=out/f"production-{mode}.topology.sus2"
         native.run("production-init-"+mode,"init-sh",top[mode],*helper.topology_args(True,readout=mode))
     for key in helper.GRAPH_FIELDS:
         assert helper.assignment(top["shared"].read_text(),key)==helper.assignment(top["species"].read_text(),key)
@@ -344,7 +344,7 @@ def main():
     assert sum(p.numel() for p in production.parameters())==76116
     stats=rescale_initial_parameters(production,selected,max_configs=2,min_scale=1e-12,max_scale=1e12,preserve_function=False)
     production.set_readout_output_scale(1.71,preserve_function=True)
-    prod_path=out/"production-initial.mtp"; save_mtp_model(production.to_mtp_model(),prod_path)
+    prod_path=out/"production-initial.sus2"; save_mtp_model(production.to_mtp_model(),prod_path)
     all_efs=torch.cat([efs(production,c) for c in selected])
     close("production-native-PT-EFS",native_values("production-native",prod_path,selected_path),all_efs,serialized=True)
     close("production-fold",torch.cat([efs(model(prod_path),c) for c in selected]),all_efs)

@@ -1,23 +1,25 @@
 # SUS2-SH Mu Body Linear-Combo Gate
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Branch And Scope
 
 This experiment lives on:
 
 ```text
-codex/mu-body-order-gate
+<historical-branch>
 ```
 
 It is branched directly from SUS2-SH `origin/main`. The server work directory is:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+<historical-path>
 ```
 
 The server binary is:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 The target smoke/test case directory is:
@@ -31,13 +33,13 @@ The target smoke/test case directory is:
 Current SUS2-SH main/developer reference binary for branch speed comparisons:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 Source relationship:
 
 ```text
-server source tree: /work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+server source tree: <historical-path>
 server checkout branch name: developer
 GitHub repository: git@github.com:hu-yanxiao/SUS2-SH.git
 GitHub branches at this commit: main, developer
@@ -48,15 +50,15 @@ binary SHA-256: aca08ae4d763c155af18dfa2c6a51b4c39379eef7712c29179d787ac4f499659
 Current mu-body-order gate test binary:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 Source relationship:
 
 ```text
-server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
-local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
-GitHub branch: codex/mu-body-order-gate
+server source mirror: <historical-path>
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.local_tmp/sus2-sh-developer-tanh
+GitHub branch: <historical-branch>
 binary code commit: a827a02c13978fd7f06be757497d6b1cdb5bff9c
 binary SHA-256: 0f6bce2b6a15d97c1c848d4e1b247940fb0e961f1d104e4c661a35f7d595f315
 ```
@@ -69,17 +71,17 @@ binary code commit do not imply that the binary must be rebuilt.
 Current optimized LAMMPS mu-body gate binary:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+<historical-path>
 ```
 
 Source relationship as of 2026-06-16 03:00 CST:
 
 ```text
-local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
-local branch: codex/mu-body-order-gate
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.local_tmp/sus2-sh-developer-tanh
+local branch: <historical-branch>
 GitHub/code commit: a8ec8a98b41e99f12821567d61f5cd8b602c4221
-server SUS2-SH source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/interfaces/lammps/ML-SUS2
-server LAMMPS build src: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+server SUS2-SH source mirror: <historical-path>
+server LAMMPS build src: <historical-path>
 LAMMPS binary SHA-256: e77ee6eaa74ef6eb9ad8b4723dc649be907856deb881ef734981cd77cd864054
 pair_sus2_mtp.cpp SHA-256: 51a09e0d403af744b2e05770a45021b4adc9cbc508ddb245c9ff3041b67fea80
 pair_sus2_mtp.h SHA-256: 6bc7a1624aae0b0f162f02bb4fcc77f983a8700a4960f81f78ad1f040918bd55
@@ -88,13 +90,13 @@ pair_sus2_mtp.h SHA-256: 6bc7a1624aae0b0f162f02bb4fcc77f983a8700a4960f81f78ad1f0
 The stable binary above is the same file content as:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.no_center_branchless_trial
+<historical-path>
 ```
 
 Final exact LAMMPS optimization status:
 
 ```text
-test directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+test directory: <historical-path>
 main LAMMPS baseline binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 40-rank parity job for final SHA-256 e77...4054: 3801127, DONE
 40-rank direct parity job final vs group_contract reference: 3801130, DONE
@@ -113,8 +115,8 @@ Verified 40-rank direct parity for the final stable binary against the accepted
 grouped-contraction reference:
 
 ```text
-reference binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.group_contract_trial
-final binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+reference binary: <historical-path>
+final binary: <historical-path>
 combo abs_dE=0, max_force_diff=0
 full abs_dE=0, max_force_diff=0
 ```
@@ -122,7 +124,7 @@ full abs_dE=0, max_force_diff=0
 Final 40-rank LAMMPS speed comparison:
 
 ```text
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/no_center_branchless_perf40_summary.txt
+summary: <historical-path>
 host: b07u32a
 replicate: 2 2 2
 run steps: 5000
@@ -151,17 +153,17 @@ final binary are:
 Current LAMMPS mu-body gate trial binary for exact gate performance work:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.fulldedupe_trial
+<historical-path>
 ```
 
 Source relationship as of 2026-06-15 21:16 CST:
 
 ```text
-local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
-local branch: codex/mu-body-order-gate
+local source worktree: /Users/hu-yanxiao/Projects/SUS2MLIP/.local_tmp/sus2-sh-developer-tanh
+local branch: <historical-branch>
 GitHub commit: c28fe23
-server SUS2-SH source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/interfaces/lammps/ML-SUS2
-server LAMMPS build src: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+server SUS2-SH source mirror: <historical-path>
+server LAMMPS build src: <historical-path>
 LAMMPS trial binary SHA-256: e2f8f2d6e23eed2196f28c207fd2b2da9ef96022943853dcdcc7555dae42c270
 pair_sus2_mtp.cpp SHA-256: b5ed9f68d797655d581d1e969390e29ce1f925bef0f2bcdafac1f8a32db06872
 pair_sus2_mtp.h SHA-256: 8d8e1c3e68b545f3e211e6accdbc2aaf29356cbf66333afc3467675680809ebd
@@ -173,7 +175,7 @@ worktree, the server SUS2-SH source mirror, and the LAMMPS build source tree.
 Current exact LAMMPS optimization status for this trial:
 
 ```text
-test directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+test directory: <historical-path>
 main LAMMPS baseline binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 40-rank parity job for trial SHA-256 e2f8...c270: 3800824, DONE
 40-rank speed job for trial SHA-256 e2f8...c270: 3800825, DONE
@@ -192,7 +194,7 @@ full 40-rank max_force_diff=6.689640e-15
 Clean 40-rank LAMMPS speed comparison for trial SHA-256 `e2f8...c270`:
 
 ```text
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/speed_fulldedupe_speed40_summary.txt
+summary: <historical-path>
 host: b08u22a
 replicate: 2 2 2
 run steps: 5000
@@ -211,7 +213,7 @@ Short 40-rank profile for trial SHA-256 `e2f8...c270`:
 
 ```text
 job id: 3800839
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/profile40_e2f8_summary.txt
+summary: <historical-path>
 host: b08u03a
 profile steps: 20
 ```
@@ -229,7 +231,7 @@ large fraction of the 40-rank short-run profile.
 Rejected exact LAMMPS signal-derivative-cache candidate:
 
 ```text
-candidate binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.signalderiv_trial
+candidate binary: <historical-path>
 candidate SHA-256 after alias fix: ba05caca66e9690b15b189acc6c63449aa1db4df8e5e114526e10cc0cd4c3c34
 login parity: combo max_force_diff=1.0e-20, full max_force_diff=1.3878e-16
 login profile combo mean_total=0.087373956 s
@@ -247,7 +249,7 @@ the saved memory traffic on the tested model. Do not promote this candidate.
 Do not use this historical directory as the current main reference:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-origin-main-speed-bench-codex
+<historical-path>
 ```
 
 It was observed at detached commit `6a5ca72dd5a31766c0e0da0711a44682d8fa461c`,
@@ -266,9 +268,9 @@ radial basis: RBLaguerre_log1p
 
 | Case | Binary | Gate option | Runtime | Relative to main |
 | --- | --- | --- | ---: | ---: |
-| main/developer old gate | `SUS2-SH-work-codex/bin/mlp-sus2` | `--two-layer-gate-body-order=5` | `462 s` | `1.00x` |
-| mu-body linear-combo | `SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2` | `--two-layer-gate-mode=mu-body-linear-combo` | `654 s` | `1.42x` |
-| mu-scalar full | `SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2` | `--two-layer-gate-mode=mu-scalar-full` | `603 s` | `1.31x` |
+| main/developer old gate | `SUS2-SH-work-<historical-branch>` | `--two-layer-gate-body-order=5` | `462 s` | `1.00x` |
+| mu-body linear-combo | `SUS2-SH-mu-body-gate-work-<historical-branch>` | `--two-layer-gate-mode=mu-body-linear-combo` | `654 s` | `1.42x` |
+| mu-scalar full | `SUS2-SH-mu-body-gate-work-<historical-branch>` | `--two-layer-gate-mode=mu-scalar-full` | `603 s` | `1.31x` |
 
 All three runs exited with code 0.
 
@@ -276,7 +278,7 @@ Submitted neighbor-site full test job in that directory:
 
 ```text
 job id: 3791918
-script: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/bsub_gate_3000_additive_mu_body_codex.lsf
+script: <historical-path>
 log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_gate_3000_additive.log
 ```
 
@@ -284,7 +286,7 @@ Submitted double-site full test job in that directory:
 
 ```text
 job id: 3792530
-script: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/bsub_gate_3000_additive_mu_body_double_codex.lsf
+script: <historical-path>
 log: /work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/mu_body_double_gate_3000_additive.log
 status at submission: PEND
 ```
@@ -433,7 +435,7 @@ Interface verification:
 
 ```text
 CPU LAMMPS pair source built into the independent branch LAMMPS work tree:
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps
+<historical-path>
 Kokkos device pair style rejects mu-body-order gate models at settings time.
 ```
 
@@ -442,7 +444,7 @@ Kokkos device pair style rejects mu-body-order gate models at settings time.
 Final synchronized server binary:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 Final binary SHA-256:
@@ -454,9 +456,9 @@ Final binary SHA-256:
 Independent CPU LAMMPS binary for this branch:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/bin/lmp.sus2_sh_cpu_avx2_mu_body_gate_opt_20260612
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+<historical-path>
+<historical-path>
+<historical-path>
 ```
 
 LAMMPS binary SHA-256:
@@ -480,7 +482,7 @@ primitive cache, site-derivative cache, and shared-radial paths.
 500x55 profile directory:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_mu_body_gate_opt1_speed_20260611_180753
+<historical-path>
 ```
 
 Training-speed decision at matched profile settings:
@@ -510,7 +512,7 @@ adjoint loops.
 Matched 500x55 profile directory:
 
 ```text
-/work/phy-weigw/hyx/200w/5.31-new-44421/codex_mu_body_gate_double_opt_profile_20260612_082023
+<historical-path>
 ```
 
 Final matched profile:
@@ -574,13 +576,13 @@ LAMMPS 1-rank vs 2-rank: PASS, max_abs=0
 ## LAMMPS Gate-Mode Efficiency Update 2026-06-15
 
 The independent CPU LAMMPS branch binary was rebuilt from the current
-`codex/mu-body-order-gate` source after optimizing the exact gate dataflow:
+`<historical-branch>` source after optimizing the exact gate dataflow:
 
 ```text
-source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+source mirror: <historical-path>
+binary: <historical-path>
 binary SHA-256: 7c54d7ec5ee765d9ddf5fa2569628a84c004aac47ffbf161b6bc4b8e329ae4c7
-pre-optimization backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_body_comm_20260615_1237
+pre-optimization backup: <historical-path>
 ```
 
 Implementation notes:
@@ -604,13 +606,13 @@ Implementation notes:
 Real B-system LAMMPS benchmark:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_130313
+directory: <historical-path>
 data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
 LAMMPS cell: replicate 2 2 2, 384 B atoms
 queue/cores: 1t88c, 96 MPI ranks
 run: 5000 steps, tabstep 0.0005, trained models converted to *_lmp radial basis
 main binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
-new-branch binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+new-branch binary: <historical-path>
 ```
 
 | Model/mode | Mean loop time | Relative to main |
@@ -628,7 +630,7 @@ absolute loop time, while the combo absolute time remains in the same range.
 Numerical parity against the pre-body-channel-communication binary:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_125051
+directory: <historical-path>
 job: 3798420
 combo abs_dE=0.000000e+00, max_force_diff=8.600000e-19, rms_force_diff=2.533799e-20
 full  abs_dE=0.000000e+00, max_force_diff=3.903132e-15, rms_force_diff=6.774959e-16
@@ -637,7 +639,7 @@ full  abs_dE=0.000000e+00, max_force_diff=3.903132e-15, rms_force_diff=6.774959e
 Short 200-step profile on the same B 2x2x2 setup:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_125051
+directory: <historical-path>
 job: 3798421
 ```
 
@@ -676,19 +678,19 @@ optimizations on top of the body-channel communication build:
 Accepted independent CPU LAMMPS binary:
 
 ```text
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+binary: <historical-path>
 binary SHA-256: 9e89565433abd450bf49ecb85e702b84f6bf290614c6b499d3ec353e9cae83d9
 source code commit: f8a098f643eecfdfe9b9b2e0fc144d8046518083
-previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_nozero_values_20260615_1515
-trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.nozero_values_trial
-source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
-SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+previous backup: <historical-path>
+trial binary: <historical-path>
+source mirror: <historical-path>
+SUS2-SH server mirror: <historical-path>
 ```
 
 Numerical parity against the previous canonical branch binary:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+directory: <historical-path>
 job: 3798701
 combo abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
 full  abs_dE=0.000000e+00, max_force_diff=5.922340e-15, rms_force_diff=1.163142e-15
@@ -697,7 +699,7 @@ full  abs_dE=0.000000e+00, max_force_diff=5.922340e-15, rms_force_diff=1.163142e
 Real B-system LAMMPS speed comparison in one matched 96-rank job:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+directory: <historical-path>
 job: 3798702
 data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
 LAMMPS cell: replicate 2 2 2, 384 B atoms
@@ -717,7 +719,7 @@ run: 5000 steps, tabstep 0.0005, trained *_lmp models
 Short 200-step profile with the accepted binary:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_gate_nozero_values_20260615_1515
+directory: <historical-path>
 job: 3798812
 ```
 
@@ -750,19 +752,19 @@ optimizations on top of the no-zero build:
 Accepted independent CPU LAMMPS binary:
 
 ```text
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo
+binary: <historical-path>
 binary SHA-256: 89e29919ddf899990f5f8e4e1e0a55be5ce0a31bc6bc04c0acb038bc795714ad
 source code commit: 560558dee1f1f2bb38b7b815039256d669d1984e
-previous backup: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.pre_raw_edge_comm_direct_pack_20260615_1900
-trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.raw_edge_comm_direct_pack_trial
-source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
-SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+previous backup: <historical-path>
+trial binary: <historical-path>
+source mirror: <historical-path>
+SUS2-SH server mirror: <historical-path>
 ```
 
 Numerical parity against the previous canonical branch binary:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+directory: <historical-path>
 job: 3800591
 combo abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
 full  abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e+00
@@ -771,7 +773,7 @@ full  abs_dE=0.000000e+00, max_force_diff=0.000000e+00, rms_force_diff=0.000000e
 Real B-system LAMMPS speed comparison in one matched 96-rank job:
 
 ```text
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial
+directory: <historical-path>
 job: 3800594
 node: be1u39a
 data: first structure from /work/phy-weigw/hyx/xxx-b/test/train.cfg
@@ -811,11 +813,11 @@ cleanup on top of the raw-edge/comm-direct build:
 Retained independent CPU LAMMPS binary:
 
 ```text
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.directfill_seed_trial
+binary: <historical-path>
 binary SHA-256: 08b53882086b4e99eabfbbed60a84f5b00932d0ac33a9a878d1d3a754c3ac0f8
 source code commit: 826415d4dcc64ee0a38ba445c2302d6f7aa0d5ec
-source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
-SUS2-SH server mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+source mirror: <historical-path>
+SUS2-SH server mirror: <historical-path>
 pair_sus2_mtp.cpp SHA-256: 6f80c0d1a1df873806050e02bf7f2c9c9d0e16b73d19abf288d76b4b5a2ae375
 pair_sus2_mtp.h SHA-256: db75fb2da94ef56eed5d19e9260fddd589f39d1e8402fae74c878ddc582ea810
 ```
@@ -833,7 +835,7 @@ binary:
 
 ```text
 script: /work/phy-weigw/20260321_Test/run_directfill_seed_login_profile.sh
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/directfill_seed_login_profile
+directory: <historical-path>
 ```
 
 | Mode/binary | total | first | fcomm | main | rcomm | gate_force |
@@ -852,7 +854,7 @@ Completed 40-rank short profile on the B-system 2x2x2 LAMMPS case:
 ```text
 job: 3800991
 node: b07u38a
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/seed_profile40_summary.txt
+summary: <historical-path>
 ```
 
 | Mode/binary | total | first | fcomm | main | rcomm | gate_force |
@@ -867,7 +869,7 @@ Completed 40-rank real LAMMPS speed comparison on the B-system 2x2x2 case:
 ```text
 job: 3801017
 node: b07u38a
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_b_cfg_trained_lammps_perf_20260615_raw_edge_trial/speed_seed_ipo40_summary.txt
+summary: <historical-path>
 run: 5000 steps, 384 B atoms, trained *_lmp models
 ```
 
@@ -895,7 +897,7 @@ At the time this note was updated, the remaining pending job was:
 Rejected exact fast-dispatch candidate:
 
 ```text
-trial binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2_noipo.fastdispatch_trial
+trial binary: <historical-path>
 trial SHA-256: 67b4c698d963eec3f9e1f48542bd067eb5c82530615d8d0a9a1dc2de204d6e34
 login parity: combo/full zero energy and force differences against the retained binary
 login profile: combo total 0.079477085 -> 0.079802535, full total 0.083516155 -> 0.083533995
@@ -967,9 +969,9 @@ code commit:
 Server/source relationship:
 
 ```text
-branch: codex/mu-body-order-gate
+branch: <historical-branch>
 LAMMPS source tree: /work/phy-weigw/apps/lammps-10Dec2025/src
-candidate binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2.compactcache_noipo_trial
+candidate binary: <historical-path>
 binary SHA-256: 3804c2ff4dc2f8d2dea9dc98ef518f9f62cd4d65a4d02895880926f013a94340
 pair_sus2_mtp.cpp SHA-256: 99607417815d5ff7581a94b00a5fd4d0ea22a3ba8f9543724e8ab49f89a7b796
 pair_sus2_mtp.h SHA-256: 7bcc504efe60e2eb96c4392b96bca1efd4853b47cd7af02bdd60f8d2084dea0f
@@ -979,7 +981,7 @@ Parity verification:
 
 ```text
 job: 3802892
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_compactcache_parity_20260617_052612
+directory: <historical-path>
 result: 12 cases PASS, max_abs_energy=0, max_abs_force=0, rms_force=0
 ```
 
@@ -987,7 +989,7 @@ Full 40-rank large-cell speed verification:
 
 ```text
 job: 3802925
-directory: /work/phy-weigw/hyx/xxx-b/test/codex_productarrays_full_matrix_40_20260617_062357
+directory: <historical-path>
 main binary: /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 main SHA-256: 46a2096aebdcb8d05030c3f7164227c402986334f942c558042d569888e9344a
 run_steps: 800
@@ -1020,12 +1022,12 @@ Rejected exact candidates during this optimization round:
 
 - `stride2` direct body-adjoint specialization preserved parity but slowed the
   l2k2 hot case (`1.2823x` vs main in
-  `/work/phy-weigw/hyx/xxx-b/test/codex_stride2_l2k2_body_speed_40_20260617_061120`);
+  `<historical-path>`);
   it was reverted and is not present in the promoted source.
 - `SUS2_LAMMPS_GATE_MU_INDEXED_BASIC=1` preserved the mathematical path but
   increased l2k2 `mu-body-linear-combo` median to `11.258000 s`
   (`1.6477x` vs main) in
-  `/work/phy-weigw/hyx/xxx-b/test/codex_mu_indexed_basic_l2k2_speed_40_20260617`;
+  `<historical-path>`;
   it remains off and is not promoted.
 
 ## Verification Checklist
@@ -1044,10 +1046,10 @@ bash dev_test/sh_two_layer_gate_shared_radial_check.sh
 bash dev_test/sh_two_layer_gate_train_weight_check.sh
 bash dev_test/sh_two_layer_gate_lmp_table_check.sh
 bash dev_test/sh_plain_to_gate_upgrade_check.sh
-LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+LAMMPS_BIN=<historical-path> \
   bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 GATE_SITE_MODE=double \
-LAMMPS_BIN=/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_double_avx2 \
+LAMMPS_BIN=<historical-path> \
   bash dev_test/lammps_two_layer_gate_additive_mlp_check.sh
 ```
 
@@ -1078,21 +1080,21 @@ Current accepted branch LAMMPS binaries:
 
 ```text
 AVX2 stable trial:
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_avx2.guarded_envbatch_noipo_trial
+<historical-path>
 
 1t88c/Sapphire-Rapids trial:
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_mu_body_gate_spr_low.guarded_envbatch_noipo_trial
+<historical-path>
 ```
 
 Source and build record:
 
 ```text
-GitHub branch: codex/mu-body-order-gate
+GitHub branch: <historical-branch>
 LAMMPS code commit: 337b3a6a1100b7f549398d8265c8d8767b83b8ae
 build job: 3806942
-build directory: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/build_guarded_envbatch_1t88c_3806942
+build directory: <historical-path>
 LAMMPS source tree: /work/phy-weigw/apps/lammps-10Dec2025/src
-server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+server source mirror: <historical-path>
 pair_sus2_mtp.cpp SHA-256: d51d12b20dd160472d8b7a3097c98241362527614c81c3466139c427c025bf0c
 pair_sus2_mtp.h SHA-256: 43493ad85dc9e4cccadf327294eb3c15766305cf24ba4bd1510c2566015264df
 AVX2 binary SHA-256: 2fbde6c67935795157bf8566fa21dd2f159a5c06944ed088fdd5825b76c65703
@@ -1104,8 +1106,8 @@ Current full l/k matrix:
 
 ```text
 job: 3806946
-summary: /work/phy-weigw/hyx/xxx-b/test/codex_guarded_envbatch_spr_matrix_96_20260618_043600/guarded_envbatch_spr_matrix_summary.txt
-main binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.ml-sus2_main_pair_spr_low.noipo_1t88c_reference
+summary: <historical-path>
+main binary: <historical-path>
 main SHA-256: 8719bec551be72abcf9c8c6e93bad55ab5b78327f505052cbf9683c1f22deb61
 run_steps: 800
 replicate: 6 6 6
@@ -1151,7 +1153,7 @@ Rejected exact candidates from the 2026-06-18 1t88c round:
   (build job 3806948, binary SHA-256
   `0f2cfeb611ebd360687d334c87e3b78e2c81798306ab9a655a91301ac51a934b`) was
   slower than guarded_envbatch in direct A/B testing:
-  `/work/phy-weigw/hyx/xxx-b/test/codex_stride20_vs_guarded_spr_ab_96_20260618_052029/stride20_vs_guarded_spr_ab_summary.txt`.
+  `<historical-path>`.
   It also introduced a max force difference of about `6.9e-15` in AVX2 run-0
   parity, so it is not promoted.
 - Runtime `SUS2_LAMMPS_GATE_COMPACT_MOMENT_CACHE=1` slowed both l3k4 and l4k4
@@ -1167,10 +1169,10 @@ were rejected. The branch was restored to the accepted source hashes below, and
 the formal CPU LAMMPS binaries are installed under `/work/phy-weigw/app/`.
 
 ```text
-GitHub branch: codex/mu-body-order-gate
+GitHub branch: <historical-branch>
 branch HEAD at build time: 74b8e61aba78e24198172f0ed5872eb52940182f
 LAMMPS source tree used for app builds: /work/phy-weigw/apps/lammps-10Dec2025/src
-server LAMMPS mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src
+server LAMMPS mirror: <historical-path>
 pair_sus2_mtp.cpp SHA-256: d51d12b20dd160472d8b7a3097c98241362527614c81c3466139c427c025bf0c
 pair_sus2_mtp.h SHA-256: 43493ad85dc9e4cccadf327294eb3c15766305cf24ba4bd1510c2566015264df
 ```
@@ -1222,7 +1224,7 @@ The rejected final attempts were:
 ## Kokkos GPU LAMMPS v21 - 2026-06-18
 
 This round optimizes the Kokkos GPU LAMMPS interface for the experimental
-`codex/mu-body-order-gate` branch. The accepted Kokkos binary is installed at:
+`<historical-branch>` branch. The accepted Kokkos binary is installed at:
 
 ```text
 /work/phy-weigw/app/lmp.sus2-sh-mu-body-order-gate_kokkos_sm80_v21_split_gate_force_kernel
@@ -1231,10 +1233,10 @@ This round optimizes the Kokkos GPU LAMMPS interface for the experimental
 Source and binary record:
 
 ```text
-branch: codex/mu-body-order-gate
+branch: <historical-branch>
 source commit: this documentation commit; final pushed hash is recorded in the server source map
-server source mirror: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/lammps/src/KOKKOS
-server build tree: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/build_mu_gate_kokkos_gpu_20260618_120200
+server source mirror: <historical-path>
+server build tree: <historical-path>
 build job: 3812933
 Kokkos binary SHA-256: 9ac60065bb2590e18647633684634d2d1c2751eae1afbd709a0b8bf1f2720dc3
 pair_sus2_mtp_kokkos.cpp SHA-256: 72a31557e1903e61170ce29ee3b4e3eb1dcb1d5a1d7d5e5d53abfc1ff12cbeb0
@@ -1257,7 +1259,7 @@ Centroid stress oracle:
 
 ```text
 job: 3812936
-directory: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/oracle_l4k4_v21_centroid_20260618
+directory: <historical-path>
 input check: compute ccent all centroid/stress/atom NULL pair
 combo: dE=0, dP=0, force_max=9.1593399531575415e-15, centroid_rel=8.2133422715458233e-15 PASS
 full:  dE=0, dP=0, force_max=2.1316282072803006e-14, centroid_rel=1.3829233550611508e-14 PASS
@@ -1269,7 +1271,7 @@ Kokkos GPU speed matrix:
 job: 3812939
 node: c04u01g
 main reference binary: /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_tabstep_double_compute1
-mu binary: /work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-lammps-work-codex/bin/lmp.sus2_sh_mu_body_gate_kk_sm80_v21_split_gate_force_kernel_20260618
+mu binary: <historical-path>
 cell: B-system first training structure, replicate 6 6 6
 run steps: 800
 reps: 3

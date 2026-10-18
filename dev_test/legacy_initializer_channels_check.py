@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix="legacy-channel-init-") as folder:
     for gate in ("q-total", "same-k"):
         for outer in ("q-total", "same-k"):
             for readout in ("shared", "species"):
-                path = pathlib.Path(folder) / f"{gate}-{outer}-{readout}.mtp"
+                path = pathlib.Path(folder) / f"{gate}-{outer}-{readout}.sus2"
                 subprocess.run([binary, "init-sh", str(path), "--species-count=2",
                                 "--l-max=2", "--k-max=4", "--body-order=3",
                                 "--radial-basis-size=4", "--superlinear-mode=legacy",
@@ -33,8 +33,8 @@ with tempfile.TemporaryDirectory(prefix="legacy-channel-init-") as folder:
                 text = path.read_text()
                 expected = "1.2.0" if (gate, outer, readout) == ("q-total", "q-total", "shared") else "1.8.0"
                 assert field(text, "version") == expected
-                saved = path.with_suffix(".saved.mtp")
-                reloaded = path.with_suffix(".reloaded.mtp")
+                saved = path.with_suffix(".saved.sus2")
+                reloaded = path.with_suffix(".reloaded.sus2")
                 for source, target in ((path, saved), (saved, reloaded)):
                     subprocess.run([binary, "roundtrip-model-dev", str(source), str(target)],
                                    check=True, stdout=subprocess.DEVNULL)
@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="legacy-channel-init-") as folder:
                                      re.sub(r"^\s*readout_mode\s*=.*\n", "", canonical, flags=re.M),
                                      canonical + "\nadaptive_radial_weights = {}\n"]
                     for index, invalid_text in enumerate(invalid_texts):
-                        invalid = path.with_suffix(f".invalid{index}.mtp")
+                        invalid = path.with_suffix(f".invalid{index}.sus2")
                         invalid.write_text(invalid_text)
                         result = subprocess.run([binary, "roundtrip-model-dev", str(invalid), str(reloaded)],
                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -62,11 +62,11 @@ with tempfile.TemporaryDirectory(prefix="legacy-channel-init-") as folder:
             assert records[gate, "q-total", readout][0] == records[gate, "same-k", readout][0]
         for outer in ("q-total", "same-k"):
             assert records["q-total", outer, readout][1] == records["same-k", outer, readout][1]
-    plain = pathlib.Path(folder) / "plain-species.mtp"
+    plain = pathlib.Path(folder) / "plain-species.sus2"
     subprocess.run([binary, "init-sh", str(plain), "--species-count=2", "--l-max=2",
                     "--k-max=4", "--body-order=3", "--readout-mode=species"],
                    check=True, stdout=subprocess.DEVNULL)
-    saved_plain = plain.with_suffix(".saved.mtp")
+    saved_plain = plain.with_suffix(".saved.sus2")
     subprocess.run([binary, "roundtrip-model-dev", str(plain), str(saved_plain)],
                    check=True, stdout=subprocess.DEVNULL)
     assert field(saved_plain.read_text(), "version") == "1.8.0"

@@ -4,9 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bin=${PATCHED_BIN:-./bin/mlp-sus2}
 test -x "$bin"
-mkdir -p .codex_tmp
-test_dir=$(mktemp -d .codex_tmp/sh_pure_w_regularization.XXXXXX)
-cfg=codex_tests/pure_w_regularization.cfg
+mkdir -p .local_tmp
+test_dir=$(mktemp -d .local_tmp/sh_pure_w_regularization.XXXXXX)
+cfg=native_tests/pure_w_regularization.cfg
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export SUS2_SH_PRODUCT_ROWS=0 SUS2_SH_PRODUCT_HVT_REVERSE=0
 export SUS2_SH_ACCUM_SKIP_SITE_DERS=0
@@ -71,7 +71,7 @@ smooth_opts=(--max-configs=1 --energy-weight=0 --force-weight=0 --stress-weight=
   --displacement=1e-6 --abs-tolerance=2e-11 --rel-tolerance=2e-5)
 
 for map in K L LK; do
-  model="$test_dir/$map.mtp"
+  model="$test_dir/$map.sus2"
   make_model "$map" 3 "$model"
   "$bin" check-loss-gradient-dev "$model" "$cfg" "${smooth_opts[@]}" \
     --coeff-start=0 --coeff-end=1 > "$test_dir/$map.layout.log" 2>&1
@@ -128,7 +128,7 @@ for map in K L LK; do
     --displacement=1e-6 --abs-tolerance=2e-7 --rel-tolerance=2e-4 \
     > "$test_dir/$map.gate.chart-fd.log" 2>&1
 
-  wide_model="$test_dir/$map.wide.mtp"
+  wide_model="$test_dir/$map.wide.sus2"
   make_model "$map" 6 "$wide_model"
   "$bin" check-loss-gradient-dev "$wide_model" "$cfg" "${smooth_opts[@]}" \
     --coeff-start=0 --coeff-end=1 > "$test_dir/$map.wide.log" 2>&1
@@ -139,7 +139,7 @@ for map in K L LK; do
   }'
 
   # Exact zero remains a valid physical row, with no epsilon injection.
-  zero_model="$test_dir/$map.zero-row.mtp"
+  zero_model="$test_dir/$map.zero-row.sus2"
   awk '/^two_layer_gate_radial_mixing_coeffs[[:space:]]*=/ {
       line=$0; sub(/^[^{]*\{/, "", line); sub(/\}.*/, "", line)
       n=split(line,v,","); printf "two_layer_gate_radial_mixing_coeffs = {"
@@ -160,8 +160,8 @@ for map in K L LK; do
     --bfgs-coordinate-normalization=none \
     --energy-weight=1 --force-weight=0.3 --stress-weight=0.09 \
     --radial-smooth=0.02 --radial-smooth-grid=32 --gate-x-l2=0 \
-    --trained-pot-name="$test_dir/$map.trained.mtp" \
-    --curr-pot-name="$test_dir/$map.current.mtp" \
+    --trained-pot-name="$test_dir/$map.trained.sus2" \
+    --curr-pot-name="$test_dir/$map.current.sus2" \
     > "$test_dir/$map.train.log" 2>&1
   test "$(field outer_rows "$test_dir/$map.train.log")" -eq 11
   test "$(field outer_zero_fallback_rows "$test_dir/$map.train.log")" -eq 1
@@ -171,7 +171,7 @@ for map in K L LK; do
     line=$0; sub(/^[^{]*\{/, "", line); split(line,v,",")
     for(i=1;i<=4;++i) total+=v[i]*v[i]
     found=1
-  } END { if(!found || !(total>0)) exit 1 }' "$test_dir/$map.trained.mtp"
+  } END { if(!found || !(total>0)) exit 1 }' "$test_dir/$map.trained.sus2"
   printf 'PASS pure-W regularization/weight-norm scaling_map=%s\n' "$map"
 done
 printf 'Evidence: %s\n' "$test_dir"

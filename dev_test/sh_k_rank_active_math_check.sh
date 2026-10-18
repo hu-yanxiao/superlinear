@@ -89,18 +89,18 @@ PY
 # R=K with identity W must be an exact change of representation, not merely a
 # scalar-count match.  Activate both the gate and outer heads before comparing
 # E/F/S and every public decomposition/descriptor path.
-plain_init="$tmp_dir/plain-init.mtp"
-identity_init="$tmp_dir/rank3-identity-init.mtp"
-plain_model="$tmp_dir/plain-active.mtp"
-identity_model="$tmp_dir/rank3-identity-active.mtp"
+plain_init="$tmp_dir/plain-init.sus2"
+identity_init="$tmp_dir/rank3-identity-init.sus2"
+plain_model="$tmp_dir/plain-active.sus2"
+identity_model="$tmp_dir/rank3-identity-active.sus2"
 "$bin" init-sh "$plain_init" "${common[@]}" >/dev/null
 "$bin" init-sh "$identity_init" "${common[@]}" \
   --outer-k-rank=3 --two-layer-gate-k-rank=3 >/dev/null
-"$bin" roundtrip-model-dev "$plain_init" "$tmp_dir/plain-materialized.mtp" >/dev/null
-"$bin" roundtrip-model-dev "$identity_init" "$tmp_dir/identity-materialized.mtp" >/dev/null
+"$bin" roundtrip-model-dev "$plain_init" "$tmp_dir/plain-materialized.sus2" >/dev/null
+"$bin" roundtrip-model-dev "$identity_init" "$tmp_dir/identity-materialized.sus2" >/dev/null
 
-python3 - "$tmp_dir/plain-materialized.mtp" \
-  "$tmp_dir/identity-materialized.mtp" "$plain_model" "$identity_model" <<'PY'
+python3 - "$tmp_dir/plain-materialized.sus2" \
+  "$tmp_dir/identity-materialized.sus2" "$plain_model" "$identity_model" <<'PY'
 import re
 import sys
 
@@ -200,7 +200,7 @@ for command in calc-efs calc-descriptors calc-partialE calc-eij; do
   compare_numeric_files "$plain_out" "$identity_out"
 done
 
-identity_roundtrip="$tmp_dir/rank3-identity-roundtrip.mtp"
+identity_roundtrip="$tmp_dir/rank3-identity-roundtrip.sus2"
 "$bin" roundtrip-model-dev "$identity_model" "$identity_roundtrip" >/dev/null
 "$bin" calc-efs "$identity_roundtrip" "$one_cfg" \
   "$tmp_dir/identity-roundtrip-efs.out" >/dev/null
@@ -211,13 +211,13 @@ compare_numeric_files "$tmp_dir/identity-calc-efs.out" \
 # and outer matrices make channel/index transpositions observable.  The loss
 # directional checks include E, F, and stress, while check-efs-fd-dev verifies
 # the positional and cell chain rule independently of training targets.
-rank2_init="$tmp_dir/rank2-init.mtp"
-rank2_model="$tmp_dir/rank2-active.mtp"
+rank2_init="$tmp_dir/rank2-init.sus2"
+rank2_model="$tmp_dir/rank2-active.sus2"
 "$bin" init-sh "$rank2_init" "${common[@]}" \
   --outer-k-rank=2 --two-layer-gate-k-rank=2 >/dev/null
-"$bin" roundtrip-model-dev "$rank2_init" "$tmp_dir/rank2-materialized.mtp" >/dev/null
+"$bin" roundtrip-model-dev "$rank2_init" "$tmp_dir/rank2-materialized.sus2" >/dev/null
 
-python3 - "$tmp_dir/rank2-materialized.mtp" "$rank2_model" <<'PY'
+python3 - "$tmp_dir/rank2-materialized.sus2" "$rank2_model" <<'PY'
 import re
 import sys
 
@@ -289,7 +289,7 @@ replace("two_layer_gate_k_rank_weights", gate_weights)
 open(target, "w", encoding="utf-8").write(text)
 PY
 
-python3 - "$rank2_model" "$tmp_dir/rank2-gate-w-perturbed.mtp" <<'PY'
+python3 - "$rank2_model" "$tmp_dir/rank2-gate-w-perturbed.sus2" <<'PY'
 import re
 import sys
 
@@ -307,7 +307,7 @@ open(target, "w", encoding="utf-8").write(
     text[:match.start()] + replacement + text[match.end():])
 PY
 "$bin" calc-efs "$rank2_model" "$one_cfg" "$tmp_dir/rank2-active-probe.cfg" >/dev/null
-"$bin" calc-efs "$tmp_dir/rank2-gate-w-perturbed.mtp" "$one_cfg" \
+"$bin" calc-efs "$tmp_dir/rank2-gate-w-perturbed.sus2" "$one_cfg" \
   "$tmp_dir/rank2-gate-w-perturbed.cfg" >/dev/null
 python3 - "$tmp_dir/rank2-active-probe.cfg" \
   "$tmp_dir/rank2-gate-w-perturbed.cfg" <<'PY'
@@ -412,7 +412,7 @@ done
   --max-configs=1 --max-atoms=1 \
   --displacement=1.0e-5 --abs-tolerance=4.0e-5 --rel-tolerance=4.0e-3
 
-rank2_roundtrip="$tmp_dir/rank2-roundtrip.mtp"
+rank2_roundtrip="$tmp_dir/rank2-roundtrip.sus2"
 "$bin" roundtrip-model-dev "$rank2_model" "$rank2_roundtrip" >/dev/null
 "$bin" calc-efs "$rank2_model" "$one_cfg" "$tmp_dir/rank2-efs.out" >/dev/null
 "$bin" calc-efs "$rank2_roundtrip" "$one_cfg" \
@@ -634,31 +634,31 @@ PY
     --displacement=1.0e-5 --abs-tolerance=5.0e-5 --rel-tolerance=5.0e-3
 }
 
-outer2_gate1_init="$tmp_dir/outer2-gate1-body-init.mtp"
-outer2_gate1_model="$tmp_dir/outer2-gate1-body-active.mtp"
+outer2_gate1_init="$tmp_dir/outer2-gate1-body-init.sus2"
+outer2_gate1_model="$tmp_dir/outer2-gate1-body-active.sus2"
 "$bin" init-sh "$outer2_gate1_init" "${body_combo_common[@]}" \
   --outer-k-rank=2 --two-layer-gate-k-rank=1 >/dev/null
 "$bin" roundtrip-model-dev "$outer2_gate1_init" \
-  "$tmp_dir/outer2-gate1-body-materialized.mtp" >/dev/null
-activate_mixed_rank_model "$tmp_dir/outer2-gate1-body-materialized.mtp" \
+  "$tmp_dir/outer2-gate1-body-materialized.sus2" >/dev/null
+activate_mixed_rank_model "$tmp_dir/outer2-gate1-body-materialized.sus2" \
   "$outer2_gate1_model" 2 1 mu-body-linear-combo
 
-outer1_gate2_init="$tmp_dir/outer1-gate2-full-init.mtp"
-outer1_gate2_model="$tmp_dir/outer1-gate2-full-active-legacy-w.mtp"
+outer1_gate2_init="$tmp_dir/outer1-gate2-full-init.sus2"
+outer1_gate2_model="$tmp_dir/outer1-gate2-full-active-legacy-w.sus2"
 "$bin" init-sh "$outer1_gate2_init" "${common[@]}" \
   --outer-k-rank=1 --two-layer-gate-k-rank=2 >/dev/null
 "$bin" roundtrip-model-dev "$outer1_gate2_init" \
-  "$tmp_dir/outer1-gate2-full-materialized.mtp" >/dev/null
-activate_mixed_rank_model "$tmp_dir/outer1-gate2-full-materialized.mtp" \
+  "$tmp_dir/outer1-gate2-full-materialized.sus2" >/dev/null
+activate_mixed_rank_model "$tmp_dir/outer1-gate2-full-materialized.sus2" \
   "$outer1_gate2_model" 1 2 mu-scalar-full
 
 # The default body-linear-combo mixed model must depend actively on W_g.
 perturb_model_vector "$outer2_gate1_model" \
-  "$tmp_dir/outer2-gate1-body-gate-w-perturbed.mtp" \
+  "$tmp_dir/outer2-gate1-body-gate-w-perturbed.sus2" \
   two_layer_gate_k_rank_weights
 "$bin" calc-efs "$outer2_gate1_model" "$one_cfg" \
   "$tmp_dir/outer2-gate1-body-base.cfg" >/dev/null
-"$bin" calc-efs "$tmp_dir/outer2-gate1-body-gate-w-perturbed.mtp" "$one_cfg" \
+"$bin" calc-efs "$tmp_dir/outer2-gate1-body-gate-w-perturbed.sus2" "$one_cfg" \
   "$tmp_dir/outer2-gate1-body-gate-w-perturbed.cfg" >/dev/null
 assert_numeric_difference "$tmp_dir/outer2-gate1-body-base.cfg" \
   "$tmp_dir/outer2-gate1-body-gate-w-perturbed.cfg" \
@@ -670,7 +670,7 @@ check_mixed_rank_gradients outer1_gate2_full "$outer1_gate2_model" 18 0
 # A direct outer-rank1 model may arrive in the old non-unit-W representation.
 # Loading and saving must absorb W into radial rows, emit an all-one shell, and
 # preserve every public E/F/stress value on the next reload.
-legacy_rank1_canonical="$tmp_dir/outer1-gate2-canonical.mtp"
+legacy_rank1_canonical="$tmp_dir/outer1-gate2-canonical.sus2"
 "$bin" calc-efs "$outer1_gate2_model" "$one_cfg" \
   "$tmp_dir/outer1-gate2-before-roundtrip.cfg" >/dev/null
 "$bin" roundtrip-model-dev "$outer1_gate2_model" "$legacy_rank1_canonical" >/dev/null

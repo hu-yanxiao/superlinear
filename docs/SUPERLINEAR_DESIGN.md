@@ -143,7 +143,7 @@ For controlled continuation from a trained release3 checkpoint, the developer
 binary provides:
 
 ```bash
-mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.mtp output.mtp
+mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.sus2 output.sus2
 ```
 
 It preserves every existing coefficient, inserts the new block at its formal

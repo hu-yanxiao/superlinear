@@ -1,7 +1,9 @@
 # SUS2-SH LAMMPS Compute Optimization Record - 2026-06-07
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 This file records accepted stage-best LAMMPS compute-side optimization states.
-Temporary rejected candidates and raw scripts remain in `.codex_tmp/`.
+Temporary rejected candidates and raw scripts remain in `.local_tmp/`.
 
 ## Stage-Best Version: Static-Fixed Gate Path + Mu-Grouped SH Edge + SH Eval Precompute
 
@@ -42,7 +44,7 @@ Accepted changes in this stage:
 Mathematical validation:
 
 ```text
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_mu_group_run0_1r_20260607
+<historical-path>
 ```
 
 Same-rank old/new comparisons against `lmp_ml_sus2_avx2_noipo.gate_edge_prune_20260607`:
@@ -55,7 +57,7 @@ Same-rank old/new comparisons against `lmp_ml_sus2_avx2_noipo.gate_edge_prune_20
 Formal speed validation:
 
 ```text
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_mu_group_ab_40c_20260607
+<historical-path>
 ```
 
 40-rank same-node A/B on `b03u26a`, Intel Xeon Platinum 8375C, `_lmp` table mode:
@@ -111,7 +113,7 @@ Run directory:
 
 ```text
 jobid 3769467
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_stagebest_vs_initial_ab_40c_20260608
+<historical-path>
 ```
 
 Node and CPU:
@@ -126,7 +128,7 @@ Binaries:
 
 ```text
 initial   c060e9103ae741b3334f44fb629b92f4e393766f406173982f8f3fe58fe599cf
-          /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi.codexbak_20260607_before_static_fixed_final
+          <historical-path>
 stagebest 77c3d914a4a03acdd98c703836e4ab46116546fb8d125464c59070d2839af13c
           /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 ```
@@ -153,8 +155,8 @@ Direct conclusion:
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_edge_struct_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_edge_struct_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769477, 3769479
 ```
 
@@ -210,7 +212,7 @@ Obj_ml_sus2_avx2_noipo/pair_sus2_mtp.o
 
 This was verified by rebuilding both objects and relinking
 `lmp_ml_sus2_avx2_noipo.stagebest_relink_force_20260608`, which initialized
-`gate.mtp` correctly. Earlier `pair_sus2_mtp.o`-only relinks crashed.
+`gate.sus2` correctly. Earlier `pair_sus2_mtp.o`-only relinks crashed.
 
 ## GPU Kokkos Gate Stage-Best - 2026-06-08
 
@@ -240,8 +242,8 @@ Verification job:
 jobid 3770733
 host a05u22g
 queue gpu-phy-zhangwq
-directory /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608
-pair_style sus2mtp/kk/device gate.mtp chunksize 129600 tabstep 0.0005
+directory <historical-path>
+pair_style sus2mtp/kk/device gate.sus2 chunksize 129600 tabstep 0.0005
 ```
 
 CPU/GPU correctness against the CPU SUS2-SH LAMMPS implementation:
@@ -299,7 +301,7 @@ Run directory:
 
 ```text
 jobid 3770795
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_team_sweep_20260608
+<historical-path>
 ```
 
 Candidate binary:
@@ -359,8 +361,8 @@ sha256 bea9719ef8f520fb42ba4eb58c12c1c49aee3e7d85be6fa5eb2eeaf6d640d2a3
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_scalar_additive_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_scalar_additive_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769498, 3769499
 ```
 
@@ -383,7 +385,7 @@ Correctness on run0 was exact for the tested model:
 - gate force and pressure dumps: `max_abs = 0`, `rms = 0`
 - gate PE/Press/Pxx/Pyy/Pzz: diff `0`
 
-The current `gate.mtp` does not satisfy the scalar-coefficient condition:
+The current `gate.sus2` does not satisfy the scalar-coefficient condition:
 
 ```text
 160 coefficients = 8 species * 20 radial functions
@@ -408,8 +410,8 @@ where `a_{Z,\mu}` is species-scalar. It is not useful for the current general
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_static_skip_early_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_static_skip_early_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769501, 3769502
 ```
 
@@ -442,7 +444,7 @@ Run directory:
 
 ```text
 jobid 3769503
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_fine_profile2_40c_20260608
+<historical-path>
 ```
 
 Node and CPU:
@@ -521,8 +523,8 @@ Optimization implication:
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_mu_indexed_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_mu_indexed_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769506, 3769507
 ```
 
@@ -564,8 +566,8 @@ vectorization loss outweighed the savings.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_eval_precompute_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_eval_precompute_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769510, 3769511
 ```
 
@@ -610,11 +612,11 @@ single-layer SH modes.
 Run directories:
 
 ```text
-first correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sparse_needed_run0_8c_20260608
-first speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sparse_needed_ab_40c_20260608
+first correctness: <historical-path>
+first speed:       <historical-path>
 first jobids:      3769513, 3769514
-split correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sparse_needed_split_run0_8c_20260608
-split speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sparse_needed_split_ab_40c_20260608
+split correctness: <historical-path>
+split speed:       <historical-path>
 split jobids:      3769517, 3769518
 ```
 
@@ -677,8 +679,8 @@ time. Source and the default LAMMPS build were restored to the accepted
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_mu_cache_precompute_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_mu_cache_precompute_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769519, 3769520
 ```
 
@@ -719,8 +721,8 @@ stage-best state after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sh_cache_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_sh_cache_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769521, 3769522
 ```
 
@@ -761,8 +763,8 @@ stage-best state after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_radial_delta_table_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_radial_delta_table_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769523, 3769524
 ```
 
@@ -802,8 +804,8 @@ Source and the default LAMMPS build were restored to the accepted
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_alpha_times_packed_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_alpha_times_packed_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769525, 3769526
 ```
 
@@ -845,8 +847,8 @@ state after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_branch_split_basic_edge_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_branch_split_basic_edge_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769527, 3769529
 ```
 
@@ -887,9 +889,9 @@ after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_inv_dist_reuse_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_inv_dist_reuse_ab_40c_20260608
-speed_check: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_inv_dist_reuse_ab2_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
+speed_check: <historical-path>
 jobids:      3769530, 3769531, 3769532
 ```
 
@@ -936,7 +938,7 @@ force/pressure/energy equality on the run0 check.
 Direct A/B directory:
 
 ```text
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_current_inv_dist_vs_initial_ab_40c_20260608
+<historical-path>
 jobid: 3769533
 ```
 
@@ -944,7 +946,7 @@ Compared binaries:
 
 ```text
 initial: c060e9103ae741b3334f44fb629b92f4e393766f406173982f8f3fe58fe599cf
-         /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi.codexbak_20260607_before_static_fixed_final
+         <historical-path>
 current: dd0699d088ce9643f9bebf10d355c84d5706c2a0177f768835409e11fcd3f06e
          /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 ```
@@ -965,9 +967,9 @@ time, still below the requested 40% target.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_no_first_local_vector_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_no_first_local_vector_ab_40c_20260608
-speed_check: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_no_first_local_vector_ab2_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
+speed_check: <historical-path>
 jobids:      3769535, 3769536, 3769537
 ```
 
@@ -1017,7 +1019,7 @@ read without changing radial, SH, gate, force, or virial formulas.
 Direct A/B directory:
 
 ```text
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_current_no_first_local_vs_initial_ab_40c_20260608
+<historical-path>
 jobid: 3769538
 ```
 
@@ -1025,7 +1027,7 @@ Compared binaries:
 
 ```text
 initial: c060e9103ae741b3334f44fb629b92f4e393766f406173982f8f3fe58fe599cf
-         /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi.codexbak_20260607_before_static_fixed_final
+         <historical-path>
 current: 46a2096aebdcb8d05030c3f7164227c402986334f942c558042d569888e9344a
          /work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi
 ```
@@ -1046,8 +1048,8 @@ time relative to the initial optimization baseline. Current no-gate is about
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_basic_reorder_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_basic_reorder_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769539, 3769540
 ```
 
@@ -1092,8 +1094,8 @@ this test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_deriv_push_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_deriv_push_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769541, 3769542
 ```
 
@@ -1134,9 +1136,9 @@ was noise-level, as expected.
 Run directories:
 
 ```text
-isolation correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_recompute_gate_deriv_localreduction_run0_8c_20260608
-correctness:           /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_defer_gate_jac_localreduction_run0_8c_20260608
-speed:                 /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_defer_gate_jac_vs_stagebest_ab_40c_20260608
+isolation correctness: <historical-path>
+correctness:           <historical-path>
+speed:                 <historical-path>
 jobids:                3769553, 3769554, 3769555
 ```
 
@@ -1189,8 +1191,8 @@ were restored to the accepted first-local-vector stage-best after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_basic_pair_backprop_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_basic_pair_backprop_vs_stagebest_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769557, 3769558
 ```
 
@@ -1236,10 +1238,10 @@ stage-best after the test.
 Run directories:
 
 ```text
-full correctness:        /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_deriv_seed_run0_8c_20260608
-full speed:              /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_deriv_seed_vs_stagebest_ab_40c_20260608
-no-gate-only correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_deriv_seed_nogate_run0_8c_20260608
-no-gate-only speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_deriv_seed_nogate_vs_stagebest_ab_40c_20260608
+full correctness:        <historical-path>
+full speed:              <historical-path>
+no-gate-only correctness: <historical-path>
+no-gate-only speed:       <historical-path>
 jobids:                  3769559, 3769560, 3769561, 3769562
 ```
 
@@ -1288,8 +1290,8 @@ stage-best after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_edge_no_type_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_edge_no_type_vs_stagebest_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769603, 3769604
 ```
 
@@ -1332,8 +1334,8 @@ test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_run_group_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_sh_run_group_vs_stagebest_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769642, 3769644
 ```
 
@@ -1378,8 +1380,8 @@ first-local-vector stage-best after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_recompute_table_info_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_recompute_table_info_vs_stagebest_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769663, 3769664
 ```
 
@@ -1423,8 +1425,8 @@ accepted first-local-vector stage-best after the test.
 Run directories:
 
 ```text
-correctness: /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_table_sh_fusion_run0_8c_20260608
-speed:       /work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gate_table_sh_fusion_vs_stagebest_ab_40c_20260608
+correctness: <historical-path>
+speed:       <historical-path>
 jobids:      3769673, 3769674
 ```
 
@@ -1539,7 +1541,7 @@ Build and verification:
 build job: 3770832 on c04u01g
 verify job: 3770839 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/firstderiv_scratch_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_firstderiv_scratch_candidate_20260609
 candidate sha256:
@@ -1590,7 +1592,7 @@ Build and verification:
 build job: 3770842 on c04u01g
 verify job: 3770844 on c04u01g, manually stopped after candidate gate run500
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/invdist_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_invdist_candidate_20260609
 candidate sha256:
@@ -1654,9 +1656,9 @@ build job: 3770850 on c04u01g
 full verify job: 3770854 on c04u01g
 repeat gate-only A/B job: 3770856 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/gateforce_scratch_verify_20260609
+<historical-path>
 repeat directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/gateforce_scratch_repeat_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_gateforce_scratch_candidate_20260609
 candidate sha256:
@@ -1739,9 +1741,9 @@ build job: 3770858 on c04u01g
 full verify job: 3770859 on c04u01g
 repeat gate-only A/B job: 3770860 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/alpha_scratch_verify_20260609
+<historical-path>
 repeat directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/alpha_scratch_repeat_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_alpha_scratch_candidate_20260609
 candidate sha256:
@@ -1824,7 +1826,7 @@ build job: 3770862 on c04u01g
 failed first verify job: 3770863 on a05u22g
 successful verify job: 3770864 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/nogate_alpha_sh_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_nogate_alpha_sh_candidate_20260609
 candidate sha256:
@@ -1889,7 +1891,7 @@ Build and verification:
 build job: 3770867 on c04u01g
 verify job: 3770868 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/gcc_host_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_gcc_host_candidate_20260609
 candidate sha256:
@@ -1958,7 +1960,7 @@ Build and verification:
 build job: 3770865 on c04u01g
 verify job: 3770866 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/force_coeff_scratch_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_force_coeff_scratch_candidate_20260609
 candidate sha256:
@@ -2030,7 +2032,7 @@ build job: 3770874 on c04u01g
 verify job: 3770875 on c04u01g
 repeat job: 3770876 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/packed_radial_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_packed_radial_candidate_20260609
 candidate sha256:
@@ -2126,7 +2128,7 @@ Build and verification:
 build job: 3770878 on c04u01g
 verify job: 3770879 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/basic_scratch_reduce_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_basic_scratch_reduce_candidate_20260609
 candidate sha256:
@@ -2202,7 +2204,7 @@ build job: 3771303 on c04u01g
 verification job: 3771304 on c04u01g
 performance job: 3771305 on c04u01g
 directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/teamenv_candidate_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_teamenv_candidate_20260609
 candidate sha256:
@@ -2274,7 +2276,7 @@ Build and verification:
 build job: 3771027 on c04u01g
 verify job: 3771102 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/firstderiv_zero_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_firstderiv_zero_candidate_20260609
 candidate sha256:
@@ -2356,7 +2358,7 @@ Build and verification:
 build job: 3770899 on c04u01g
 verify job: 3770900 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/shtable_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_shtable_candidate_20260609
 candidate sha256:
@@ -2422,7 +2424,7 @@ Job and directory:
 ```text
 chunk tune job: 3770880 on c04u01g
 directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/chunk_tune_20260609
+<historical-path>
 binary sha256:
 4a4fcf99b93cc71a83295d76c801672a3c7f32be9303a9b31a17b9a267750c31
 ```
@@ -2447,7 +2449,7 @@ Decision: accepted as the current best benchmark configuration. For this
 benchmark, run with:
 
 ```text
-pair_style sus2mtp/kk/device MODEL.mtp chunksize 142272 tabstep 0.0005
+pair_style sus2mtp/kk/device MODEL.sus2 chunksize 142272 tabstep 0.0005
 ```
 
 Equivalently, use a `chunksize` at least as large as `inum` if the goal is to
@@ -2475,7 +2477,7 @@ Build and verification:
 build job: 3770881 on c04u01g
 verify job: 3770882 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/groupfast_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_groupfast_candidate_20260609
 candidate sha256:
@@ -2539,7 +2541,7 @@ build job: 3771308 on c04u01g
 verify job: 3771316 on c04u01g
 performance job: 3771317 on c04u01g
 verify directory:
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/gate/lammps_gate_vs_nogate/codex_gatekk_gate_team_verify_20260608/gatepackder_verify_20260609
+<historical-path>
 candidate binary:
 /work/phy-weigw/20260321_Test/lammps-sus2kk-v45-all-double-centroidstress/lmp.v45_all_double_centroidstress_gatepackder_candidate_20260609
 candidate sha256:

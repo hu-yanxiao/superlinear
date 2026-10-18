@@ -14,15 +14,15 @@ case "$task_run" in
   *) echo 'Unexpected continuation directory' >&2; exit 2 ;;
 esac
 test ! -e TRAINING_STARTED
-test ! -e current.mtp
-test ! -e trained.mtp
+test ! -e current.sus2
+test ! -e trained.sus2
 trap 'task_rc=$?; printf "exit_code=%s\nfinished_at=%s\n" "$task_rc" "$(date -Is)" > "$task_run/exit_status.txt"' EXIT
 module purge
 module load compiler/2022.1.0 mpi/2021.6.0 mkl/2022.2.0 gcc/11.2.0
 source /work/phy-weigw/anaconda3/etc/profile.d/conda.sh
-source /work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/activate
+# Activate the intended PyTorch environment before submitting this job.
 set -u
-task_python=/work/phy-weigw/20260321_Test/SUS2-SH-PyTorch-work-codex/.venv/bin/python
+task_python=${SUPERLINEAR_PYTHON:?set SUPERLINEAR_PYTHON to the PyTorch environment Python}
 sha256sum --quiet -c frozen.sha256
 task_np=$(wc -l < "${LSB_DJOB_HOSTFILE:?}")
 [[ "$task_np" == 200 ]]
@@ -61,8 +61,8 @@ task_common=(--init-params=same --skip-preinit
   --optimizer-conv-tol=0)
 
 # Small server-side parity check against the exact C++ oracle used by PyTorch.
-runtime/mlp-sus2-pytorch-oracle calc-efs inputs/resume.mtp inputs/check3.cfg preflight/oracle.cfg > logs/preflight-oracle.log 2>&1
-"$task_binary" calc-efs inputs/resume.mtp inputs/check3.cfg preflight/optimized.cfg > logs/preflight-optimized.log 2>&1
+runtime/mlp-sus2-pytorch-oracle calc-efs inputs/resume.sus2 inputs/check3.cfg preflight/oracle.cfg > logs/preflight-oracle.log 2>&1
+"$task_binary" calc-efs inputs/resume.sus2 inputs/check3.cfg preflight/optimized.cfg > logs/preflight-optimized.log 2>&1
 if grep -Eiq '(^|[[:space:]])[-+]?(nan|inf(inity)?)([[:space:]]|$)' preflight/*.cfg; then
   echo 'Non-finite preflight prediction' >&2; exit 1
 fi
@@ -70,18 +70,18 @@ fi
 sha256sum --quiet -c frozen.sha256
 date -Is > PREFLIGHT_PASS
 
-task_cmd=("${task_mpi[@]}" "$task_binary" train inputs/resume.mtp inputs/train.cfg
+task_cmd=("${task_mpi[@]}" "$task_binary" train inputs/resume.sus2 inputs/train.cfg
   "${task_common[@]}" --max-iter=5000
-  --curr-pot-name=current.mtp --trained-pot-name=trained.mtp
-  --best-pot-name=best.mtp --bfgs-trace-file=trace.csv)
+  --curr-pot-name=current.sus2 --trained-pot-name=trained.sus2
+  --best-pot-name=best.sus2 --bfgs-trace-file=trace.csv)
 printf '%q ' "${task_cmd[@]}" > train.command.txt
 printf '\n' >> train.command.txt
 date -Is > TRAINING_STARTED
 "${task_cmd[@]}" > logs/train.log 2>&1
-test -s trained.mtp
-test -s best.mtp
+test -s trained.sus2
+test -s best.sus2
 task_accepted=$(awk 'END {print (NR > 0 ? NR-1 : 0)}' trace.csv)
 printf 'accepted_optimizer_steps=%s\nrequested_max_steps=5000\n' "$task_accepted" > training_result.txt
 sha256sum --quiet -c frozen.sha256
-sha256sum current.mtp best.mtp trained.mtp > final_models.sha256
+sha256sum current.sus2 best.sus2 trained.sus2 > final_models.sha256
 date -Is > COMPLETED

@@ -40,7 +40,7 @@ PARSER.add_argument(
 ARGS = PARSER.parse_args()
 BIN = Path(ARGS.binary).resolve()
 MPI_COMMAND = shlex.split(ARGS.mpi_command) if ARGS.mpi_command else []
-TMP_PARENT = ROOT / ".codex_tmp"
+TMP_PARENT = ROOT / ".local_tmp"
 TMP_PARENT.mkdir(exist_ok=True)
 TMP = Path(tempfile.mkdtemp(prefix="adaptive-pytorch-profile-", dir=TMP_PARENT))
 CFG = TMP / "tiny_efs.cfg"
@@ -270,7 +270,7 @@ def compare_signatures(label: str, left: Path, right: Path, tolerance: float = 2
 
 
 def make_topology() -> Path:
-    topology = TMP / "fresh_l1k2_o2_topology.mtp"
+    topology = TMP / "fresh_l1k2_o2_topology.sus2"
     run(
         "init-topology",
         "init-sh",
@@ -298,7 +298,7 @@ def make_topology() -> Path:
 
 
 def materialized_asymmetric_model(topology: Path) -> Path:
-    model = TMP / "asymmetric_complete_seed.mtp"
+    model = TMP / "asymmetric_complete_seed.sus2"
     run("roundtrip-topology", "roundtrip-model-dev", topology, model)
     text = model.read_text(encoding="utf-8")
     text = re.sub(r"(?m)^scaling = .*$", "scaling = 1.0", text)
@@ -324,7 +324,7 @@ def materialized_asymmetric_model(topology: Path) -> Path:
 
 
 def train_zero_iter(topology: Path) -> Path:
-    complete = TMP / "fresh_auto_zeroiter_complete.mtp"
+    complete = TMP / "fresh_auto_zeroiter_complete.sus2"
     log = run(
         "fresh-auto-zeroiter",
         "train",
@@ -341,7 +341,7 @@ def train_zero_iter(topology: Path) -> Path:
     if not all(hint in log.lower() for hint in required_hints):
         raise AssertionError("fresh auto training log did not identify adaptive radial handling")
     before = calc_efs("zeroiter-prediction-before", complete)
-    resumed = TMP / "fresh_auto_zeroiter_resumed.mtp"
+    resumed = TMP / "fresh_auto_zeroiter_resumed.sus2"
     run(
         "complete-zeroiter-resume",
         "train",
@@ -363,7 +363,7 @@ def train_zero_iter(topology: Path) -> Path:
 def mpi_zero_iter_checks(topology: Path, serial_complete: Path) -> None:
     if not MPI_COMMAND:
         return
-    mpi_fresh = TMP / "fresh_auto_zeroiter_mpi2.mtp"
+    mpi_fresh = TMP / "fresh_auto_zeroiter_mpi2.sus2"
     run(
         "mpi-fresh-auto-zeroiter",
         "train",
@@ -388,7 +388,7 @@ def mpi_zero_iter_checks(topology: Path, serial_complete: Path) -> None:
         )
     compare_signatures("MPI fresh zero-step scales/physical params", serial_complete, mpi_fresh)
 
-    mpi_resumed = TMP / "complete_zeroiter_resumed_mpi2.mtp"
+    mpi_resumed = TMP / "complete_zeroiter_resumed_mpi2.sus2"
     run(
         "mpi-complete-zeroiter-resume",
         "train",
@@ -415,7 +415,7 @@ def mpi_zero_iter_checks(topology: Path, serial_complete: Path) -> None:
     double_cfg.write_text(CFG.read_text() * 2, encoding="utf-8")
     one_step_models = []
     for label, mpi in (("serial", False), ("mpi2", True)):
-        trained = TMP / f"two_active_{label}_one_step.mtp"
+        trained = TMP / f"two_active_{label}_one_step.sus2"
         run(
             f"two-active-{label}-one-step", "train", serial_complete, double_cfg,
             f"--trained-pot-name={trained}", "--max-iter=1", "--init-params=same",
@@ -450,7 +450,7 @@ def train_std_stdd_one_step(model: Path) -> None:
         ("std-only", "0.04", "0"),
         ("stdd-only", "0", "0.03"),
     ):
-        out_model = TMP / f"{label}_one_step.mtp"
+        out_model = TMP / f"{label}_one_step.sus2"
         log = run(
             f"train-{label}",
             "train",
@@ -603,7 +603,7 @@ def check_rejections(topology: Path) -> None:
             "train",
             topology,
             CFG,
-            f"--trained-pot-name={TMP / ('reject_' + str(abs(hash(option))) + '.mtp')}",
+            f"--trained-pot-name={TMP / ('reject_' + str(abs(hash(option))) + '.sus2')}",
             "--max-iter=0",
             "--init-params=same",
             option,
@@ -622,7 +622,7 @@ def pytorch_profile_parity(model_path: Path, cpp_grad: dict[str, object]) -> Non
     sys.path.insert(0, torch_root)
     torch = importlib.import_module("torch")
     load_cfg = importlib.import_module("sus2shpt.io.cfg").load_cfg
-    mtp_io = importlib.import_module("sus2shpt.io.mtp")
+    mtp_io = importlib.import_module("sus2shpt.io.sus2")
     SUS2SHPyTorch = importlib.import_module("sus2shpt.model.sus2_sh").SUS2SHPyTorch
     training = importlib.import_module("sus2shpt.training")
     required_private_api = (
@@ -725,8 +725,8 @@ def pytorch_profile_parity(model_path: Path, cpp_grad: dict[str, object]) -> Non
         ("adaptive_radial_amplitudes", "adaptive_radial_amplitude_directional"),
         ("adaptive_radial_weights", "adaptive_radial_weight_directional"),
     ):
-        plus = TMP / f"pt_fd_{tensor_name}_plus.mtp"
-        minus = TMP / f"pt_fd_{tensor_name}_minus.mtp"
+        plus = TMP / f"pt_fd_{tensor_name}_plus.sus2"
+        minus = TMP / f"pt_fd_{tensor_name}_minus.sus2"
         begin, end = cpp_grad["ranges"][range_name.replace("_directional", "")]
         direction = dev_direction(end - begin)
         perturb_file(model_path, plus, tensor_name, h, direction)

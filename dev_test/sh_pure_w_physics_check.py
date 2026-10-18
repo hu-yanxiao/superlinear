@@ -14,9 +14,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / 'bin/mlp-sus2'
-(ROOT / '.codex_tmp').mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix='pure-w-physics-', dir=ROOT / '.codex_tmp'))
-CFG = ROOT / 'codex_tests/pure_w_regularization.cfg'
+(ROOT / '.local_tmp').mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix='pure-w-physics-', dir=ROOT / '.local_tmp'))
+CFG = ROOT / 'native_tests/pure_w_regularization.cfg'
 ENV = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
 NUM = r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?'
 DEFAULT_OUTER_RANK = int(os.environ.get('PURE_W_TEST_OUTER_RANK', '3'))
@@ -50,7 +50,7 @@ def vector(src, key, data):
 
 def model(mapping, width=DEFAULT_OUTER_RANK, k_width=2, radial_size=3, decoupled=False):
     tag = f'{mapping}-k{k_width}-o{width}-r{radial_size}-d{int(decoupled)}'
-    path = TMP / f'{tag}.mtp'
+    path = TMP / f'{tag}.sus2'
     run(tag+'-init', 'init-sh', path, '--species-count=2',
         '--l-max=2', f'--k-max={k_width}', '--body-order=4', '--body-l-max=2,2,2,2',
         f'--radial-basis-size={radial_size}', '--cutoff=5', f'--scaling-map={mapping}',
@@ -59,7 +59,7 @@ def model(mapping, width=DEFAULT_OUTER_RANK, k_width=2, radial_size=3, decoupled
         '--two-layer-gate-mode=mu-scalar-full', '--two-layer-gate-body-order=4',
         f'--two-layer-gate-k-rank={min(2,k_width)}', '--write-sh-scalar-info',
         *(['--two-layer-gate-decoupled-scaling'] if decoupled else []))
-    seed = TMP / f'{tag}.seed.mtp'
+    seed = TMP / f'{tag}.seed.sus2'
     run(tag+'-complete', 'roundtrip-model-dev', path, seed)
     path.write_text(seed.read_text())
     src = path.read_text()
@@ -139,10 +139,10 @@ for mapping in ('K', 'L', 'LK'):
         row = list(map(float, re.findall(NUM, m[1])))
         return '{' + ', '.join(map(str, [3.7, -2.9, 4.1, *row[3:]])) + '}'
     unused = src[:match.start(2)] + re.sub(r'\{([^}]*)\}', unused_row, match[2]) + src[match.end(2):]
-    unused_path = TMP / (mapping + '-unused-r.mtp')
+    unused_path = TMP / (mapping + '-unused-r.sus2')
     unused_path.write_text(unused)
     equal(reference, predict(mapping + '-unused-r', unused_path), mapping + ' unused R invariance')
-    zero_path = TMP / (mapping + '-zero-w.mtp')
+    zero_path = TMP / (mapping + '-zero-w.sus2')
     zero_path.write_text(vector(src, 'two_layer_gate_radial_mixing_coeffs',
                                 [0.0] * len(values(src, 'two_layer_gate_radial_mixing_coeffs'))))
     zero = predict(mapping + '-zero-w', zero_path, CACHE_ON)
@@ -150,7 +150,7 @@ for mapping in ('K', 'L', 'LK'):
     equal(zero, predict(mapping + '-zero-w-recompute', zero_path, CACHE_OFF), mapping + ' zero W cache')
     run(mapping + '-zero-w-gradient', 'check-loss-gradient-dev', zero_path, CFG, *GRAD,
         '--energy-weight=1', '--force-weight=0.3', '--stress-weight=0.1', env=CACHE_ON)
-    roundtrip = TMP / (mapping + '-roundtrip.mtp')
+    roundtrip = TMP / (mapping + '-roundtrip.sus2')
     run(mapping + '-roundtrip', 'roundtrip-model-dev', path, roundtrip)
     equal(reference, predict(mapping + '-roundtrip-efs', roundtrip), mapping + ' save/load')
     if mapping != 'LK':
@@ -160,7 +160,7 @@ for mapping in ('K', 'L', 'LK'):
                     for x in compact[(k if mapping == 'K' else l)*8:][:8]]
         expanded_src = src.replace(f'scaling_map = {mapping}', 'scaling_map = LK')
         expanded_src = vector(expanded_src, 'scal_coeffs', expanded)
-        expanded_path = TMP / (mapping + '-expanded-lk.mtp')
+        expanded_path = TMP / (mapping + '-expanded-lk.sus2')
         expanded_path.write_text(expanded_src)
         equal(reference, predict(mapping + '-expanded-lk', expanded_path), mapping + ' shared-scaling LK expansion')
 # For O=1 the channelwise and cross-channel angular graphs coincide. Set
@@ -176,7 +176,7 @@ def zero_legacy_row(m):
     row = list(map(float, re.findall(NUM, m[1])))
     return '{' + ', '.join(map(str, [0.0, 0.0, 0.0, *row[3:]])) + '}'
 legacy = legacy[:match.start(2)] + re.sub(r'\{([^}]*)\}', zero_legacy_row, match[2]) + legacy[match.end(2):]
-legacy_path = TMP / 'o1-legacy-zero-base.mtp'
+legacy_path = TMP / 'o1-legacy-zero-base.sus2'
 legacy_path.write_text(legacy)
 one_ref = predict('o1-pure', one)
 equal(one_ref, predict('o1-legacy', legacy_path), 'O1 pure vs legacy zero-baseline')
@@ -195,7 +195,7 @@ for mapping in ('K', 'L', 'LK'):
         equal(reference, predict(tag+'-off', path, CACHE_OFF), tag+' cache/recompute')
         assert max(map(abs, reference[1:13])) > 1e-6, 'K1 fixture force is too small'
         src = path.read_text()
-        ablated = TMP/(tag+'-zero-gate.mtp')
+        ablated = TMP/(tag+'-zero-gate.sus2')
         ablated.write_text(vector(src, 'two_layer_gate_weights',
                                   [0.0]*len(values(src, 'two_layer_gate_weights'))))
         zero_gate = predict(tag+'-zero-gate', ablated, CACHE_ON)

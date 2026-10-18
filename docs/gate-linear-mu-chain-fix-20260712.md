@@ -73,7 +73,7 @@ Additional server checks passed:
 - `release3` training binary SHA-256:
   `bea8ca1af259db2a49bb4b42a30aa59c22231d8f404e21b13d7c23ba709fe67a`
 - Pre-fix binaries and changed source files are retained under
-  `.codex_tmp/backups/gate-linear-mu-chain-20260712-pre-fix` in each server
+  `.local_tmp/backups/gate-linear-mu-chain-20260712-pre-fix` in each server
   source tree.
 
 This is a training-code correction. The existing release2 LAMMPS CPU and

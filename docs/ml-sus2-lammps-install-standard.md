@@ -1,5 +1,7 @@
 # ML-SUS2 LAMMPS Install Standard
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Scope
 
 This note records the current standard for maintaining the `ML-SUS2` LAMMPS interface on the phy-weigw server.
@@ -29,7 +31,7 @@ Use `ML-SUS2` naming as the active convention. Do not treat `ML-SUS2-MTP` as the
 - Interface tarball reference:
 
 ```bash
-/work/phy-weigw/20260321_Test/SUS2-MLIP-release-work-codex/sus2-interface-20260410.tar.gz
+<historical-path>
 ```
 
 ## CPU Standard
@@ -164,7 +166,7 @@ mpirun --bind-to none -np ${NGPU} \
 Validated experimental binary, kept outside the canonical install path until explicitly promoted:
 
 ```bash
-/work/phy-weigw/20260321_Test/lammps-sus2kk-a100-nvhpc-openmpi-cudaaware-work-codex/bin/lmp.sus2kk_a100_openmpi_gcc_cudaaware
+<historical-path>
 ```
 
 Validation on 2026-04-26 for 995,328 atoms, 2,000 NPT steps, SUS2-SL 1.1 model:
@@ -215,13 +217,13 @@ Avoid ad hoc binary copies and mixed build states unless the user explicitly ask
 For SUS2-SH LAMMPS work, start from the developer-branch interface archive rather than older local interface copies:
 
 ```bash
-/Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/codex-developer-wt/sus2-interface-20260410.tar.gz
+<historical-path>
 ```
 
 The current remote SUS2-SH LAMMPS worktree is:
 
 ```bash
-/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex
+<historical-path>
 ```
 
 On 2026-05-15, the Kokkos `_lmp` radial-table path was changed to store value and derivative in one packed table entry:
@@ -248,7 +250,7 @@ The final step-2000 thermodynamic line matched the direct-radial run to printed 
 The same source line also has a rebuilt CPU AVX2 binary:
 
 ```bash
-/work/phy-weigw/20260321_Test/lammps-sus2-sh-work-codex/bin/lmp.sus2_sh_cpu_avx2
+<historical-path>
 ```
 
 Build settings:

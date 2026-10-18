@@ -3,13 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_shared_radial_default"
+tmp_dir=".local_tmp/sh_two_layer_gate_shared_radial_default"
 mkdir -p "$tmp_dir"
 
-gate_init="$tmp_dir/gate_default.mtp"
-plain_init="$tmp_dir/plain_init.mtp"
+gate_init="$tmp_dir/gate_default.sus2"
+plain_init="$tmp_dir/plain_init.sus2"
 train="$tmp_dir/one.cfg"
-upgraded="$tmp_dir/upgraded_default_gate.mtp"
+upgraded="$tmp_dir/upgraded_default_gate.sus2"
 upgrade_log="$tmp_dir/upgrade_train.log"
 rm -f "$gate_init" "$plain_init" "$train" "$upgraded" "$upgrade_log"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"

@@ -14,7 +14,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 run_case() {
   local requested=$1
   local expected=$2
-  local model="$WORKDIR/${requested}.mtp"
+  local model="$WORKDIR/${requested}.sus2"
   local out="$WORKDIR/${requested}.cfg"
 
   "$BIN" init-sh "$model" \

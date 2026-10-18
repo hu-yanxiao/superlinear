@@ -20,7 +20,7 @@ if [[ $(grep -c '^END_CFG' "$train_cfg") -ne 4 ]]; then
   exit 1
 fi
 
-initial="$tmp_dir/initial.mtp"
+initial="$tmp_dir/initial.sus2"
 "$bin" init-sh "$initial" \
   --species-count=2 \
   --l-max=2 \
@@ -43,9 +43,9 @@ common_train=(
   --radial-smooth=0
 )
 
-unregularized="$tmp_dir/unregularized.mtp"
-regularized_serial="$tmp_dir/regularized-serial.mtp"
-regularized_mpi="$tmp_dir/regularized-mpi.mtp"
+unregularized="$tmp_dir/unregularized.sus2"
+regularized_serial="$tmp_dir/regularized-serial.sus2"
+regularized_mpi="$tmp_dir/regularized-mpi.sus2"
 
 "$bin" train "$initial" "$train_cfg" \
   --trained-pot-name="$unregularized" \

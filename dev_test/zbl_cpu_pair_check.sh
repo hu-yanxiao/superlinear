@@ -8,7 +8,7 @@ trap 'rm -rf "$build_dir"' EXIT
 
 cxx="${CXX:-c++}"
 "$cxx" -std=c++11 -I"$repo_dir" \
-	"$repo_dir/codex_tests/zbl_pair_check.cpp" \
+	"$repo_dir/native_tests/zbl_pair_check.cpp" \
 	"$repo_dir/src/zbl_pair.cpp" \
 	-o "$build_dir/zbl_pair_check"
 "$build_dir/zbl_pair_check"

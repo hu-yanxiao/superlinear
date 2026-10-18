@@ -8,10 +8,12 @@
 
 
 #include "basic_mlip.h"
+#include "model_path.h"
 
 
 void AnyLocalMLIP::Save(const std::string& filename)		//!< Saves MLIP's data to file
 {
+	sus2::ValidateModelOutputPath(filename);
 	Warning("AnyLocalMLIP: Save method is not implemented for this MLIP");
 }
 

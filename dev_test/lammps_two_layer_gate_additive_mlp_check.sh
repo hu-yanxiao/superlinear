@@ -14,13 +14,13 @@ if [ "$GATE_SITE_MODE" != "neighbor" ] && [ "$GATE_SITE_MODE" != "double" ]; the
   exit 2
 fi
 
-tmp_dir=".codex_tmp/lammps_two_layer_gate_additive_mlp_check_${GATE_SITE_MODE}_${GATE_MODE}"
+tmp_dir=".local_tmp/lammps_two_layer_gate_additive_mlp_check_${GATE_SITE_MODE}_${GATE_MODE}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
-base_model="$tmp_dir/gated_base.mtp"
-direct_model="$tmp_dir/gated_additive.mtp"
-lmp_model="$tmp_dir/gated_additive_lmp.mtp"
+base_model="$tmp_dir/gated_base.sus2"
+direct_model="$tmp_dir/gated_additive.sus2"
+lmp_model="$tmp_dir/gated_additive_lmp.sus2"
 cfg="$tmp_dir/one.cfg"
 mlp_pred="$tmp_dir/mlp_pred.cfg"
 

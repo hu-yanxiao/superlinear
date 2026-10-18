@@ -12,7 +12,7 @@ fi
 model_path="$1"
 cfg_path="$2"
 object_dir="${3:-$root_dir/obj/ser}"
-build_dir="${SUS2_TEST_BUILD_DIR:-$root_dir/.codex_tmp/scalar-head-objective-check}"
+build_dir="${SUS2_TEST_BUILD_DIR:-$root_dir/.local_tmp/scalar-head-objective-check}"
 cxx="${CXX:-c++}"
 mkdir -p "$build_dir"
 
@@ -61,10 +61,10 @@ fi
 
 common_compile=( -std=c++11 -O2 -I"$root_dir" "${extra_cppflags[@]}" )
 "$cxx" "${common_compile[@]}" \
-  -c "$root_dir/codex_tests/scalar_head_site_components_check.cpp" \
+  -c "$root_dir/native_tests/scalar_head_site_components_check.cpp" \
   -o "$build_dir/scalar_head_site_components_check.o"
 "$cxx" "${common_compile[@]}" \
-  -c "$root_dir/codex_tests/scalar_head_quadratic_objective_check.cpp" \
+  -c "$root_dir/native_tests/scalar_head_quadratic_objective_check.cpp" \
   -o "$build_dir/scalar_head_quadratic_objective_check.o"
 
 "$cxx" -O2 \

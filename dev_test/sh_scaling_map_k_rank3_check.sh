@@ -61,12 +61,12 @@ common=(
   --two-layer-gate-shared-radial --outer-k-rank=3
   --two-layer-gate-k-rank=3 --init-params=same
 )
-"$bin" init-sh "$tmp_dir/k.init.mtp" "${common[@]}" >/dev/null
-"$bin" roundtrip-model-dev "$tmp_dir/k.init.mtp" "$tmp_dir/k.active.mtp" >/dev/null
+"$bin" init-sh "$tmp_dir/k.init.sus2" "${common[@]}" >/dev/null
+"$bin" roundtrip-model-dev "$tmp_dir/k.init.sus2" "$tmp_dir/k.active.sus2" >/dev/null
 
 # Set nonzero, asymmetric model parameters and make the exact LK expansion.
 # Radial functions retain their native mu=(l,k) layout in both representations.
-python3 - "$tmp_dir/k.active.mtp" "$tmp_dir/k.lkeq.mtp" <<'PY'
+python3 - "$tmp_dir/k.active.sus2" "$tmp_dir/k.lkeq.sus2" <<'PY'
 import re, sys
 kpath, lkpath = sys.argv[1:]
 text = open(kpath, encoding="utf-8").read()
@@ -135,8 +135,8 @@ if len(vector("scal_coeffs", text)) != 48 or len(vector("scal_coeffs", lk)) != 2
 print(f"fixture L=4 K=6 rank=3: K_scal=48 LK_scal=240 Wg=Wo={expected_w}")
 PY
 
-"$bin" calc-efs "$tmp_dir/k.active.mtp" "$one_cfg" "$tmp_dir/k.cfg" >/dev/null
-"$bin" calc-efs "$tmp_dir/k.lkeq.mtp" "$one_cfg" "$tmp_dir/lk.cfg" >/dev/null
+"$bin" calc-efs "$tmp_dir/k.active.sus2" "$one_cfg" "$tmp_dir/k.cfg" >/dev/null
+"$bin" calc-efs "$tmp_dir/k.lkeq.sus2" "$one_cfg" "$tmp_dir/lk.cfg" >/dev/null
 python3 - "$tmp_dir/k.cfg" "$tmp_dir/lk.cfg" <<'PY'
 import math, re, sys
 number = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
@@ -177,7 +177,7 @@ if n == 0 or energy or stress: raise SystemExit("failed to construct E/F/stress 
 open(dst, "w").writelines(lines)
 PY
 
-layout=$("$bin" check-loss-gradient-dev "$tmp_dir/k.active.mtp" "$tmp_dir/target.cfg" \
+layout=$("$bin" check-loss-gradient-dev "$tmp_dir/k.active.sus2" "$tmp_dir/target.cfg" \
   --max-configs=1 --energy-weight=1 --force-weight=0 --stress-weight=0 \
   --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=0 \
   --coeff-start=0 --coeff-end=1 --displacement=1e-5 --abs-tolerance=1 --rel-tolerance=1)
@@ -193,11 +193,11 @@ scal_begin=$((radial_begin - 48)); scal_end=$radial_begin
 
 check_block() {
   local name=$1 begin=$2 end=$3
-  "$bin" check-loss-gradient-dev "$tmp_dir/k.active.mtp" "$tmp_dir/target.cfg" \
+  "$bin" check-loss-gradient-dev "$tmp_dir/k.active.sus2" "$tmp_dir/target.cfg" \
     --max-configs=1 --energy-weight=1 --force-weight=.1 --stress-weight=.01 \
     --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=0 \
     --coeff-start="$begin" --coeff-end="$end" --displacement=1e-5 --abs-tolerance=1.5e-5 --rel-tolerance=2e-3 | grep 'checked_coeffs='
-  "$bin" check-loss-gradient-direction-dev "$tmp_dir/k.active.mtp" "$tmp_dir/target.cfg" \
+  "$bin" check-loss-gradient-direction-dev "$tmp_dir/k.active.sus2" "$tmp_dir/target.cfg" \
     --max-configs=1 --energy-weight=1 --force-weight=.1 --stress-weight=.01 \
     --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=0 \
     --coeff-start="$begin" --coeff-end="$end" --displacement=1e-4 --abs-tolerance=3e-5 --rel-tolerance=7e-3 \
@@ -218,7 +218,7 @@ check_block gate_radial "$gate_radial_begin" "$gate_radial_end"
 check_block gate_rank3_W "$gate_begin" "$gate_end"
 check_block outer_rank3_W "$outer_begin" "$outer_end"
 
-"$bin" check-efs-fd-dev "$tmp_dir/k.active.mtp" "$one_cfg" --max-configs=1 --max-atoms=2 \
+"$bin" check-efs-fd-dev "$tmp_dir/k.active.sus2" "$one_cfg" --max-configs=1 --max-atoms=2 \
   --displacement=1e-5 --abs-tolerance=5e-5 --rel-tolerance=5e-3 | tee "$tmp_dir/efs_fd.txt"
 grep -q 'force_components=' "$tmp_dir/efs_fd.txt"
 grep -q 'stress_components=' "$tmp_dir/efs_fd.txt"
@@ -233,10 +233,10 @@ if [[ ${RUN_MPI:-0} == 1 ]]; then
   [[ $(grep -c '^END_CFG' "$four_cfg") == 4 ]]
   train_opts=(--max-iter=2 --skip-preinit --do-samp --init-params=same --energy-weight=1 --force-weight=.01 --stress-weight=.001
               --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=0)
-  "$bin" train "$tmp_dir/k.active.mtp" "$four_cfg" "${train_opts[@]}" --trained-pot-name="$tmp_dir/serial.mtp" >"$tmp_dir/serial.train.log" 2>&1
-  timeout 300 mpirun -n 2 "$bin" train "$tmp_dir/k.active.mtp" "$four_cfg" "${train_opts[@]}" --trained-pot-name="$tmp_dir/mpi2.mtp" >"$tmp_dir/mpi2.train.log" 2>&1
-  "$bin" calc-efs "$tmp_dir/serial.mtp" "$four_cfg" "$tmp_dir/serial.cfg" >/dev/null
-  "$bin" calc-efs "$tmp_dir/mpi2.mtp" "$four_cfg" "$tmp_dir/mpi2.cfg" >/dev/null
+  "$bin" train "$tmp_dir/k.active.sus2" "$four_cfg" "${train_opts[@]}" --trained-pot-name="$tmp_dir/serial.sus2" >"$tmp_dir/serial.train.log" 2>&1
+  timeout 300 mpirun -n 2 "$bin" train "$tmp_dir/k.active.sus2" "$four_cfg" "${train_opts[@]}" --trained-pot-name="$tmp_dir/mpi2.sus2" >"$tmp_dir/mpi2.train.log" 2>&1
+  "$bin" calc-efs "$tmp_dir/serial.sus2" "$four_cfg" "$tmp_dir/serial.cfg" >/dev/null
+  "$bin" calc-efs "$tmp_dir/mpi2.sus2" "$four_cfg" "$tmp_dir/mpi2.cfg" >/dev/null
   python3 - "$tmp_dir/serial.cfg" "$tmp_dir/mpi2.cfg" <<'PY'
 import math, re, sys
 number = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")

@@ -110,8 +110,8 @@ print(f"{sys.argv[4]}_polynomial_cutoff_force_fd={error:.3e}")
 PY
 }
 
-legacy_default="$tmp_dir/legacy-default.mtp"
-legacy_explicit="$tmp_dir/legacy-explicit.mtp"
+legacy_default="$tmp_dir/legacy-default.sus2"
+legacy_explicit="$tmp_dir/legacy-explicit.sus2"
 "$bin" init-sh "$legacy_default" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss >/dev/null
 "$bin" init-sh "$legacy_explicit" "${common[@]}" \
@@ -122,7 +122,7 @@ if grep -q 'radial_cutoff_' "$legacy_default"; then
   exit 1
 fi
 
-legacy_roundtrip="$tmp_dir/legacy-roundtrip.mtp"
+legacy_roundtrip="$tmp_dir/legacy-roundtrip.sus2"
 "$bin" roundtrip-model-dev "$legacy_default" "$legacy_roundtrip" >/dev/null
 if grep -q 'radial_cutoff_' "$legacy_roundtrip"; then
   echo "old-format roundtrip introduced cutoff metadata" >&2
@@ -132,7 +132,7 @@ fi
 "$bin" calc-efs "$legacy_roundtrip" "$base_cfg" "$tmp_dir/legacy-after.cfg" >/dev/null
 cmp "$tmp_dir/legacy-before.cfg" "$tmp_dir/legacy-after.cfg"
 
-if "$bin" init-sh "$tmp_dir/invalid-p-only.mtp" "${common[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid-p-only.sus2" "${common[@]}" \
      --radial-basis-type=RBChebyshev_sss --radial-cutoff-p=6 \
      >"$tmp_dir/invalid-p-only.log" 2>&1; then
   echo "radial-cutoff-p without polynomial type was incorrectly accepted" >&2
@@ -140,7 +140,7 @@ if "$bin" init-sh "$tmp_dir/invalid-p-only.mtp" "${common[@]}" \
 fi
 grep -q 'only applies to --radial-cutoff-type=polynomial' "$tmp_dir/invalid-p-only.log"
 
-if "$bin" init-sh "$tmp_dir/invalid-p-zero.mtp" "${common[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid-p-zero.sus2" "${common[@]}" \
      --radial-basis-type=RBChebyshev_sss --radial-cutoff-type=polynomial \
      --radial-cutoff-p=0 >"$tmp_dir/invalid-p-zero.log" 2>&1; then
   echo "radial-cutoff-p=0 was incorrectly accepted" >&2
@@ -151,11 +151,11 @@ grep -q 'radial-cutoff-p should be in' "$tmp_dir/invalid-p-zero.log"
 bases=(RBChebyshev_sss RBChebyshev_sss_rational RBLaguerre_log1p RBJacobi_sss)
 for basis in "${bases[@]}"; do
   stem=${basis#RB}
-  model="$tmp_dir/$stem-p5.mtp"
-  explicit="$tmp_dir/$stem-p5-explicit.mtp"
-  type_only="$tmp_dir/$stem-p5-type-only.mtp"
-  roundtrip="$tmp_dir/$stem-roundtrip.mtp"
-  p7="$tmp_dir/$stem-p7.mtp"
+  model="$tmp_dir/$stem-p5.sus2"
+  explicit="$tmp_dir/$stem-p5-explicit.sus2"
+  type_only="$tmp_dir/$stem-p5-type-only.sus2"
+  roundtrip="$tmp_dir/$stem-roundtrip.sus2"
+  p7="$tmp_dir/$stem-p7.sus2"
 
   "$bin" init-sh "$model" "${common[@]}" \
     --radial-basis-type="$basis" --radial-cutoff-type=polynomial >/dev/null
@@ -184,8 +184,8 @@ for basis in "${bases[@]}"; do
     "$tmp_dir/$stem-minus.cfg" "$basis"
 
   lmp_basis="${basis}_lmp"
-  lmp_model="$tmp_dir/$stem-lmp-p5.mtp"
-  lmp_roundtrip="$tmp_dir/$stem-lmp-roundtrip.mtp"
+  lmp_model="$tmp_dir/$stem-lmp-p5.sus2"
+  lmp_roundtrip="$tmp_dir/$stem-lmp-roundtrip.sus2"
   sed "s/radial_basis_type = $basis/radial_basis_type = $lmp_basis/" \
     "$model" >"$lmp_model"
   "$bin" roundtrip-model-dev "$lmp_model" "$lmp_roundtrip" >/dev/null

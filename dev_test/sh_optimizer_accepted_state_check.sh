@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_optimizer_accepted_state"
+tmp_dir=".local_tmp/sh_optimizer_accepted_state"
 mkdir -p "$tmp_dir"
 
 cxx="${CXX:-c++}"
@@ -14,7 +14,7 @@ cxx="${CXX:-c++}"
   -Wextra \
   -pedantic \
   -I. \
-  codex_tests/optimizer_accepted_state_check.cpp \
+  native_tests/optimizer_accepted_state_check.cpp \
   -o "$tmp_dir/optimizer_accepted_state_check"
 
 "$tmp_dir/optimizer_accepted_state_check"

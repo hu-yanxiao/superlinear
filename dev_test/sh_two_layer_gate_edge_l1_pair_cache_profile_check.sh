@@ -2,10 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_pair_cache_profile"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_pair_cache_profile"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/edge_l1_pair_cache_profile.mtp"
+model="$tmp_dir/edge_l1_pair_cache_profile.sus2"
 profile_log="$tmp_dir/profile.log"
 disabled_log="$tmp_dir/profile_disabled.log"
 pred="$tmp_dir/pred.cfg"

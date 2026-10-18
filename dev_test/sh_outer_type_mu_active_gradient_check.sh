@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_outer_type_mu_active_gradient"
+tmp_dir=".local_tmp/sh_outer_type_mu_active_gradient"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/gated_init.mtp"
+model="$tmp_dir/gated_init.sus2"
 train="$tmp_dir/one.cfg"
 rm -f "$model" "$train"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"

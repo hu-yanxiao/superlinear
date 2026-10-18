@@ -86,7 +86,7 @@ void MustRejectUnchanged(MLMTPR& model, Function function)
 
 void Run(int argc, char** argv)
 {
-	Require(argc == 7, "usage: rms-init narrow.mtp wide.mtp k1.mtp legacy.mtp input.cfg roundtrip.mtp");
+	Require(argc == 7, "usage: rms-init narrow.sus2 wide.sus2 k1.sus2 legacy.sus2 input.cfg roundtrip.sus2");
 	MLMTPR narrow(argv[1]), wide(argv[2]), k1(argv[3]), legacy(argv[4]);
 	Configuration cfg;
 	std::ifstream stream(argv[5]);

@@ -1,17 +1,19 @@
 # SUS2-SH Release3 Multi-Layer Gate
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Source Lineage
 
 Release3 is branched from the corrected release2 server source tree:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-release2-loss-guard-work-codex
+<historical-path>
 ```
 
 The release3 server working tree is:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-release3-work-codex
+<historical-path>
 ```
 
 The release2 LAMMPS interface binaries are intentionally unchanged:
@@ -122,7 +124,7 @@ The server test directory used during implementation is:
 Implementation smoke results on the release3 server mirror:
 
 ```text
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-release3-work-codex/bin/mlp-sus2
+binary: <historical-path>
 binary SHA-256: 4b30677d3831cb2a9069bc46be166ebaa5f3c710b21d5a573ea40b2e72b4c8ce
 build mode: non-IPO MPI build with -DMLIP_MPI -DMLIP_INTEL_MKL -O3 -std=c++11
 ```
@@ -137,7 +139,7 @@ checked_coeffs=287 coeff_count=287 abs_err=0.00183662811573 rel_err=0.0003114109
 Additional coordinate finite-difference smoke:
 
 ```text
-check-efs-fd-dev release3_multi_gate_probe.mtp one.cfg --max-configs=1 --max-atoms=1
+check-efs-fd-dev release3_multi_gate_probe.sus2 one.cfg --max-configs=1 --max-atoms=1
 force_abs_err=7.1054273576e-11
 stress_abs_err=4.71228099703e-10
 stress_rel_err=0.000237772333266
@@ -169,7 +171,7 @@ cache second-gate neighbor signal pointers in first-gate hot loops
 Server build after this pass:
 
 ```text
-binary: /work/phy-weigw/20260321_Test/SUS2-SH-release3-work-codex/bin/mlp-sus2
+binary: <historical-path>
 binary SHA-256: 9dc53e10ee9260e9eb5140e55a144e3a213cea80d00a1435b633ab3cc345ba97
 ```
 
@@ -179,7 +181,7 @@ Checked:
 dev_test/sh_release3_multi_layer_gate_smoke.sh
 checked_coeffs=287 coeff_count=287 abs_err=0.00183662811573 rel_err=0.000311410923406
 
-check-efs-fd-dev release3_multi_gate_probe.mtp one.cfg --max-configs=1 --max-atoms=1
+check-efs-fd-dev release3_multi_gate_probe.sus2 one.cfg --max-configs=1 --max-atoms=1
 force_abs_err=7.1054273576e-11
 stress_abs_err=4.71228099703e-10
 stress_rel_err=0.000237772333266

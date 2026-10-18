@@ -45,8 +45,8 @@ from rd_m0_benchmark import distribution, read_dump, sha
 
 
 MODEL_FILES = {
-    'sharedn_sharedreadout': 'vo2-sharedn-speciesamp.mtp',
-    'fullu_speciesreadout': 'vo2-fullu-speciesreadout.mtp',
+    'sharedn_sharedreadout': 'vo2-sharedn-speciesamp.sus2',
+    'fullu_speciesreadout': 'vo2-fullu-speciesreadout.sus2',
 }
 MODES = ('energy', 'efs', 'gradient', 'efs-total')
 BACKENDS = ('ry', 'ry-new', 'hybrid', 'rd-m0')

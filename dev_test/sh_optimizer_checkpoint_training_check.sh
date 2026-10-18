@@ -4,16 +4,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 binary="${MLIP_TEST_BINARY:-./bin/mlp-sus2}"
-tmp_dir=".codex_tmp/sh_optimizer_checkpoint_training"
+tmp_dir=".local_tmp/sh_optimizer_checkpoint_training"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
 train_cfg="$tmp_dir/two.cfg"
-initial_model="$tmp_dir/initial.mtp"
-seed_model="$tmp_dir/seed.mtp"
-current_model="$tmp_dir/current.mtp"
-best_model="$tmp_dir/current.best.mtp"
-trained_model="$tmp_dir/trained.mtp"
+initial_model="$tmp_dir/initial.sus2"
+seed_model="$tmp_dir/seed.sus2"
+current_model="$tmp_dir/current.sus2"
+best_model="$tmp_dir/current.best.sus2"
+trained_model="$tmp_dir/trained.sus2"
 trace_file="$tmp_dir/trace.csv"
 log_file="$tmp_dir/train.log"
 
@@ -90,8 +90,8 @@ PY
 
 trace_log="$tmp_dir/checkpoint-trace.log"
 SUS2_SH_CHECKPOINT_UPDATE_TRACE=1 "$binary" train "$seed_model" "$train_cfg" \
-  --trained-pot-name="$tmp_dir/checkpoint-trace-trained.mtp" \
-  --curr-pot-name="$tmp_dir/checkpoint-trace-current.mtp" \
+  --trained-pot-name="$tmp_dir/checkpoint-trace-trained.sus2" \
+  --curr-pot-name="$tmp_dir/checkpoint-trace-current.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
@@ -107,7 +107,7 @@ else
 fi
 
 "$binary" train "$trained_model" "$train_cfg" \
-  --trained-pot-name="$tmp_dir/restarted-trained.mtp" \
+  --trained-pot-name="$tmp_dir/restarted-trained.sus2" \
   --curr-pot-name="$current_model" \
   --max-iter=1 \
   --skip-preinit \
@@ -127,7 +127,7 @@ while IFS= read -r archive; do
     archive_matched=1
   fi
 done < <(find "$tmp_dir" -maxdepth 1 -type f \
-  -name 'current.best.mtp.previous-*' -print)
+  -name 'current.best.previous-*.sus2' -print)
 if [[ "$archive_matched" != "1" ]]; then
   echo "restart did not preserve the previous best checkpoint" >&2
   exit 1
@@ -135,9 +135,9 @@ fi
 
 alias_log="$tmp_dir/alias.log"
 if "$binary" train "$seed_model" "$train_cfg" \
-  --trained-pot-name="$tmp_dir/alias-trained.mtp" \
-  --curr-pot-name="$tmp_dir/alias-current.mtp" \
-  --best-pot-name="$tmp_dir/./alias-current.mtp" \
+  --trained-pot-name="$tmp_dir/alias-trained.sus2" \
+  --curr-pot-name="$tmp_dir/alias-current.sus2" \
+  --best-pot-name="$tmp_dir/./alias-current.sus2" \
   --max-iter=1 \
   --skip-preinit >"$alias_log" 2>&1; then
   echo "lexically aliased current and best paths were accepted" >&2
@@ -153,9 +153,9 @@ if command -v mpirun >/dev/null 2>&1 \
   mpi_failure_log="$tmp_dir/mpi-failure.log"
   set +e
   timeout 120 mpirun -n 2 "$binary" train "$seed_model" "$train_cfg" \
-    --trained-pot-name="$tmp_dir/mpi-trained.mtp" \
-    --curr-pot-name="$tmp_dir/mpi-current.mtp" \
-    --best-pot-name="$missing_parent/best.mtp" \
+    --trained-pot-name="$tmp_dir/mpi-trained.sus2" \
+    --curr-pot-name="$tmp_dir/mpi-current.sus2" \
+    --best-pot-name="$missing_parent/best.sus2" \
     --max-iter=1 \
     --skip-preinit \
     --energy-weight=1 \

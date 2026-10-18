@@ -20,20 +20,20 @@ CPP
 	"$tmp_dir/banner_check.cpp" -o "$tmp_dir/banner_check"
 "$tmp_dir/banner_check" > "$tmp_dir/banner.out"
 
-grep -Fxq "SUS2-SH Release 3" "$tmp_dir/banner.out"
-grep -Fxq "Branch: release3" "$tmp_dir/banner.out"
-grep -Fxq "Release Date: 2026-07-23" "$tmp_dir/banner.out"
+grep -Fxq "SUS2.superlinear" "$tmp_dir/banner.out"
+grep -Fxq "Branch: main" "$tmp_dir/banner.out"
+grep -Fxq "Version: 2026-10-18" "$tmp_dir/banner.out"
 grep -Fxq "Mode: MPI (4 ranks)" "$tmp_dir/banner.out"
 
 grep -Fq \
-	'const char version_str[] = "SUS2-SH Release 3 (2026-07-23)";' \
+	'const char version_str[] = "SUS2.superlinear (2026-10-18)";' \
 	"$repo_dir/src/mlp/mlp_commands.cpp"
 grep -Fq \
-	'std::cout << "SUS2-SH Release 3 (2026-07-23)"' \
+	'std::cout << "SUS2.superlinear (2026-10-18)"' \
 	"$repo_dir/dev_src/mlp/mtpr_train.cpp"
 
 if grep -En \
-	'SUS2-MLIP Developer Version|SUS2-MLIP developer version|codex/developer|2026-04-17 developer version' \
+	'SUS2-MLIP Developer Version|SUS2-MLIP developer version|2026-04-17 developer version' \
 	"$repo_dir/src/mlp/mlp.h" \
 	"$repo_dir/src/mlp/mlp_commands.cpp" \
 	"$repo_dir/dev_src/mlp/mtpr_train.cpp"; then
@@ -41,4 +41,4 @@ if grep -En \
 	exit 1
 fi
 
-echo "release3 version banner check passed"
+echo "superlinear version banner check passed"

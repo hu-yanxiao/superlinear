@@ -10,7 +10,7 @@ BIN=$1
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-factor-order-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL="$WORKDIR/l4k4_b4.mtp"
+MODEL="$WORKDIR/l4k4_b4.sus2"
 "$BIN" init-sh "$MODEL" \
   --species-count=2 \
   --l-max=4 \

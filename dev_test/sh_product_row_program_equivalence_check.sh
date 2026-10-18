@@ -11,7 +11,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-product-rows-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL="$WORKDIR/qtotal_l3k2.mtp"
+MODEL="$WORKDIR/qtotal_l3k2.sus2"
 FLAT_OUT="$WORKDIR/flat.cfg"
 ROWS_OUT="$WORKDIR/rows.cfg"
 ROWS_LOG="$WORKDIR/rows.log"

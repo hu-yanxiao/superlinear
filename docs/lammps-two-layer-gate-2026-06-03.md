@@ -1,11 +1,13 @@
 # LAMMPS two-layer gate support notes (2026-06-03)
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Repository branch: `developer`
 
 Server tree:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 LAMMPS source tree:

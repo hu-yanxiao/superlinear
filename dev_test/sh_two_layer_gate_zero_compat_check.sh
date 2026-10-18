@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_zero"
+tmp_dir=".local_tmp/sh_two_layer_gate_zero"
 mkdir -p "$tmp_dir"
 
-plain="$tmp_dir/plain.mtp"
-gated="$tmp_dir/gated.mtp"
+plain="$tmp_dir/plain.sus2"
+gated="$tmp_dir/gated.sus2"
 plain_pred="$tmp_dir/plain_pred.cfg"
 gated_pred="$tmp_dir/gated_pred.cfg"
 train="$tmp_dir/one.cfg"

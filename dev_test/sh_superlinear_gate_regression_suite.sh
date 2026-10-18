@@ -18,18 +18,18 @@ run_check() {
 }
 
 run_two_layer_radial_mixing_suite() {
-  local tmp_dir=.codex_tmp/sh_two_layer_gate_radial_mixing_suite
+  local tmp_dir=.local_tmp/sh_two_layer_gate_radial_mixing_suite
   mkdir -p "$tmp_dir"
 
   local cfg="$tmp_dir/asym8.cfg"
   local cfg_rot="$tmp_dir/asym8_rot.cfg"
-  local base_raw_model="$tmp_dir/base-no-mixing.raw.mtp"
-  local full_zero_raw_model="$tmp_dir/full-radial-zero.raw.mtp"
-  local base_model="$tmp_dir/base-no-mixing.mtp"
-  local full_zero_model="$tmp_dir/full-radial-zero.mtp"
-  local upgraded_zero_model="$tmp_dir/base-upgraded-full-radial-zero.mtp"
-  local full_active_model="$tmp_dir/full-radial-active.mtp"
-  local full_active_roundtrip="$tmp_dir/full-radial-active.roundtrip.mtp"
+  local base_raw_model="$tmp_dir/base-no-mixing.raw.sus2"
+  local full_zero_raw_model="$tmp_dir/full-radial-zero.raw.sus2"
+  local base_model="$tmp_dir/base-no-mixing.sus2"
+  local full_zero_model="$tmp_dir/full-radial-zero.sus2"
+  local upgraded_zero_model="$tmp_dir/base-upgraded-full-radial-zero.sus2"
+  local full_active_model="$tmp_dir/full-radial-active.sus2"
+  local full_active_roundtrip="$tmp_dir/full-radial-active.roundtrip.sus2"
 
   local base_out="$tmp_dir/base.efs.cfg"
   local zero_out="$tmp_dir/full_zero.efs.cfg"

@@ -3,8 +3,8 @@
 Release3 LAMMPS exposes the radial evaluation path as a runtime option:
 
 ```lammps
-pair_style sus2mtp/kk p.mtp chunksize 104544 radial_mode direct
-pair_style sus2mtp/kk p.mtp chunksize 104544 radial_mode table tabstep 1.0e-4
+pair_style sus2mtp/kk p.sus2 chunksize 104544 radial_mode direct
+pair_style sus2mtp/kk p.sus2 chunksize 104544 radial_mode table tabstep 1.0e-4
 ```
 
 `radial_mode` accepts `auto`, `table`, or `direct`. The default `auto`

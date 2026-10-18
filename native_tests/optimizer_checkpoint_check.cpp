@@ -45,8 +45,8 @@ int main(int argc, char** argv)
 	Require(argc == 2, "expected a temporary checkpoint path");
 	const std::string checkpoint = argv[1];
 	const std::string temporary = checkpoint + ".tmp";
-	const std::string archive = checkpoint + ".previous";
-	const std::string archive_1 = archive + ".1";
+	const std::string archive = sus2::ModelOutputStem(checkpoint) + ".previous.sus2";
+	const std::string archive_1 = sus2::ModelOutputStem(checkpoint) + ".previous.1.sus2";
 	const std::string hardlink_path = checkpoint + ".hardlink";
 	const std::string symlink_path = checkpoint + ".symlink";
 	std::remove(checkpoint.c_str());
@@ -57,12 +57,13 @@ int main(int argc, char** argv)
 	std::remove(symlink_path.c_str());
 
 	Require(
-		sus2::DefaultBestCheckpointPath("fecn6_current.mtp")
-			== "fecn6_current.best.mtp",
-		"default .mtp best-checkpoint path mismatch");
-	Require(
-		sus2::DefaultBestCheckpointPath("current") == "current.best.mtp",
-		"default extensionless best-checkpoint path mismatch");
+		sus2::DefaultBestCheckpointPath("fecn6_current.sus2")
+			== "fecn6_current.best.sus2",
+		"default .sus2 best-checkpoint path mismatch");
+	bool extensionless_rejected = false;
+	try { sus2::DefaultBestCheckpointPath("current"); }
+	catch (const std::invalid_argument&) { extensionless_rejected = true; }
+	Require(extensionless_rejected, "extensionless model output was accepted");
 	Require(
 		sus2::DefaultBestCheckpointPath("").empty(),
 		"empty current checkpoint unexpectedly produced a best path");

@@ -1,5 +1,7 @@
 # SUS2-SH Two-Layer Env Gate Implementation Plan
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a non-recursive SUS2-SH two-layer neighbor scalar gate where `lambda_b` becomes `lambda_b * (1 + f_b)` and `f_b` is a low-body-order SH scalar fit.
@@ -15,7 +17,7 @@ gate-chain `d Phi_q^(0) / dx` term and the mixed final-layer tangent term.
 Server checks now pass for EFS finite differences and the nonzero-gate
 `w_q` loss-gradient block. The fixed 500-configuration, 100-step rerun completed
 on the server as job `3740179` in
-`/work/phy-weigw/hyx/200w/5.31-new-44421/codex_two_layer_gate_500x100_fix3`:
+`<historical-path>`:
 runtime 1737 s, Energy MAE 5.501 meV/atom, Force MAE 208.771 meV/A.
 
 ---
@@ -38,10 +40,10 @@ Create `dev_test/sh_two_layer_gate_init_check.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-tmp_dir=".codex_tmp/sh_two_layer_gate_init"
+tmp_dir=".local_tmp/sh_two_layer_gate_init"
 mkdir -p "$tmp_dir"
-model="$tmp_dir/gated.mtp"
-saved="$tmp_dir/gated.saved.mtp"
+model="$tmp_dir/gated.sus2"
+saved="$tmp_dir/gated.saved.sus2"
 ./bin/mlp-sus2 init-sh "$model" \
   --species-count=2 \
   --l-max=2 \
@@ -117,10 +119,10 @@ Create `dev_test/sh_two_layer_gate_zero_compat_check.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-tmp_dir=".codex_tmp/sh_two_layer_gate_zero"
+tmp_dir=".local_tmp/sh_two_layer_gate_zero"
 mkdir -p "$tmp_dir"
-plain="$tmp_dir/plain.mtp"
-gated="$tmp_dir/gated.mtp"
+plain="$tmp_dir/plain.sus2"
+gated="$tmp_dir/gated.sus2"
 plain_pred="$tmp_dir/plain_pred.cfg"
 gated_pred="$tmp_dir/gated_pred.cfg"
 ./bin/mlp-sus2 init-sh "$plain" --species-count=2 --l-max=2 --k-max=2 --body-order=4 --body-l-max=2,2,2 --radial-basis-size=4 --cutoff=5.0 --write-sh-scalar-info
@@ -252,7 +254,7 @@ Expected: PASS with tolerances documented in the scripts.
 
 **Files:**
 - Modify: `docs/sus2-sh-development.md`
-- Create: `.codex_tmp/two_layer_gate_remote_commands.md`
+- Create: `.local_tmp/two_layer_gate_remote_commands.md`
 
 - [x] **Step 1: Build locally**
 
@@ -269,7 +271,7 @@ Run the new `dev_test/sh_two_layer_gate_*.sh` scripts plus existing SH smoke scr
 Use the documented SSH path and sync source changes to:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-work-codex
+<historical-path>
 ```
 
 - [x] **Step 4: Rebuild remotely**
@@ -296,7 +298,7 @@ Record energy MAE, force MAE, total loss, accepted steps, wall time, and peak me
 **Files:**
 - Git branch: `developer`
 - Remote branch: `origin/developer`
-- Server tree: `/work/phy-weigw/20260321_Test/SUS2-SH-work-codex`
+- Server tree: `<historical-path>`
 
 - [ ] **Step 1: Review dirty tree**
 

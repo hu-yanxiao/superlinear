@@ -1,4 +1,5 @@
 #include "sh_model_init.h"
+#include "../src/model_path.h"
 
 #include "../src/common/stdafx.h"
 #include "../src/common/utils.h"
@@ -1190,6 +1191,7 @@ void ReadJointReadoutSection(std::istream& in, JointReadoutTopology& g,
 void WriteSphericalHarmonicModel(const std::string& filename,
                                  const std::map<std::string, std::string>& opts)
 {
+	sus2::ValidateModelOutputPath(filename);
 	const int lmax = IntOpt(opts, "l-max", 3);
 	const int kmax = IntOpt(opts, "k-max", 3);
 	const int body_order = IntOpt(opts, "body-order", 5);

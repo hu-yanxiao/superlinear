@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/zbl_pair_cache_check"
+tmp_dir=".local_tmp/zbl_pair_cache_check"
 mkdir -p "$tmp_dir"
 
 src="$tmp_dir/zbl_pair_cache_check.cpp"

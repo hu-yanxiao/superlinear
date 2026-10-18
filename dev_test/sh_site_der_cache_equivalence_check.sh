@@ -11,7 +11,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-site-der-cache-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL="$WORKDIR/qtotal_l3k2.mtp"
+MODEL="$WORKDIR/qtotal_l3k2.sus2"
 BASE_OUT="$WORKDIR/base.cfg"
 CACHE_OUT="$WORKDIR/cache.cfg"
 CACHE_LOG="$WORKDIR/cache.log"

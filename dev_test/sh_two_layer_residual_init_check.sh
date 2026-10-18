@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_residual_init"
+tmp_dir=".local_tmp/sh_two_layer_residual_init"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/residual.mtp"
+model="$tmp_dir/residual.sus2"
 log="$tmp_dir/init.log"
 rm -f "$model" "$log"
 

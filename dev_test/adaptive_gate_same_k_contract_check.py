@@ -264,9 +264,9 @@ def main(argv: list[str]) -> int:
 
     with tempfile.TemporaryDirectory(prefix="adaptive_gate_same_k_") as tmp:
         root = Path(tmp)
-        same = root / "same_k.mtp"
-        qtotal = root / "q_total.mtp"
-        cross_outer_same_gate = root / "cross_outer_same_gate.mtp"
+        same = root / "same_k.sus2"
+        qtotal = root / "q_total.sus2"
+        cross_outer_same_gate = root / "cross_outer_same_gate.sus2"
         init_model(
             binary,
             same,
@@ -325,9 +325,9 @@ def main(argv: list[str]) -> int:
             expected_outer_channel_mode="cross-channel",
         )
 
-        same_rt = root / "same_k_roundtrip.mtp"
-        qtotal_rt = root / "q_total_roundtrip.mtp"
-        cross_outer_same_gate_rt = root / "cross_outer_same_gate_roundtrip.mtp"
+        same_rt = root / "same_k_roundtrip.sus2"
+        qtotal_rt = root / "q_total_roundtrip.sus2"
+        cross_outer_same_gate_rt = root / "cross_outer_same_gate_roundtrip.sus2"
         run([str(binary), "roundtrip-model-dev", str(same), str(same_rt)])
         run([str(binary), "roundtrip-model-dev", str(qtotal), str(qtotal_rt)])
         run(
@@ -364,10 +364,10 @@ def main(argv: list[str]) -> int:
             expected_outer_channel_mode="cross-channel",
         )
 
-        corrupt = root / "same_k_cross_lane_corrupt.mtp"
+        corrupt = root / "same_k_cross_lane_corrupt.sus2"
         corrupt_same_k_product_lane(same, corrupt)
         corrupt_result = run(
-            [str(binary), "roundtrip-model-dev", str(corrupt), str(root / "corrupt_out.mtp")],
+            [str(binary), "roundtrip-model-dev", str(corrupt), str(root / "corrupt_out.sus2")],
             expect_ok=False,
         )
         if "same-k gate product crosses gate channels" not in corrupt_result.stdout:

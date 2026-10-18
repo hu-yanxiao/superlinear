@@ -34,7 +34,7 @@ void CalcErrors(std::vector<std::string>& args, std::map<std::string, std::strin
 	// test on Dropbox/../4Evgeny/bug2/
 	AnyPotential* p_mtp = nullptr;
 
-	// forward reading .mtp-file to find out the number of components of MTP
+	// forward reading .sus2-file to find out the number of components of MTP
 	int spec_count = 1;
 	{
         ifstream ifs(args[0], std::ios::binary);

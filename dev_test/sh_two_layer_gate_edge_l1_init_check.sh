@@ -2,11 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_init"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_init"
 mkdir -p "$tmp_dir"
 
-edge_model="$tmp_dir/edge_l1.mtp"
-legacy_model="$tmp_dir/legacy_gate.mtp"
+edge_model="$tmp_dir/edge_l1.sus2"
+legacy_model="$tmp_dir/legacy_gate.sus2"
 legacy_pred="$tmp_dir/legacy_gate.pred.cfg"
 reject_log="$tmp_dir/reject_double.log"
 
@@ -42,7 +42,7 @@ if [[ "$weight_count" -ne $((9 * source_count)) ]]; then
 fi
 grep -q "two_layer_gate_edge_l1_weights" "$edge_model"
 
-if ./bin/mlp-sus2 init-sh "$tmp_dir/reject_double.mtp" \
+if ./bin/mlp-sus2 init-sh "$tmp_dir/reject_double.sus2" \
   --species-count=1 \
   --l-max=1 \
   --k-max=2 \

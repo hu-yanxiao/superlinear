@@ -4,17 +4,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 bin="${MLP_BIN:-./bin/mlp-sus2}"
-tmp_dir=".codex_tmp/sh_zbl_continue_train_roundtrip"
+tmp_dir=".local_tmp/sh_zbl_continue_train_roundtrip"
 mkdir -p "$tmp_dir"
 
-base_model="$tmp_dir/base_two_layer.mtp"
-zbl_init_model="$tmp_dir/zbl_two_layer_init.mtp"
+base_model="$tmp_dir/base_two_layer.sus2"
+zbl_init_model="$tmp_dir/zbl_two_layer_init.sus2"
 train_cfg="$tmp_dir/train.cfg"
 short_cfg="$tmp_dir/short_ho.cfg"
 base_pred="$tmp_dir/base_pred.cfg"
 zbl_pred="$tmp_dir/zbl_pred.cfg"
-continued_model="$tmp_dir/continued_zbl.mtp"
-current_model="$tmp_dir/current_zbl.mtp"
+continued_model="$tmp_dir/continued_zbl.sus2"
+current_model="$tmp_dir/current_zbl.sus2"
 train_log="$tmp_dir/train.log"
 
 rm -f "$base_model" "$zbl_init_model" "$train_cfg" "$short_cfg" \

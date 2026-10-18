@@ -1622,7 +1622,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("roundtrip-model-dev",
 		"loads and saves a model for serialization regression checks",
-		"mlp-sus2 roundtrip-model-dev input.mtp output.mtp\n"
+		"mlp-sus2 roundtrip-model-dev input.sus2 output.sus2\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 roundtrip-model-dev: input and output model arguments are required\n";
@@ -1634,7 +1634,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("convert-adaptive-readout-dev",
 		"converts an adaptive radial model from shared scalar readout to species-resolved readout",
-		"mlp-sus2 convert-adaptive-readout-dev input.mtp output.mtp --readout-mode=species\n"
+		"mlp-sus2 convert-adaptive-readout-dev input.sus2 output.sus2 --readout-mode=species\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 convert-adaptive-readout-dev: input and output model arguments are required\n";
@@ -1654,7 +1654,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("enable-joint-readout-dev",
 		"adds a zero initialized joint invariant readout without changing any old parameter",
-		"mlp-sus2 enable-joint-readout-dev input.mtp output.mtp\n"
+		"mlp-sus2 enable-joint-readout-dev input.sus2 output.sus2\n"
 	) {
 		if (args.size() != 2) ERROR("enable-joint-readout-dev requires input and output models");
 		if (mpi_rank == 0) {
@@ -1667,7 +1667,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("enable-two-layer-gate-radial-mixing-dev",
 		"enables zero-initialized full radial mixing on a ranked two-layer gate model",
-		"mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.mtp output.mtp\n"
+		"mlp-sus2 enable-two-layer-gate-radial-mixing-dev input.sus2 output.sus2\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 enable-two-layer-gate-radial-mixing-dev: "
@@ -1686,7 +1686,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-dev",
 		"checks MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-dev model.sus2 train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-7 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-dev: model and cfg arguments are required\n";
@@ -1810,7 +1810,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-loss-gradient-direction-dev",
 		"checks a directional MTPR loss gradient against finite differences",
-		"mlp-sus2 check-loss-gradient-direction-dev model.mtp train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
+		"mlp-sus2 check-loss-gradient-direction-dev model.sus2 train.cfg --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --std-weight=0 --stdd-weight=0 --radial-smooth=0 --radial-smooth-grid=128 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-4 --abs-tolerance=1e-5 --rel-tolerance=1e-4 --coeff-start=0 --coeff-end=0 --residual-stage=full --stage-active-only\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-loss-gradient-direction-dev: model and cfg arguments are required\n";
@@ -1918,7 +1918,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-radial-weight-norm-roundtrip-dev",
 		"checks outer R (pure mode: W) and gate1 radial weight-normalization coordinate round trips",
-		"mlp-sus2 check-radial-weight-norm-roundtrip-dev model.mtp --abs-tolerance=1e-12 --rel-tolerance=1e-12\n"
+		"mlp-sus2 check-radial-weight-norm-roundtrip-dev model.sus2 --abs-tolerance=1e-12 --rel-tolerance=1e-12\n"
 	) {
 		if (args.size() != 1) {
 			std::cout << "mlp-sus2 check-radial-weight-norm-roundtrip-dev: model argument is required\n";
@@ -2025,7 +2025,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-radial-weight-norm-gradient-dev",
 		"checks an outer R (pure mode: flattened l,o,k W row) or gate1 weight-normalization loss gradient",
-		"mlp-sus2 check-radial-weight-norm-gradient-dev model.mtp train.cfg --radial-block=outer|gate1 --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
+		"mlp-sus2 check-radial-weight-norm-gradient-dev model.sus2 train.cfg --radial-block=outer|gate1 --mu=0 --max-configs=1 --energy-weight=1 --force-weight=1 --stress-weight=0 --radial-smooth=0 --scalar-head-l2=0 --gate-scalar-l2=0 --gate-mix-l2=0 --gate-full-l2=0 --gate-x-l2=1e-4 --displacement=1e-6 --abs-tolerance=1e-5 --rel-tolerance=1e-4\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-radial-weight-norm-gradient-dev: model and cfg arguments are required\n";
@@ -2100,7 +2100,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-efs-fd-dev",
 		"checks forces and stresses against energy finite differences",
-		"mlp-sus2 check-efs-fd-dev model.mtp cfg --max-configs=1 --max-atoms=0 --displacement=1e-4 --abs-tolerance=1e-4 --rel-tolerance=1e-3\n"
+		"mlp-sus2 check-efs-fd-dev model.sus2 cfg --max-configs=1 --max-atoms=0 --displacement=1e-4 --abs-tolerance=1e-4 --rel-tolerance=1e-3\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-efs-fd-dev: model and cfg arguments are required\n";
@@ -2162,7 +2162,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-linear-components-fd-dev",
 		"checks linear-regression force components against energy-component finite differences",
-		"mlp-sus2 check-linear-components-fd-dev model.mtp cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4 [--fixed-center-readout-columns]\n"
+		"mlp-sus2 check-linear-components-fd-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4 [--fixed-center-readout-columns]\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-linear-components-fd-dev: model and cfg arguments are required\n";
@@ -2217,7 +2217,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-linear-readout-dev",
 		"checks direct E/F (optionally stress) against the current linear component readout",
-		"mlp-sus2 check-linear-readout-dev model.mtp cfg --max-configs=1 --max-atoms=1 --check-stress --abs-tolerance=1e-8 --rel-tolerance=1e-8\n"
+		"mlp-sus2 check-linear-readout-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --check-stress --abs-tolerance=1e-8 --rel-tolerance=1e-8\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-linear-readout-dev: model and cfg arguments are required\n";
@@ -2283,7 +2283,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-two-layer-gate-fastpath-dev",
 		"checks two-layer gate pruned SH value/derivative paths against full SH",
-		"mlp-sus2 check-two-layer-gate-fastpath-dev model.mtp cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-10 --rel-tolerance=1e-9\n"
+		"mlp-sus2 check-two-layer-gate-fastpath-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --abs-tolerance=1e-10 --rel-tolerance=1e-9\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-two-layer-gate-fastpath-dev: model and cfg arguments are required\n";
@@ -2350,7 +2350,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-two-layer-gate-decoupled-upgrade-dev",
 		"checks that shared-to-decoupled gate scaling upgrade preserves coefficients and E/F/S",
-		"mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev model.mtp cfg --max-configs=1 --abs-tolerance=1e-10\n"
+		"mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev model.sus2 cfg --max-configs=1 --abs-tolerance=1e-10\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-two-layer-gate-decoupled-upgrade-dev: model and cfg arguments are required\n";
@@ -2448,7 +2448,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 		BEGIN_COMMAND("check-two-layer-gate-mu-body-order-dev",
 			"checks every body bucket in mu-dependent two-layer gate linear combinations",
-			"mlp-sus2 check-two-layer-gate-mu-body-order-dev model.mtp cfg --max-configs=1 --max-atoms=1 --probe-weight=0.5 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
+			"mlp-sus2 check-two-layer-gate-mu-body-order-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --probe-weight=0.5 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
 		) {
 			if (args.size() != 2) {
 				std::cout << "mlp-sus2 check-two-layer-gate-mu-body-order-dev: model and cfg arguments are required\n";
@@ -2502,7 +2502,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 		BEGIN_COMMAND("check-two-layer-gate-type-separation-dev",
 			"checks release two-layer gate outer v_t and inner c_gate_t separation",
-			"mlp-sus2 check-two-layer-gate-type-separation-dev model.mtp cfg --max-configs=1 --max-atoms=1 --gate-type-scale=2 --outer-type-probe=3 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
+			"mlp-sus2 check-two-layer-gate-type-separation-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --gate-type-scale=2 --outer-type-probe=3 --abs-tolerance=1e-12 --rel-tolerance=1e-10\n"
 		) {
 			if (args.size() != 2) {
 				std::cout << "mlp-sus2 check-two-layer-gate-type-separation-dev: model and cfg arguments are required\n";
@@ -2573,7 +2573,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 			BEGIN_COMMAND("init-sh",
 				"writes an untrained SUS2-SH model",
-				"mlp-sus2 init-sh output.mtp --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+				"mlp-sus2 init-sh output.sus2 --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --scaling-map=K|L|LK|pair (default=LK),\n"
 				"         --superlinear-mode=legacy|pure-w-channelwise|radial-coefficient-gate (default=legacy),\n"
@@ -2615,7 +2615,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 			"         --zbl-typewise-cutoff-factor=<factor>\n"
 		) {
 		if (args.size() != 1) {
-			std::cout << "mlp-sus2 init-sh: 1 output .mtp argument is required\n";
+			std::cout << "mlp-sus2 init-sh: 1 output .sus2 argument is required\n";
 			return 1;
 		}
 		if (mpi_rank == 0) {
@@ -2629,7 +2629,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("prune-model",
 		"writes a species-pruned SUS2 model",
-		"mlp-sus2 prune-model input.mtp output.mtp --species=2,4,6\n"
+		"mlp-sus2 prune-model input.sus2 output.sus2 --species=2,4,6\n"
 		"  Keeps the selected old species, preserves shared parameters, and remaps\n"
 		"  them in the output model as 0,1,2,... in the order provided.\n"
 	) {
@@ -2663,7 +2663,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("select-add",
 		"actively selects configurations to be added to the current training set",
-		"mlp-sus2 select-add pot.mtp train.cfg new.cfg diff.cfg:\n"
+		"mlp-sus2 select-add pot.sus2 train.cfg new.cfg diff.cfg:\n"
 		"actively selects configurations from new.cfg and save those\n"
 		"that need to be added to train.cfg to diff.cfg\n"
 		"  Options:\n"
@@ -2857,7 +2857,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-grade",
 		"calculates and saves maxvol grades of input configurations",
-		"mlp-sus2 calc-grade pot.mtp train.cfg in.cfg out.cfg:\n"
+		"mlp-sus2 calc-grade pot.sus2 train.cfg in.cfg out.cfg:\n"
 		"actively selects from train.cfg, generates the ALS file from train.cfg, and\n"
 		"calculates maxvol grades of configurations located in in.cfg\n"
 		"and writes them to out.cfg\n"
@@ -2942,7 +2942,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-descriptors",
 		"calculates descriptors in each neighborhood of configurations",
-		"mlp-sus2 calc-descriptors pot.mtp in.cfg out.cfg:\n"
+		"mlp-sus2 calc-descriptors pot.sus2 in.cfg out.cfg:\n"
 		"calculates descriptors in each neighborhood of configurations from in.cfg and\n"
 		"writes configurations with calculated descriptors to out.cfg\n"
 		) {
@@ -2972,7 +2972,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-partialE",
 		"calculates body-order E of each atom",
-		"mlp-sus2 calc-partialE pot.mtp in.cfg out.cfg:\n"
+		"mlp-sus2 calc-partialE pot.sus2 in.cfg out.cfg:\n"
 		"calculates body-order E of atoms from in.cfg and\n"
 		"writes results to out.cfg\n"
 		) {
@@ -3002,7 +3002,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-eij",
 		"calculates effective-pair (EP) energies of configurations",
-		"mlp-sus2 calc-eij pot.mtp in.cfg out.eij:\n"
+		"mlp-sus2 calc-eij pot.sus2 in.cfg out.eij:\n"
 		"calculates effective-pair energies from in.cfg and writes rows\n"
 		"type_i type_j distance EP_energy to out.eij\n"
 		) {
@@ -3034,7 +3034,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-efs",
 		"calculates energies, forces, and stresses (efs) of configurations",
-		"mlp-sus2 calc-efs pot.mtp in.cfg out.cfg:\n"
+		"mlp-sus2 calc-efs pot.sus2 in.cfg out.cfg:\n"
 		"calculates energies, forces, and stresses (efs) of configurations from in.cfg and\n"
 		"writes configurations with calculated efs to out.cfg\n"
 		"  --no-loss: preserve full double precision in the output CFG\n"

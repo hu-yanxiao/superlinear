@@ -1,12 +1,14 @@
 # SUS2-SH SO2 L1 Edge Gate Implementation Plan
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the first exact edge-projected `L=1` SUS2-SH gate with zero-weight compatibility, analytic coordinate/parameter derivatives, rotational-invariance checks, and server-side profile comparison.
 
 **Architecture:** Reuse the existing two-layer scalar gate and final SH evaluator. Add a separate edge L1 metadata/weight block, build raw first-layer `l=1` source moments per atom, combine them with edge `Y_1(rhat_ij)` inside the existing pair gate buffer path, and add reverse-mode adjoints for both direct edge projection and first-layer `H` construction.
 
-**Tech Stack:** C++11, existing SUS2-SH `MLMTPR`, real spherical harmonics from `dev_src/mtpr_sh.cpp`, existing shell regression tests in `dev_test`, server build/test path `/work/phy-weigw/20260321_Test/SUS2-SH-so2-l1-gate-work-codex`, benchmark path `/work/phy-weigw/hyx/xxx-b/so2-gate/`.
+**Tech Stack:** C++11, existing SUS2-SH `MLMTPR`, real spherical harmonics from `dev_src/mtpr_sh.cpp`, existing shell regression tests in `dev_test`, server build/test path `<historical-path>`, benchmark path `/work/phy-weigw/hyx/xxx-b/so2-gate/`.
 
 ---
 
@@ -40,11 +42,11 @@ Add executable `dev_test/sh_two_layer_gate_edge_l1_init_check.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_init"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_init"
 mkdir -p "$tmp_dir"
-edge_model="$tmp_dir/edge_l1.mtp"
-legacy_model="$tmp_dir/legacy_gate.mtp"
-legacy_saved="$tmp_dir/legacy_gate.saved.mtp"
+edge_model="$tmp_dir/edge_l1.sus2"
+legacy_model="$tmp_dir/legacy_gate.sus2"
+legacy_saved="$tmp_dir/legacy_gate.saved.sus2"
 reject_log="$tmp_dir/reject_double.log"
 
 ./bin/mlp-sus2 init-sh "$edge_model" \
@@ -66,7 +68,7 @@ grep -q "two_layer_gate_edge_l1_source_mu_indices = {1, 4, 7}" "$edge_model"
 grep -q "two_layer_gate_edge_l1_weight_count = 27" "$edge_model"
 grep -q "two_layer_gate_edge_l1_weights" "$edge_model"
 
-if ./bin/mlp-sus2 init-sh "$tmp_dir/reject_double.mtp" \
+if ./bin/mlp-sus2 init-sh "$tmp_dir/reject_double.sus2" \
   --species-count=1 \
   --l-max=1 \
   --k-max=2 \
@@ -115,10 +117,10 @@ Add executable `dev_test/sh_two_layer_gate_edge_l1_zero_compat_check.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_zero"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_zero"
 mkdir -p "$tmp_dir"
-base="$tmp_dir/base_gate.mtp"
-edge="$tmp_dir/edge_gate_zero.mtp"
+base="$tmp_dir/base_gate.sus2"
+edge="$tmp_dir/edge_gate_zero.sus2"
 base_pred="$tmp_dir/base_pred.cfg"
 edge_pred="$tmp_dir/edge_pred.cfg"
 
@@ -598,13 +600,13 @@ when zero compatibility passes.
 Use the documented SSH route and create/update:
 
 ```bash
-/work/phy-weigw/20260321_Test/SUS2-SH-so2-l1-gate-work-codex
+<historical-path>
 ```
 
 The binary under test is:
 
 ```bash
-/work/phy-weigw/20260321_Test/SUS2-SH-so2-l1-gate-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 - [ ] **Step 2: Build on the server**

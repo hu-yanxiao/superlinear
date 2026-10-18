@@ -165,8 +165,8 @@ class TensorCheck(NativeCheck):
     def case(self,label,*,gate="same-k",outer="same-k",readout="species",scaling="K",message=2):
         paths={}
         for msg in (0,message):
-            top=self.out/f"{label}.m{msg}.topology.mtp"
-            full=self.out/f"{label}.m{msg}.materialized.mtp"
+            top=self.out/f"{label}.m{msg}.topology.sus2"
+            full=self.out/f"{label}.m{msg}.materialized.sus2"
             self.run(label+f"-init{msg}","init-sh",top,
                 *topology_args(gate=gate,outer=outer,readout=readout,scaling=scaling,message=msg))
             self.run(label+f"-materialize{msg}","roundtrip-model-dev",top,full)
@@ -186,10 +186,10 @@ class TensorCheck(NativeCheck):
             h=numbers(base,"moment_coeffs").reshape(2,q)
             h[1]+=.037*np.cos(np.arange(q)*.29+.11)
             base=put_numbers(base,"moment_coeffs",h.ravel())
-        legacy=self.out/f"{label}.legacy.mtp"; legacy.write_text(base)
-        zero=self.out/f"{label}.zero.mtp"
+        legacy=self.out/f"{label}.legacy.sus2"; legacy.write_text(base)
+        zero=self.out/f"{label}.zero.sus2"
         zero.write_text(tensor_text(base,template,np.zeros(message*3*2)))
-        nonzero=self.out/f"{label}.nonzero.mtp"
+        nonzero=self.out/f"{label}.nonzero.sus2"
         B=.11*np.sin(.37*np.arange(message*3*2)+.21)+.043*np.cos(.19*np.arange(message*3*2))
         nonzero.write_text(tensor_text(base,template,B))
         before=self.calc(label+"-legacy",legacy)
@@ -269,7 +269,7 @@ class TensorCheck(NativeCheck):
                                     binary=self.old_cpp,fail=True))
             errors=[float(old[key]) for key in ("energy_abs_err","force_abs_err","stress_abs_err")]
             assert all(math.isfinite(x) for x in errors) and max(errors)>1e-8
-            unit=self.out/(label+"-unit-h-chart.mtp")
+            unit=self.out/(label+"-unit-h-chart.sus2")
             unit.write_text(put_numbers(legacy.read_text(),"species_coeffs",np.ones(2)))
             self.run(label+"-old-unit-chart",args[0],unit,*args[1:],binary=self.old_cpp)
             self.run(label+"-new-asymmetric-fixed-chart",args[0],legacy,*args[1:])
@@ -326,19 +326,19 @@ class TensorCheck(NativeCheck):
             "negative-optimizer-scale":put_numbers(text,"tensor_message_optimizer_scales",[-1.,*np.ones(len(B)-1)]),
             "nan-optimizer-scale":put(text,"tensor_message_optimizer_scales","{nan, "+", ".join(["1."]*(len(B)-1))+"}")})
         for name,content in bad.items():
-            path=self.out/f"bad-{name}.mtp"; path.write_text(content)
-            self.run("reject-"+name,"roundtrip-model-dev",path,self.out/f"rejected-{name}.mtp",fail=True)
-        self.run("reject-nonadaptive","init-sh",self.out/"nonadaptive.mtp","--species-count=2","--l-max=2","--k-max=3","--body-order=3","--tensor-message-lmax=2",fail=True)
+            path=self.out/f"bad-{name}.sus2"; path.write_text(content)
+            self.run("reject-"+name,"roundtrip-model-dev",path,self.out/f"rejected-{name}.sus2",fail=True)
+        self.run("reject-nonadaptive","init-sh",self.out/"nonadaptive.sus2","--species-count=2","--l-max=2","--k-max=3","--body-order=3","--tensor-message-lmax=2",fail=True)
         self.run("reject-loaded-mismatch","train",case["nonzero"],self.cfg,"--max-iter=0","--tensor-message-lmax=1",fail=True)
         self.run("reject-loaded-disable","train",case["nonzero"],self.cfg,"--max-iter=0","--tensor-message-lmax=0",fail=True)
         self.run("reject-loaded-enable","train",case["legacy"],self.cfg,"--max-iter=0","--tensor-message-lmax=2",fail=True)
         if self.old_cpp:
-            self.run("old-reject-v14","roundtrip-model-dev",case["nonzero"],self.out/"old-rejected.mtp",binary=self.old_cpp,fail=True)
-            top=self.out/"mono.topology.mtp"; full=self.out/"mono.mtp"
+            self.run("old-reject-v14","roundtrip-model-dev",case["nonzero"],self.out/"old-rejected.sus2",binary=self.old_cpp,fail=True)
+            top=self.out/"mono.topology.sus2"; full=self.out/"mono.sus2"
             self.run("mono-init","init-sh",top,*topology_args(species=1))
             self.run("mono-materialize","roundtrip-model-dev",top,full)
-            self.run("old-reject-mono-v14","roundtrip-model-dev",full,self.out/"old-rejected-mono.mtp",binary=self.old_cpp,fail=True)
-        roundtrip=self.out/"roundtrip.mtp"
+            self.run("old-reject-mono-v14","roundtrip-model-dev",full,self.out/"old-rejected-mono.sus2",binary=self.old_cpp,fail=True)
+        roundtrip=self.out/"roundtrip.sus2"
         self.run("tensor-roundtrip","roundtrip-model-dev",case["nonzero"],roundtrip)
         np.testing.assert_allclose(numbers(roundtrip.read_text(),"tensor_message_coeffs"),B,atol=0,rtol=2e-15)
         np.testing.assert_allclose(self.calc("roundtrip-efs",roundtrip),self.calc("before-roundtrip",case["nonzero"]),atol=2e-10,rtol=2e-10)
@@ -347,8 +347,8 @@ class TensorCheck(NativeCheck):
         baseline=self.calc("optimizer-scale-baseline",case["nonzero"])
         for label,scaled_text in (("absent",re.sub(r"(?m)^tensor_message_optimizer_scales.*\n?","",text)),
                 ("nontrivial",put_numbers(text,"tensor_message_optimizer_scales",.7+.09*np.arange(len(B))))):
-            source=self.out/f"optimizer-scales-{label}.mtp"; source.write_text(scaled_text)
-            saved=self.out/f"optimizer-scales-{label}-roundtrip.mtp"
+            source=self.out/f"optimizer-scales-{label}.sus2"; source.write_text(scaled_text)
+            saved=self.out/f"optimizer-scales-{label}-roundtrip.sus2"
             self.run("optimizer-scales-"+label,"roundtrip-model-dev",source,saved)
             np.testing.assert_allclose(numbers(saved.read_text(),"tensor_message_coeffs"),B,atol=0,rtol=2e-15)
             np.testing.assert_allclose(self.calc("optimizer-scales-"+label+"-efs",saved),baseline,atol=2e-10,rtol=2e-10)
@@ -357,7 +357,7 @@ class TensorCheck(NativeCheck):
     def optimizer(self):
         fresh=[]
         for msg in (0,2):
-            top=self.out/f"fresh.m{msg}.topology.mtp"; model=self.out/f"fresh.m{msg}.mtp"
+            top=self.out/f"fresh.m{msg}.topology.sus2"; model=self.out/f"fresh.m{msg}.sus2"
             self.run(f"fresh-init{msg}","init-sh",top,*topology_args(message=msg))
             output=self.run(f"fresh-profile{msg}","train",top,self.cfg,"--max-iter=0","--init-params=same",
                 "--init-random-seed=20260910","--energy-weight=1","--force-weight=0.1","--stress-weight=0.01",
@@ -374,11 +374,11 @@ class TensorCheck(NativeCheck):
                                    err_msg="fresh base radial/type coefficients and RNG sequence")
         np.testing.assert_array_equal(numbers(fresh[1].read_text(),"tensor_message_coeffs"),np.zeros(12))
         np.testing.assert_allclose(self.calc("fresh-disabled",fresh[0]),self.calc("fresh-enabled",fresh[1]),atol=2e-10,rtol=2e-10)
-        trained=self.out/"bfgs2.mtp"; trace=self.out/"bfgs2.csv"
+        trained=self.out/"bfgs2.sus2"; trace=self.out/"bfgs2.csv"
         output=self.run("bfgs2","train",fresh[1],self.cfg,"--max-iter=2","--optimizer=bfgs","--bfgs-line-search=wolfe",
             "--optimizer-conv-tol=0","--energy-weight=1","--force-weight=0.1","--stress-weight=0.01",
             "--std-weight=0","--stdd-weight=0",f"--trained-pot-name={trained}",f"--bfgs-trace-file={trace}",
-            f"--curr-pot-name={self.out/'bfgs-current.mtp'}",f"--best-pot-name={self.out/'bfgs-best.mtp'}",timeout=300)
+            f"--curr-pot-name={self.out/'bfgs-current.sus2'}",f"--best-pot-name={self.out/'bfgs-best.sus2'}",timeout=300)
         assert "[adaptive-pytorch-profile] fresh=0" in output
         with trace.open() as stream: rows=list(csv.DictReader(stream))
         assert len(rows)==2 and [int(row["step"]) for row in rows]==[0,1]

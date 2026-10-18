@@ -140,14 +140,14 @@ make -C "$LAMMPS_ROOT/src" no-all purge
 CPU:
 
 ```lammps
-pair_style sus2mtp p.mtp radial_mode table tabstep 1.0e-4
+pair_style sus2mtp p.sus2 radial_mode table tabstep 1.0e-4
 pair_coeff * *
 ```
 
 GPU:
 
 ```lammps
-pair_style sus2mtp/kk p.mtp chunksize 129600 radial_mode table tabstep 1.0e-4
+pair_style sus2mtp/kk p.sus2 chunksize 129600 radial_mode table tabstep 1.0e-4
 pair_coeff * *
 ```
 
@@ -159,7 +159,7 @@ be benchmarked or run through direct evaluation without editing its metadata,
 for example:
 
 ```lammps
-pair_style sus2mtp/kk p.mtp chunksize 129600 radial_mode direct
+pair_style sus2mtp/kk p.sus2 chunksize 129600 radial_mode direct
 ```
 
 `tabstep` is optional and defaults to `1.0e-4 A`; it is used only in table

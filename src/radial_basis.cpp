@@ -74,34 +74,34 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 		ifs.ignore(2);
 		ifs >> scaling;
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		ifs >> tmpstr;
 	}
 
 	if (tmpstr != "min_dist")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> min_dist;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	// reading max_dist 
 	ifs >> tmpstr;
 	if (tmpstr != "max_dist")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> max_dist;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	// reading rb_size 
 	ifs >> tmpstr;
 	if (tmpstr != "radial_basis_size")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> rb_size;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	radial_cutoff_type = "legacy";
 	radial_cutoff_p = 5;
@@ -115,7 +115,7 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 			ifs.ignore(2);
 			ifs >> radial_cutoff_type;
 			if (ifs.fail())
-				ERROR("Error reading .mtp file");
+				ERROR("Error reading .sus2 file");
 			const std::streampos cutoff_p_pos = ifs.tellg();
 			ifs >> tmpstr;
 			if (ifs.fail()) {
@@ -125,7 +125,7 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 				ifs.ignore(2);
 				ifs >> radial_cutoff_p;
 				if (ifs.fail())
-					ERROR("Error reading .mtp file");
+					ERROR("Error reading .sus2 file");
 			} else {
 				ifs.seekg(cutoff_p_pos);
 			}

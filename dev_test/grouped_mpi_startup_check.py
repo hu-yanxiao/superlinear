@@ -2,7 +2,7 @@
 """Deterministic MPI startup-race regression on allocated CPU resources.
 
 The MPI_Init interposer delays one rank *after* collective initialization, so
-the old entrypoint writes initial.mtp before that rank checks output reuse.
+the old entrypoint writes initial.sus2 before that rank checks output reuse.
 The interposer is a test fixture only; it is never installed with the trainer.
 Fixtures and logs are retained for inspection. No production data is consumed.
 """
@@ -112,26 +112,26 @@ def main():
     if args.old_binary:
         old_dir = fixture("old-race")
         result, output = run("old-race", args.old_binary.resolve(), old_dir, ["train", "train.yaml"])
-        assert result.returncode != 0 and (old_dir / "run/initial.mtp").exists(), output[-5000:]
+        assert result.returncode != 0 and (old_dir / "run/initial.sus2").exists(), output[-5000:]
         assert "inline initial model written" in output and ("Abort(2)" in output or "MPI_Abort" in output), output
-        assert not (old_dir / "run/final.mtp").exists(), "old binary unexpectedly completed"
+        assert not (old_dir / "run/final.sus2").exists(), "old binary unexpectedly completed"
         print("PASS old binary reproduces startup race", flush=True)
 
     delayed_dir = fixture("fixed-delayed")
     result, output = run("fixed-delayed", binary, delayed_dir, ["train", "train.yaml"])
-    assert result.returncode == 0 and (delayed_dir / "run/final.mtp").exists(), output[-5000:]
+    assert result.returncode == 0 and (delayed_dir / "run/final.sus2").exists(), output[-5000:]
     print("PASS delayed grouped fresh MPI training", flush=True)
     normal_dir = fixture("fixed-normal")
     result, output = run("fixed-normal", binary, normal_dir, ["train", "train.yaml"], delay=False)
     assert result.returncode == 0, output[-5000:]
     legacy_dir = fixture("fixed-legacy")
     (legacy_dir / "run").mkdir()
-    command = ["train", "tiny.cfg"] + LEGACY + ["--inline-sh-model=run/initial.mtp",
-        "--curr-pot-name=run/current.mtp", "--best-pot-name=run/best.mtp",
-        "--trained-pot-name=run/final.mtp", "--optimizer-trace-file=run/optimizer.csv"]
+    command = ["train", "tiny.cfg"] + LEGACY + ["--inline-sh-model=run/initial.sus2",
+        "--curr-pot-name=run/current.sus2", "--best-pot-name=run/best.sus2",
+        "--trained-pot-name=run/final.sus2", "--optimizer-trace-file=run/optimizer.csv"]
     result, output = run("fixed-legacy", binary, legacy_dir, command)
     assert result.returncode == 0, output[-5000:]
-    fields = ["initial.mtp", "final.mtp", "optimizer.csv"]
+    fields = ["initial.sus2", "final.sus2", "optimizer.csv"]
     before = {field: (delayed_dir / "run" / field).read_bytes() for field in fields}
     for field in fields:
         assert before[field] == (normal_dir / "run" / field).read_bytes(), "delay changed " + field

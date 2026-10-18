@@ -68,7 +68,7 @@ void Train(	const string& mtpfnm,
 		*p_log << "process#" << mpi_rank << ": " << proc_cntr << " configuration processed\n";
 
 	//learner.Train();
-	//string fnm = "partialearned.mtp" + to_string(rank);
+	//string fnm = "partialearned.sus2" + to_string(rank);
 	//	MTP.Save(fnm.c_str());
 
 	double* mtrx = NULL;

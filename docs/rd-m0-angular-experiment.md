@@ -1,17 +1,19 @@
 # RD m0 angular backend
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 ## Maintained-branch integration, 2026-09-14
 
 The RD implementation and its qualification tools are merged into the maintained
-`codex/radial-coefficient-gate` branch. `ry` remains the default; this promotion
+`main` branch. `ry` remains the default; this promotion
 does not change model mathematics, initialization, optimizer settings or MTP
 format. Use the regular installed executable with an explicit selection:
 
 ```sh
-SUS2_SH_ANGULAR_BACKEND=rd-m0 /work/phy-weigw/app/superlinear/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=rd-m0 /work/phy-weigw/app/superlinear/mlp-sus2 calc-efs model.sus2 input.cfg rd.cfg --no-loss
 ```
 
-PyTorch carries the equivalent opt-in feature on `codex/adaptive-radial-pytorch`.
+PyTorch carries the equivalent opt-in feature on `<historical-branch>`.
 Its accepted values are only `ry` and `rd-m0`. Native `hybrid`/`ry-new` are
 retained for diagnostics and must not be exported into a PyTorch invocation.
 GPUMD source integration and binary acceptance are separate: its unresolved
@@ -96,10 +98,10 @@ but are not claimed to use deferred normalization in their outer reduction.
 Set the backend before starting the process (selection is cached per process):
 
 ```sh
-SUS2_SH_ANGULAR_BACKEND=ry /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry.cfg --no-loss
-SUS2_SH_ANGULAR_BACKEND=ry-new /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg ry-new.cfg --no-loss
-SUS2_SH_ANGULAR_BACKEND=hybrid /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg hybrid.cfg --no-loss
-SUS2_SH_ANGULAR_BACKEND=rd-m0 /path/to/experimental/mlp-sus2 calc-efs model.mtp input.cfg rd.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=ry /path/to/experimental/mlp-sus2 calc-efs model.sus2 input.cfg ry.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=ry-new /path/to/experimental/mlp-sus2 calc-efs model.sus2 input.cfg ry-new.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=hybrid /path/to/experimental/mlp-sus2 calc-efs model.sus2 input.cfg hybrid.cfg --no-loss
+SUS2_SH_ANGULAR_BACKEND=rd-m0 /path/to/experimental/mlp-sus2 calc-efs model.sus2 input.cfg rd.cfg --no-loss
 ```
 
 An unset variable selects `ry`; values outside these four are rejected. RD adaptive setup
@@ -119,7 +121,7 @@ well as raw D/dD. Its extra angular storage is H doubles per edge in values-only
 mode or 4H doubles per edge with derivatives, H=(lmax+1)^2. Mathematical
 equivalence alone does not imply a speedup; performance needs measurement.
 The original experiment did not change GPUMD or production installed binaries. The
-[separate PyTorch implementation branch](https://github.com/hu-yanxiao/SUS2-SH-PyTorch/tree/codex/rd-m0-angular-experiment)
+[separate PyTorch implementation branch](https://github.com/hu-yanxiao/SUS2-SH-PyTorch)
 is not part of this native implementation or its validation claims. Its own
 qualification is independent. Its snapshot `0de63a3` passed 45 CPU/CUDA
 float64 checks in server job `4272217`; see that repository's RD document
@@ -130,7 +132,7 @@ for the separate autograd, native-export and batch-dependent timings.
 Compile and run on the server, not the developer laptop:
 
 ```sh
-g++ -std=c++11 -O3 -Idev_src codex_tests/rd_m0_angular_check.cpp -o rd_m0_angular_check
+g++ -std=c++11 -O3 -Idev_src native_tests/rd_m0_angular_check.cpp -o rd_m0_angular_check
 ./rd_m0_angular_check
 python3 dev_test/rd_m0_backend_check.py /path/to/experimental/mlp-sus2
 ```
@@ -216,7 +218,7 @@ attempts are retained there; passing is not a claim of bitwise equality.
 
 ## Paired CPU performance test
 
-`codex_tests/rd_m0_benchmark.cpp` is a standalone driver linked against the
+`native_tests/rd_m0_benchmark.cpp` is a standalone driver linked against the
 qualified native objects. `dev_test/rd_m0_benchmark.py` runs it only inside a
 Linux LSF compute allocation, freezes both models and the selected CFG data,
 and writes a live `summary.json`. This benchmark does not update parameters.

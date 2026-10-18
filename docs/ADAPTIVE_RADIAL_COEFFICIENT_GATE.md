@@ -144,7 +144,7 @@ Diagnostic switches (not model-file fields):
 - `SUS2_SH_ADAPTIVE_RADIAL_DR_FULL_CACHE=1`: disable just radial derivative
   compaction, for separate memory/performance diagnosis.
 
-`codex_tests/adaptive_radial_benchmark.cpp` includes same-instance reference
+`native_tests/adaptive_radial_benchmark.cpp` includes same-instance reference
 switching and energy/EFS/components/full-gradient interleaving, plus mutation
 checks. These switches are distinct from `SUS2_SH_ADAPTIVE_COMPONENTS`, which
 selects only the linear-component evaluation algorithm, not ordinary EFS.
@@ -221,7 +221,7 @@ and rowwise a/U refactorization invariance. Batched linear components agree with
 the reference reverse pass. The old pure-W model's predictions remain unchanged.
 Run `dev_test/adaptive_radial_coefficient_gate_check.sh /absolute/path/mlp-sus2`.
 
-`codex_tests/adaptive_radial_benchmark.cpp` separately checks cache reuse against
+`native_tests/adaptive_radial_benchmark.cpp` separately checks cache reuse against
 fresh gradients after coordinate, species, global scaling and coefficient
 mutations; every tested component agreed exactly in the local build.
 

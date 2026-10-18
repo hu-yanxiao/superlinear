@@ -10,9 +10,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve()
-(ROOT / '.codex_tmp').mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix='pure-w-linear-', dir=ROOT / '.codex_tmp'))
-CFG = ROOT / 'codex_tests/pure_w_regularization.cfg'
+(ROOT / '.local_tmp').mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix='pure-w-linear-', dir=ROOT / '.local_tmp'))
+CFG = ROOT / 'native_tests/pure_w_regularization.cfg'
 ENV = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
            SUS2_SH_PRODUCT_ROWS='0', SUS2_SH_PRODUCT_HVT_REVERSE='0')
 
@@ -57,8 +57,8 @@ def predict(label, model):
 
 print(f'Evidence: {TMP}', flush=True)
 for mapping in ('K', 'L', 'LK'):
-    initial = TMP / f'{mapping}.initial.mtp'
-    model = TMP / f'{mapping}.mtp'
+    initial = TMP / f'{mapping}.initial.sus2'
+    model = TMP / f'{mapping}.sus2'
     run(mapping + '-init', 'init-sh', initial, '--species-count=2', '--l-max=2',
         '--k-max=2', '--body-order=4', '--body-l-max=2,2,2,2', '--radial-basis-size=3',
         '--cutoff=5', '--scaling=0.3', '--superlinear-mode=pure-w-channelwise',
@@ -87,7 +87,7 @@ for mapping in ('K', 'L', 'LK'):
     model.write_text(src)
     force, stress = predict(mapping + '-physical', model)
     assert max(map(abs, force)) > 1e-5 and max(map(abs, stress)) > 1e-5
-    zero_gate = TMP / f'{mapping}.zero-gate.mtp'
+    zero_gate = TMP / f'{mapping}.zero-gate.sus2'
     zero_gate.write_text(replace_vector(src, 'two_layer_gate_weights',
                                        [0.0] * vector_count(src, 'two_layer_gate_weights')))
     no_gate_force, _ = predict(mapping + '-zero-gate-physical', zero_gate)
@@ -114,22 +114,22 @@ for mapping in ('K', 'L', 'LK'):
             '--displacement=1e-6', '--abs-tolerance=2e-7', '--rel-tolerance=2e-5', cache=cache)
         print(f'PASS {label}: E/F/stress readout, all column spatial FD, head coefficient FD', flush=True)
 
-    zero = TMP / f'{mapping}.zero-w.mtp'
+    zero = TMP / f'{mapping}.zero-w.sus2'
     zero.write_text(replace_vector(src, 'two_layer_gate_radial_mixing_coeffs',
                                   [0.0] * vector_count(src, 'two_layer_gate_radial_mixing_coeffs')))
     run(mapping + '-zero-readout', 'check-linear-readout-dev', zero, CFG,
         '--max-atoms=0', '--check-stress', '--abs-tolerance=1e-13', '--rel-tolerance=1e-13')
-    trained = TMP / f'{mapping}.trained.mtp'
+    trained = TMP / f'{mapping}.trained.sus2'
     run(mapping + '-train', 'train', model, CFG, '--max-iter=2', '--skip-preinit',
         '--init-params=same', '--radial-parameterization=weight-norm',
         '--do-lin', '--do-lin-freq=1', '--do-lin-steps=2', '--scalar-head-l2=1e-5',
         '--energy-weight=1', '--force-weight=0.3', '--stress-weight=0.1',
         '--radial-smooth=1e-6', '--gate-x-l2=0', f'--trained-pot-name={trained}',
-        f'--curr-pot-name={TMP / (mapping + ".current.mtp")}')
+        f'--curr-pot-name={TMP / (mapping + ".current.sus2")}')
     # A nonlinear step may update the species prefactors after the last linear
     # solve. Preserve the real checkpoint; test its learned W/gate/head blocks
     # separately in the unit-prefactor representation used by the linear solve.
-    trained_linear = TMP / f'{mapping}.trained-linear-representation.mtp'
+    trained_linear = TMP / f'{mapping}.trained-linear-representation.sus2'
     trained_linear.write_text(replace_vector(trained.read_text(), 'species_coeffs', [1.0, 1.0]))
     run(mapping + '-trained-readout', 'check-linear-readout-dev', trained_linear, CFG,
         '--max-atoms=0', '--check-stress', '--abs-tolerance=2e-9', '--rel-tolerance=2e-9')

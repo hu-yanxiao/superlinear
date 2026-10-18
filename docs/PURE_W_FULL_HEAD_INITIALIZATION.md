@@ -78,7 +78,7 @@ For each O in **1, 2, 4, 8**, use the same database, seed and other parameters:
 For example, after creating an incomplete pure-W seed:
 
 ```sh
-bin/mlp-sus2 train seed.mtp train.cfg \
+bin/mlp-sus2 train seed.sus2 train.cfg \
   --pure-w-initialization=balanced --init-random-seed=1 \
   --pure-w-head-solve=full-quadratic \
   --bfgs-coordinate-normalization=efs-head-full \
@@ -118,7 +118,7 @@ than approximated. Complete checkpoints are not silently reinitialized.
 ```sh
 bash dev_test/full_head_coordinate_scaling_check.sh
 python3 dev_test/sh_pure_w_full_head_init_check.py bin/mlp-sus2
-bash dev_test/sh_scalar_head_quadratic_objective_check.sh MODEL.mtp TWO_CONFIGS.cfg
+bash dev_test/sh_scalar_head_quadratic_objective_check.sh MODEL.sus2 TWO_CONFIGS.cfg
 ```
 
 The mathematical regression compares the assembled quadratic against the

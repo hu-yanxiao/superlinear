@@ -62,34 +62,34 @@ def main():
     groups_all = list(GROUP_FIELDS)
     for i, groups in enumerate([[g] for g in groups_all] + [groups_all]):
         name = 'selective-' + '-'.join(groups)
-        out = p.TMP / (name + '.mtp')
+        out = p.TMP / (name + '.sus2')
         trace = p.TMP / (name + '.csv')
         log = p.run(name, 'train', model, p.CFG, *p.PROFILE_TRAIN_ARGS,
                     '--init-params=same', '--optimizer=bfgs', '--max-iter=3',
                     '--optimizer-conv-tol=0', '--trainable-groups=' + ','.join(groups),
                     '--trained-pot-name=' + str(out), '--bfgs-trace-file=' + str(trace),
-                    '--curr-pot-name=' + str(p.TMP / (name + '.current.mtp')))
+                    '--curr-pot-name=' + str(p.TMP / (name + '.current.sus2')))
         assert 'active_coordinates=' in log
         assert len(trace.read_text().splitlines()) >= 2
         results[name] = compare(model, out, groups)
     if p.MPI_COMMAND:
-        out = p.TMP / 'mpi-selected.mtp'
+        out = p.TMP / 'mpi-selected.sus2'
         # Two frames ensure both ranks participate in distributed dense BFGS.
         doubled = p.TMP / 'two.cfg'
         doubled.write_text(p.CFG.read_text() * 2)
         log = p.run('mpi-selected', 'train', model, doubled, *p.PROFILE_TRAIN_ARGS,
                     '--init-params=same', '--max-iter=3', '--optimizer-conv-tol=0',
                     '--trainable-groups=' + ','.join(groups_all),
-                    '--curr-pot-name=' + str(p.TMP / 'mpi.current.mtp'),
+                    '--curr-pot-name=' + str(p.TMP / 'mpi.current.sus2'),
                     '--trained-pot-name=' + str(out), mpi=True)
         assert 'mode=distributed-dense-bfgs' in log
         results['mpi'] = compare(model, out, groups_all)
-        serial = p.TMP / ('selective-' + '-'.join(groups_all) + '.mtp')
+        serial = p.TMP / ('selective-' + '-'.join(groups_all) + '.sus2')
         a, b = p.calc_efs('selected-serial-efs', serial), p.calc_efs('selected-mpi-efs', out)
         assert np.allclose(a, b, rtol=2e-7, atol=2e-8), np.max(np.abs(a-b))
         results['mpi_serial_efs_max_abs'] = float(np.max(np.abs(a-b)))
         # More ranks than frames: idle rank excluded without deadlock or drift.
-        idle = p.TMP / 'idle-rank.mtp'
+        idle = p.TMP / 'idle-rank.sus2'
         p.run('mpi-idle-rank', 'train', model, p.CFG, *p.PROFILE_TRAIN_ARGS,
               '--init-params=same', '--max-iter=2', '--optimizer-conv-tol=0',
               '--trainable-groups=shift', '--trained-pot-name=' + str(idle), mpi=True)
@@ -107,7 +107,7 @@ def main():
     p.run('incomplete-rejected', 'train', topology, p.CFG, '--max-iter=0',
           '--trainable-groups=shift', expect_success=False)
     # Verify max-iter=0 retains every physical coefficient, including selected.
-    same = p.TMP / 'zero.mtp'
+    same = p.TMP / 'zero.sus2'
     p.run('selected-zero', 'train', model, p.CFG, *p.PROFILE_TRAIN_ARGS,
           '--max-iter=0', '--trainable-groups=' + ','.join(groups_all),
           '--trained-pot-name=' + str(same))

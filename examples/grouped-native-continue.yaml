@@ -1,7 +1,7 @@
 # Complete checkpoints only; architecture and physical parameters are inherited.
 schema_version: 1
 data:
-  model: ../runs/native-l3-k8-g4-o4/final.mtp
+  model: ../runs/native-l3-k8-g4-o4/final.sus2
   train: ../example/train.cfg
   # valid: ../data/val.cfg
 training:

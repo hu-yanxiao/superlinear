@@ -3,13 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_radial_mixing"
+tmp_dir=".local_tmp/sh_two_layer_gate_radial_mixing"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/init.mtp"
-roundtrip_model="$tmp_dir/roundtrip.mtp"
-legacy_layout_model="$tmp_dir/legacy-layout.mtp"
-nonzero_model="$tmp_dir/nonzero.mtp"
+init_model="$tmp_dir/init.sus2"
+roundtrip_model="$tmp_dir/roundtrip.sus2"
+legacy_layout_model="$tmp_dir/legacy-layout.sus2"
+nonzero_model="$tmp_dir/nonzero.sus2"
 train="$tmp_dir/one.cfg"
 
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
@@ -65,7 +65,7 @@ lines = [
 open(target, "w", encoding="utf-8").writelines(lines)
 PY
 if ./bin/mlp-sus2 roundtrip-model-dev \
-  "$legacy_layout_model" "$tmp_dir/legacy-accepted.mtp" \
+  "$legacy_layout_model" "$tmp_dir/legacy-accepted.sus2" \
   >"$tmp_dir/legacy.out" 2>"$tmp_dir/legacy.err"; then
   echo "unmarked legacy radial mixer was accepted" >&2
   exit 1

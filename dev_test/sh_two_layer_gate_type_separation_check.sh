@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_type_separation"
+tmp_dir=".local_tmp/sh_two_layer_gate_type_separation"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/gate_type_separation.mtp"
+model="$tmp_dir/gate_type_separation.sus2"
 train="$tmp_dir/one.cfg"
 log="$tmp_dir/check.log"
 rm -f "$model" "$train" "$log"

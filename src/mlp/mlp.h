@@ -21,9 +21,9 @@ inline void PrintSUS2Banner(std::ostream& os, bool mpi_enabled, int mpi_size)
 		<< "  ___) | |_| |___) |/ __/ \n"
 		<< " |____/ \\___/|____/|_____|\n"
 		<< '\n'
-		<< "SUS2-SH Release 3\n"
-		<< "Branch: release3\n"
-		<< "Release Date: 2026-07-23\n"
+		<< "SUS2.superlinear\n"
+		<< "Branch: main\n"
+		<< "Version: 2026-10-18\n"
 		<< "Author: Hu Yanxiao | SUSTech\n";
 
 	if (mpi_enabled)

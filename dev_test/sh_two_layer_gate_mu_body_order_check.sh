@@ -3,12 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_mu_body_order"
+tmp_dir=".local_tmp/sh_two_layer_gate_mu_body_order"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/mu_body_gate.mtp"
-old_opt_model="$tmp_dir/old_opt.mtp"
-low_body_model="$tmp_dir/low_body.mtp"
+model="$tmp_dir/mu_body_gate.sus2"
+old_opt_model="$tmp_dir/old_opt.sus2"
+low_body_model="$tmp_dir/low_body.sus2"
 train="$tmp_dir/one.cfg"
 rm -f "$model" "$old_opt_model" "$low_body_model" "$train"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"
@@ -57,7 +57,7 @@ if grep -q "two_layer_gate_bias" "$model"; then
   exit 1
 fi
 
-if ./bin/mlp-sus2 init-sh "$tmp_dir/bad_site_mode.mtp" \
+if ./bin/mlp-sus2 init-sh "$tmp_dir/bad_site_mode.sus2" \
   --species-count=2 \
   --l-max=2 \
   --k-max=2 \
@@ -71,7 +71,7 @@ if ./bin/mlp-sus2 init-sh "$tmp_dir/bad_site_mode.mtp" \
   exit 1
 fi
 
-if ./bin/mlp-sus2 init-sh "$tmp_dir/no_gate_site_mode.mtp" \
+if ./bin/mlp-sus2 init-sh "$tmp_dir/no_gate_site_mode.sus2" \
   --species-count=2 \
   --l-max=2 \
   --k-max=2 \

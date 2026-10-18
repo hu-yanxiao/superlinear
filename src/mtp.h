@@ -21,7 +21,7 @@
 class MTP : public AnyLocalMLIP
 {
 private:
-	const int default_radial_basis_size = 8;		// will be set if not specified in .mtp file
+	const int default_radial_basis_size = 8;		// will be set if not specified in .sus2 file
 
 	int alpha_moments_count = 0;					//	/=================================================================================================
 	int alpha_index_basic_count = 0;				//	|                                                                                                |

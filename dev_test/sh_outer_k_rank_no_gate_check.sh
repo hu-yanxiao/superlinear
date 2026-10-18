@@ -70,10 +70,10 @@ common=(
   --init-params=same
 )
 
-plain="$tmp_dir/plain.mtp"
-rank1="$tmp_dir/rank1.mtp"
-rank2="$tmp_dir/rank2.mtp"
-rank3="$tmp_dir/rank3.mtp"
+plain="$tmp_dir/plain.sus2"
+rank1="$tmp_dir/rank1.sus2"
+rank2="$tmp_dir/rank2.sus2"
+rank3="$tmp_dir/rank3.sus2"
 "$bin" init-sh "$plain" "${common[@]}" >/dev/null
 "$bin" init-sh "$rank1" "${common[@]}" --outer-k-rank=1 >/dev/null
 "$bin" init-sh "$rank2" "${common[@]}" --outer-k-rank=2 >/dev/null
@@ -119,9 +119,9 @@ print("gate_free_outer_rank_metadata_ok")
 PY
 
 for model in "$rank1" "$rank2" "$rank3"; do
-  stem=$(basename "$model" .mtp)
-  first="$tmp_dir/$stem-roundtrip1.mtp"
-  second="$tmp_dir/$stem-roundtrip2.mtp"
+  stem=$(basename "$model" .sus2)
+  first="$tmp_dir/$stem-roundtrip1.sus2"
+  second="$tmp_dir/$stem-roundtrip2.sus2"
   "$bin" roundtrip-model-dev "$model" "$first" >/dev/null
   "$bin" roundtrip-model-dev "$first" "$second" >/dev/null
   "$bin" calc-efs "$model" "$one_cfg" "$tmp_dir/$stem-base.cfg" >/dev/null
@@ -171,7 +171,7 @@ fi
   --coeff-start="$outer_begin" --coeff-end="$outer_end" \
   --displacement=1e-5 --abs-tolerance=2e-5 --rel-tolerance=3e-3
 
-trained="$tmp_dir/rank2-trained.mtp"
+trained="$tmp_dir/rank2-trained.sus2"
 "$bin" train "$rank2" "$linear_cfg" \
   --trained-pot-name="$trained" \
   --max-iter=1 --skip-preinit --do-lin --do-lin-steps=1 \
@@ -185,7 +185,7 @@ test -s "$trained"
 "$bin" calc-efs "$trained" "$one_cfg" "$tmp_dir/rank2-trained.cfg" >/dev/null
 
 if "$bin" train "$rank2" "$one_cfg" --two-layer-gate \
-     --max-iter=0 --skip-preinit --trained-pot-name="$tmp_dir/invalid.mtp" \
+     --max-iter=0 --skip-preinit --trained-pot-name="$tmp_dir/invalid.sus2" \
      >"$tmp_dir/upgrade.err" 2>&1; then
   echo "an existing gate-free ranked model was incorrectly upgraded to a gate model" >&2
   exit 1

@@ -1210,7 +1210,7 @@ TEST("MTPR CalcEFS (check forces correctness by using of central differences)") 
 
 	//ifstream ifs(PATH+"2comp.cfgs", ios::binary);
 
-	//MLMTPR pot("learned.mtp");
+	//MLMTPR pot("learned.sus2");
 
 	//for (int n = 0; cfg.load(ifs); n++) {
 	//pot.CalcEFS(cfg);
@@ -1248,7 +1248,7 @@ TEST("MTPR CalcEFS (check forces correctness by using of central differences)") 
 	ifstream ifs(PATH + "2comp.cfgs", ios::binary);
 	cfg.Load(ifs);
 
-	MLMTPR pot(PATH+"learned.mtp");
+	MLMTPR pot(PATH+"learned.sus2");
 
 	//cout << pot.CoeffCount() << " " << pot.alpha_count-1 << endl;
 
@@ -1265,7 +1265,7 @@ TEST("MTPR CalcEFS (check forces correctness by using of central differences)") 
 	ifstream ifs(PATH+"NaCl_small.cfgs", ios::binary);
 	cfg.Load(ifs);
 
-	MLMTPR2 pot(PATH+"unlearned.mtp");
+	MLMTPR2 pot(PATH+"unlearned.sus2");
 
 	//cout << pot.CoeffCount() << " " << (pot.alpha_count-1)*pot.species_count << endl;
 
@@ -1279,7 +1279,7 @@ TEST("MTPR CalcEFS (check forces correctness by using of central differences)") 
 
 TEST("MTPR2 loss gradient test") {
 
-	MLMTPR2 mtpr(PATH+"unlearned.mtp");
+	MLMTPR2 mtpr(PATH+"unlearned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++) {
 		mtpr.Coeff()[i] = 1e-1*rand() / RAND_MAX;
@@ -1328,7 +1328,7 @@ TEST("MTPR+CoulQEq CalcEFS (check forces correctness with cdiffs)") {
 
 	CoulQEq qeq(C, r_cut, n_at_types, &taper, &coeffs[0]);
 
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 1e-2*rand() / RAND_MAX;
@@ -1416,7 +1416,7 @@ TEST("MTPR+CoulQEq AddLossGrad test by finite difference") {
 
 	CoulQEq qeq(1.0, r_cut, n_at_types, &taper, &coeffs[0]);
 
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 1e-2*rand() / RAND_MAX;
@@ -1755,7 +1755,7 @@ TEST("Supercell rotation test") {
 	Matrix3 rot_mat(-0.686602, -0.340459, -0.642391, 
 					-0.126594, -0.814094, 0.566767,
 					-0.715927, 0.470466, 0.515858	);
-	MTP mtp(PATH+"MTP4relax.mtp");
+	MTP mtp(PATH+"MTP4relax.sus2");
 	cfg.Deform(rot_mat);
 	mtp.CalcEFS(cfg);
 	cfg.CorrectSupercell();
@@ -1778,7 +1778,7 @@ TEST("Relaxation driver test") {
 	ifstream ifs(PATH+"4relax.cfg", ios::binary);
 	Configuration cfg;
 	cfg.Load(ifs);
-	MTP mtp(PATH+"MTP4relax.mtp");
+	MTP mtp(PATH+"MTP4relax.sus2");
 	Relaxation rlx(&mtp, cfg);
 	rlx.tol_force = 0.0001;
 	rlx.tol_stress = 0.001;
@@ -1806,7 +1806,7 @@ TEST("Robustness of relaxation with changing potential") {
 	ifstream ifs(PATH+"4relax.cfg", ios::binary);
 	Configuration cfg;
 	cfg.Load(ifs);
-	MTP mtp(PATH+"MTP4relax.mtp");
+	MTP mtp(PATH+"MTP4relax.sus2");
 	
 	class CrazyPotential : public AnyPotential
 	{
@@ -1847,7 +1847,7 @@ TEST("Robustness of relaxation with changing potential") {
 } END_TEST;
 
 TEST("Another MTP learning + ErrorMonitor") {
-	MTP mtp(PATH+"MTP2_61.params.mtp");
+	MTP mtp(PATH+"MTP2_61.params.sus2");
 	LinearRegression regr(&mtp, 500, 1, 10);
 	std::ifstream ifs(PATH+"Si1.proc", ios::binary);
 	Configuration cfg;
@@ -1860,7 +1860,7 @@ TEST("Another MTP learning + ErrorMonitor") {
 	ifs.close();
 
 	// the MTP that is already trained
-	MTP mtp_ready(PATH+"MTP_testsuite_test.params.mtp");
+	MTP mtp_ready(PATH+"MTP_testsuite_test.params.sus2");
 	ifs.open(PATH+"Si2.proc", ios::binary);
 	for (int count = 0; cfg.Load(ifs); count++) {
 		Configuration cfg2(cfg);
@@ -1913,7 +1913,7 @@ TEST("Another MTP learning + ErrorMonitor") {
 } END_TEST;
 
 TEST("MTP fitting on insufficient data") {
-	MTP mtp(PATH+"MTP100_3.mtp");
+	MTP mtp(PATH+"MTP100_3.sus2");
 	auto cfgs = LoadCfgs("configurations/reading_test.cfg");
 	LinearRegression lr(&mtp);
 	ErrorMonitor errmon;
@@ -2004,7 +2004,7 @@ TEST("MaxVol initialization and selection") {
 } END_TEST;
 
 TEST("MaxVol evaluation") {
-	MTP mtp("mlips/unfitted.mtp");
+	MTP mtp("mlips/unfitted.sus2");
 	VoidPotential pot;
 	MaxvolSelection mlip(&mtp);
 	
@@ -2112,7 +2112,7 @@ TEST("Configurations motion while MaxVol selection") {
 	VoidPotential pot;
 	double MV_trshld = 1.1;
 
-	MTP mtp("mlips/unfitted.mtp");
+	MTP mtp("mlips/unfitted.sus2");
 	LinearRegression linreg(&mtp);
 	MaxvolSelection MLIP(&mtp, 1.0e-7, MV_trshld, 1+1.0e-7);
 
@@ -2161,7 +2161,7 @@ TEST("Configurations motion while MaxVol selection") {
 } END_TEST;
 
 TEST("Maxvol selection UniqueCfgCnt() and swap_limit tests") {
-	MTP mtp(PATH+"MTP61.mtp");
+	MTP mtp(PATH+"MTP61.sus2");
 	MaxvolSelection mv(&mtp, 0.00001, 1.00001, 1.00001, 1, 0, 0, 0);
 	if (mv.UniqueCfgCount() != 0)
 		FAIL();
@@ -2180,7 +2180,7 @@ TEST("Maxvol selection UniqueCfgCnt() and swap_limit tests") {
 } END_TEST;
 
 TEST("Multiple selection test#1") {
-	MTP mtp(PATH+"MTP9.mtp");
+	MTP mtp(PATH+"MTP9.sus2");
 
 	ifstream ifs(PATH + "B.cfgs", ios::binary);
 	vector<Configuration> cfgs;
@@ -2218,7 +2218,7 @@ TEST("Multiple selection test#1") {
 } END_TEST;
 
 TEST("Multiple selection test#2") {
-	MTP mtp(PATH+"MTP9.mtp");
+	MTP mtp(PATH+"MTP9.sus2");
 
 	ifstream ifs(PATH + "B.cfgs", ios::binary);
 	vector<Configuration> cfgs;
@@ -2275,7 +2275,7 @@ TEST("Multiple selection test#2") {
 } END_TEST;
 
 TEST("MaxVol Saving/Loading selection test#1") {
-	MTP mtp(PATH+"MTP61.mtp");
+	MTP mtp(PATH+"MTP61.sus2");
 
 	ifstream ifs(PATH + "B.cfgs", ios::binary);
 	vector<Configuration> cfgs;
@@ -2288,7 +2288,7 @@ TEST("MaxVol Saving/Loading selection test#1") {
 		mv.AddForSelection(cfg);
 	mv.Select();
 
-	MTP foo(PATH+"MTP9.mtp");
+	MTP foo(PATH+"MTP9.sus2");
 	MaxvolSelection mv_check(&foo, 0.0000001, 1.0000001, 1.0000001, 16, 45, 123, 543);
 	try
 	{
@@ -2328,7 +2328,7 @@ TEST("MaxVol Saving/Loading selection test#1") {
 } END_TEST;
 
 //TEST("MaxVol Saving/Loading selection test#2") {
-//	MLMTPR mtp(PATH+"PdAg_20g_str.mtp");
+//	MLMTPR mtp(PATH+"PdAg_20g_str.sus2");
 //
 //	ifstream ifs(PATH+"20g_Selected.cfgs", ios::binary);
 //	vector<Configuration> cfgs;
@@ -2341,7 +2341,7 @@ TEST("MaxVol Saving/Loading selection test#1") {
 //		mv.AddForSelection(cfg);
 //	mv.Select();
 //
-//	MLMTPR foo(PATH+"PdAg_20g_str.mtp");
+//	MLMTPR foo(PATH+"PdAg_20g_str.sus2");
 //	MaxvolSelection mv_check(&foo, 0.0000001, 0.0000001, 0.0000001, 16, 45, 123, 543);
 //	try
 //	{
@@ -2384,7 +2384,7 @@ TEST("MaxVol learning on the fly") {
 	VoidPotential pot;
 	double MV_trshld = 1+1.0e-7;
 
-	MTP mtp("mlips/unfitted.mtp");
+	MTP mtp("mlips/unfitted.sus2");
 	LinearRegression regr(&mtp, 500, 1, 10);
 	MaxvolSelection al(&mtp, 1.0e-7, MV_trshld, MV_trshld, 0, 1, 0, 0);
 	LOTF MLIP(&pot, &al, &regr, true);
@@ -2992,8 +2992,8 @@ TEST("selectable polynomial radial cutoff and legacy model compatibility") {
 	if (at_cutoff != 0.0 || at_cutoff_der != 0.0)
 		FAIL("polynomial radial cutoff is not exactly zero at r_max");
 
-	const std::string legacy_path = "/tmp/sus2sh_legacy_cutoff_self_test.mtp";
-	const std::string polynomial_path = "/tmp/sus2sh_polynomial_cutoff_self_test.mtp";
+	const std::string legacy_path = "/tmp/sus2sh_legacy_cutoff_self_test.sus2";
+	const std::string polynomial_path = "/tmp/sus2sh_polynomial_cutoff_self_test.sus2";
 	{
 		std::ofstream ofs(legacy_path.c_str());
 		legacy.WriteRadialBasis(ofs);
@@ -3053,7 +3053,7 @@ TEST("rescale bracket probes select the improving scaling direction") {
 } END_TEST;
 
 TEST("MTPR radial smoothness penalty gradient finite difference") {
-	const std::string model_path = "/tmp/sus2sh_radial_smooth_self_test.mtp";
+	const std::string model_path = "/tmp/sus2sh_radial_smooth_self_test.sus2";
 	std::map<std::string, std::string> sh_opts;
 	sh_opts["species-count"] = "1";
 	sh_opts["l-max"] = "1";
@@ -3122,8 +3122,8 @@ TEST("MTPR radial smoothness penalty gradient finite difference") {
 } END_TEST;
 
 TEST("MTPR scalar and gate weight L2 penalty gradient finite difference") {
-	const std::string combo_path = "/tmp/sus2sh_scalar_l2_combo_self_test.mtp";
-	const std::string full_path = "/tmp/sus2sh_scalar_l2_full_self_test.mtp";
+	const std::string combo_path = "/tmp/sus2sh_scalar_l2_combo_self_test.sus2";
+	const std::string full_path = "/tmp/sus2sh_scalar_l2_full_self_test.sus2";
 	std::map<std::string, std::string> sh_opts;
 	sh_opts["species-count"] = "1";
 	sh_opts["l-max"] = "1";
@@ -3235,7 +3235,7 @@ TEST("MTPR scalar and gate weight L2 penalty gradient finite difference") {
 } END_TEST;
 
 TEST("MTPR fixed atomic energy penalty gradient finite difference") {
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 	mtpr.LinCoeff();
 
 	std::vector<double> targets(mtpr.species_count, 0.0);
@@ -3285,7 +3285,7 @@ TEST("MTPR fixed atomic energy penalty gradient finite difference") {
 } END_TEST;
 
 TEST("MTPR TrainLinear keeps fixed atomic energies") {
-	MLMTPR mtpr(PATH+"unlearned.mtp");
+	MLMTPR mtpr(PATH+"unlearned.sus2");
 	MTPR_trainer trainer(&mtpr, 1.0, 0.01, 0.0, 0.0, 0.0);
 	trainer.fixed_atomic_energies.resize(mtpr.species_count);
 	for (int type = 0; type < mtpr.species_count; ++type)
@@ -3320,14 +3320,14 @@ TEST("MTPR full TrainLinear applies scalar-head L2 in normal equations") {
 	if (train_set.empty())
 		FAIL("empty linear-regression self-test set")
 
-	MLMTPR unregularized(PATH+"unlearned.mtp");
+	MLMTPR unregularized(PATH+"unlearned.sus2");
 	MTPR_trainer unregularized_trainer(
 		&unregularized, 1.0, 0.01, 0.0, 0.0, 0.0);
 	unregularized_trainer.scalar_head_l2_regularization = 0.0;
 	unregularized_trainer.TrainLinear(
 		0, train_set, nullptr, "unregularized scalar-head self-test");
 
-	MLMTPR regularized(PATH+"unlearned.mtp");
+	MLMTPR regularized(PATH+"unlearned.sus2");
 	MTPR_trainer regularized_trainer(
 		&regularized, 1.0, 0.01, 0.0, 0.0, 0.0);
 	regularized_trainer.scalar_head_l2_regularization = 10.0;
@@ -3552,7 +3552,7 @@ TEST("QEq OptimizeChargesGrad check with finite differences") {
 	Configuration cfg;
 	double absErrMax = 0.0;
 
-	MLMTPR mtpr(PATH+"unlearned3.mtp");
+	MLMTPR mtpr(PATH+"unlearned3.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 0;
@@ -3672,7 +3672,7 @@ TEST("QEq CalcEGrad check with finite differences") {
 	double relErrMax = 0.0, absErrMax = 0.0;
 	double relErrForceMax = 0.0, absErrForceMax = 0;
 
-	MLMTPR mtpr(PATH+"unlearned3.mtp");
+	MLMTPR mtpr(PATH+"unlearned3.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 0;
@@ -3766,7 +3766,7 @@ TEST("QEq CalcEGrad check with finite differences") {
 TEST("QEq CalcEFSGrad check with finite differences") {
 	Configuration cfg;
 
-	MLMTPR mtpr(PATH+"unlearned3.mtp");
+	MLMTPR mtpr(PATH+"unlearned3.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 0 * rand() / RAND_MAX;;
@@ -4006,7 +4006,7 @@ TEST("MTPR+QEq GenerateQEqHess check with finite differences") {
 	for (int i = 0; i < se.CoeffCount(); i++)
 		se.Coeff()[i] = 4.5*(i+1);
 
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 1e-2*rand() / RAND_MAX;
@@ -4145,7 +4145,7 @@ TEST("MTPR+QEq CalcEFS (check forces correctness with cdiffs)") {
 		} 
 	}
 
-	MLMTPR mtpr(PATH+"unlearned.mtp");
+	MLMTPR mtpr(PATH+"unlearned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 1.0 * rand() / RAND_MAX;
@@ -4306,7 +4306,7 @@ TEST("MTPR+QEq AddLossGrad test by finite difference") {
 	for (int i = 0; i < se.CoeffCount(); i++)
 		se.Coeff()[i] = 2.5*(i+1);
 
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 
 	for (int i = 0; i < mtpr.CoeffCount(); i++)
 		mtpr.Coeff()[i] = 1e-2*rand() / RAND_MAX;
@@ -4933,12 +4933,12 @@ PAR_TEST("MTPR fitting test") {
 	MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
-	MLMTPR mtpr_trained(PATH+"learned.mtp");
+	MLMTPR mtpr_trained(PATH+"learned.sus2");
 
 	for (int i = 0; i < mtpr_trained.CoeffCount(); i++)
 		mtpr_trained.Coeff()[i] = 1e-2*rand() / RAND_MAX;
 
-	MLMTPR mtpr_fit(PATH+"unlearned.mtp");
+	MLMTPR mtpr_fit(PATH+"unlearned.sus2");
 	//std::cout << mtpr_fit.CoeffCount() << std::endl;
 	MTPR_trainer nlr(&mtpr_fit, 1, 0.1, 1e-3, 0, 1e-8);
 
@@ -4979,12 +4979,12 @@ PAR_TEST("MTPR fitting test") {
 	MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
-	MLMTPR2 mtpr_trained(PATH+"unlearned.mtp");
+	MLMTPR2 mtpr_trained(PATH+"unlearned.sus2");
 
 	for (int i = 0; i < mtpr_trained.CoeffCount(); i++)
 		mtpr_trained.Coeff()[i] = 4e-2*rand() / RAND_MAX;
 
-	MLMTPR2 mtpr_fit(PATH+"unlearned.mtp");
+	MLMTPR2 mtpr_fit(PATH+"unlearned.sus2");
 
 	for (int i = 0; i < mtpr_fit.CoeffCount(); i++)
 		mtpr_fit.Coeff()[i] = sin(i);
@@ -5029,7 +5029,7 @@ PAR_TEST("MTPR loss gradient test") {
 	MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
 
-	MLMTPR mtpr(PATH+"learned.mtp");
+	MLMTPR mtpr(PATH+"learned.sus2");
 	MTPR_trainer nlr(&mtpr, 1, 1, 0);
 	ifstream ifs(PATH+"2comp.cfgs", ios::binary);
 	Configuration cfg;

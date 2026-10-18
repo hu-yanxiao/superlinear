@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_gate_linear_mu_components"
+tmp_dir=".local_tmp/sh_gate_linear_mu_components"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/mu_full.mtp"
-probe="$tmp_dir/mu_full_probe.mtp"
+model="$tmp_dir/mu_full.sus2"
+probe="$tmp_dir/mu_full_probe.sus2"
 train="$tmp_dir/one.cfg"
 log="$tmp_dir/components_fd.log"
 rm -f "$model" "$probe" "$train" "$log"

@@ -11,13 +11,13 @@ else
   trap 'rm -rf "$tmp_dir"' EXIT
 fi
 
-init_model="$tmp_dir/rank1-init.mtp"
-bootstrap_model="$tmp_dir/rank1-bootstrap.mtp"
-probe_model="$tmp_dir/rank1-probe.mtp"
-base_radial_model="$tmp_dir/rank1-base-radial-unsupported.mtp"
-roundtrip_model="$tmp_dir/rank1-roundtrip.mtp"
-roundtrip_model2="$tmp_dir/rank1-roundtrip-2.mtp"
-active_model="$tmp_dir/rank1-active.mtp"
+init_model="$tmp_dir/rank1-init.sus2"
+bootstrap_model="$tmp_dir/rank1-bootstrap.sus2"
+probe_model="$tmp_dir/rank1-probe.sus2"
+base_radial_model="$tmp_dir/rank1-base-radial-unsupported.sus2"
+roundtrip_model="$tmp_dir/rank1-roundtrip.sus2"
+roundtrip_model2="$tmp_dir/rank1-roundtrip-2.sus2"
+active_model="$tmp_dir/rank1-active.sus2"
 one_cfg="$tmp_dir/one.cfg"
 fd_cfg="$tmp_dir/fd-target.cfg"
 efs_probe="$tmp_dir/probe-efs.cfg"
@@ -310,7 +310,7 @@ text = text[:match.start()] + replacement + text[match.end():]
 open(target, "w", encoding="utf-8").write(text)
 PY
 
-legacy_active="$tmp_dir/rank1-legacy-active.mtp"
+legacy_active="$tmp_dir/rank1-legacy-active.sus2"
 python3 - "$probe_model" "$active_model" "$legacy_active" <<'PY'
 import re
 import sys
@@ -543,7 +543,7 @@ weight_norm_log="$tmp_dir/direct-weight-norm.log"
   --radial-parameterization=physical \
   --bfgs-coordinate-normalization=none \
   --optimizer-trace-file="$physical_trace" \
-  --trained-pot-name="$tmp_dir/direct-physical-trained.mtp" \
+  --trained-pot-name="$tmp_dir/direct-physical-trained.sus2" \
   --max-iter=1 --skip-preinit \
   --energy-weight=1 --force-weight=0.1 --stress-weight=0 \
   --radial-smooth=0 >"$physical_log" 2>&1
@@ -551,7 +551,7 @@ weight_norm_log="$tmp_dir/direct-weight-norm.log"
   --radial-parameterization=weight-norm \
   --bfgs-coordinate-normalization=none \
   --optimizer-trace-file="$weight_norm_trace" \
-  --trained-pot-name="$tmp_dir/direct-weight-norm-trained.mtp" \
+  --trained-pot-name="$tmp_dir/direct-weight-norm-trained.sus2" \
   --max-iter=1 --skip-preinit \
   --energy-weight=1 --force-weight=0.1 --stress-weight=0 \
   --radial-smooth=0 >"$weight_norm_log" 2>&1

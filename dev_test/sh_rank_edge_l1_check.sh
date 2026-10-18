@@ -103,12 +103,12 @@ common=(
   --init-params=same
 )
 
-outer_only="$tmp_dir/outer2-edge.mtp"
-gate_ranked="$tmp_dir/outer2-gate1-edge.mtp"
-plain_identity="$tmp_dir/plain-edge.mtp"
-rank_identity="$tmp_dir/outer3-gate3-edge.mtp"
-outer_no_edge="$tmp_dir/outer2-no-edge.mtp"
-gate_ranked_no_edge="$tmp_dir/outer2-gate1-no-edge.mtp"
+outer_only="$tmp_dir/outer2-edge.sus2"
+gate_ranked="$tmp_dir/outer2-gate1-edge.sus2"
+plain_identity="$tmp_dir/plain-edge.sus2"
+rank_identity="$tmp_dir/outer3-gate3-edge.sus2"
+outer_no_edge="$tmp_dir/outer2-no-edge.sus2"
+gate_ranked_no_edge="$tmp_dir/outer2-gate1-no-edge.sus2"
 "$bin" init-sh "$outer_only" "${common[@]}" --outer-k-rank=2 >/dev/null
 "$bin" init-sh "$gate_ranked" "${common[@]}" \
   --outer-k-rank=2 --two-layer-gate-k-rank=1 >/dev/null
@@ -244,8 +244,8 @@ PY
 compare_numeric_files "$tmp_dir/plain-identity.cfg" "$tmp_dir/rank-identity.cfg" 3e-10
 
 for model in "$outer_only" "$gate_ranked"; do
-  stem=$(basename "$model" .mtp)
-  roundtrip="$tmp_dir/$stem-roundtrip.mtp"
+  stem=$(basename "$model" .sus2)
+  roundtrip="$tmp_dir/$stem-roundtrip.sus2"
   "$bin" roundtrip-model-dev "$model" "$roundtrip" >/dev/null
   "$bin" calc-efs "$model" "$cfg" "$tmp_dir/$stem.cfg" >/dev/null
   "$bin" calc-efs "$roundtrip" "$cfg" "$tmp_dir/$stem-roundtrip.cfg" >/dev/null
@@ -341,7 +341,7 @@ run_gradient_block "$outer_only" outer_only_gate_radial "$gate_radial_begin" "$g
 run_gradient_block "$outer_only" outer_only_gate_type "$gate_type_begin" "$gate_type_end" 1 0.1 0.01
 
 for model in "$outer_only" "$gate_ranked"; do
-  stem=$(basename "$model" .mtp)
+  stem=$(basename "$model" .sus2)
   "$bin" calc-efs "$model" "$cfg" "$tmp_dir/$stem-rotation-original.cfg" >/dev/null
   "$bin" calc-efs "$model" "$rot_cfg" "$tmp_dir/$stem-rotation-rotated.cfg" >/dev/null
   python3 - "$tmp_dir/$stem-rotation-original.cfg" \
@@ -405,7 +405,7 @@ done
   --max-configs=1 --max-atoms=2 \
   --displacement=1e-5 --abs-tolerance=5e-5 --rel-tolerance=5e-3
 
-trained="$tmp_dir/gate-ranked-trained.mtp"
+trained="$tmp_dir/gate-ranked-trained.sus2"
 "$bin" train "$gate_ranked" "$linear_cfg" \
   --trained-pot-name="$trained" \
   --max-iter=1 --skip-preinit --do-lin --do-lin-steps=1 \
@@ -428,10 +428,10 @@ if "$bin" help train 2>&1 | grep -q "Mode: MPI" \
     echo "failed to prepare ranked edge-L1 MPI training set" >&2
     exit 1
   fi
-  mpi_materialized="$tmp_dir/gate-ranked-mpi-materialized.mtp"
+  mpi_materialized="$tmp_dir/gate-ranked-mpi-materialized.sus2"
   "$bin" roundtrip-model-dev "$gate_ranked" "$mpi_materialized" >/dev/null
-  mpi_serial_model="$tmp_dir/gate-ranked-serial-trained.mtp"
-  mpi_two_model="$tmp_dir/gate-ranked-mpi2-trained.mtp"
+  mpi_serial_model="$tmp_dir/gate-ranked-serial-trained.sus2"
+  mpi_two_model="$tmp_dir/gate-ranked-mpi2-trained.sus2"
   mpi_train_common=(
     --max-iter=1
     --skip-preinit
@@ -464,10 +464,10 @@ if "$bin" help train 2>&1 | grep -q "Mode: MPI" \
 fi
 
 for model in "$outer_no_edge" "$gate_ranked_no_edge"; do
-  stem=$(basename "$model" .mtp)
+  stem=$(basename "$model" .sus2)
   if "$bin" train "$model" "$cfg" --two-layer-gate-edge-l1 \
        --max-iter=0 --skip-preinit \
-       --trained-pot-name="$tmp_dir/$stem-invalid-upgrade.mtp" \
+       --trained-pot-name="$tmp_dir/$stem-invalid-upgrade.sus2" \
        >"$tmp_dir/$stem-upgrade.err" 2>&1; then
     echo "an existing ranked model was incorrectly upgraded to edge-L1" >&2
     exit 1
@@ -498,27 +498,27 @@ def corrupt(source, target, replacement):
 
 outer = open(outer_path, encoding="utf-8").read()
 gate = open(gate_path, encoding="utf-8").read()
-corrupt(outer_path, target_dir + "/invalid-outer-source.mtp",
+corrupt(outer_path, target_dir + "/invalid-outer-source.sus2",
         integer(outer, "outer_k_rank1_basic_begin"))
-corrupt(gate_path, target_dir + "/invalid-gate-source.mtp",
+corrupt(gate_path, target_dir + "/invalid-gate-source.sus2",
         integer(gate, "two_layer_gate_k_rank_basic_begin") - 1)
 PY
 
-if "$bin" calc-efs "$tmp_dir/invalid-outer-source.mtp" "$cfg" \
+if "$bin" calc-efs "$tmp_dir/invalid-outer-source.sus2" "$cfg" \
      "$tmp_dir/invalid-outer-source.cfg" >"$tmp_dir/invalid-outer-source.err" 2>&1; then
   echo "outer-ranked edge-L1 accepted a source outside the raw gate graph" >&2
   exit 1
 fi
 grep -q 'preserved raw gate graph' "$tmp_dir/invalid-outer-source.err"
 
-if "$bin" calc-efs "$tmp_dir/invalid-gate-source.mtp" "$cfg" \
+if "$bin" calc-efs "$tmp_dir/invalid-gate-source.sus2" "$cfg" \
      "$tmp_dir/invalid-gate-source.cfg" >"$tmp_dir/invalid-gate-source.err" 2>&1; then
   echo "gate-ranked edge-L1 accepted a source outside the contracted gate graph" >&2
   exit 1
 fi
 grep -q 'must belong to the gate K-rank graph' "$tmp_dir/invalid-gate-source.err"
 
-legacy="$tmp_dir/invalid-legacy-gate-rank-edge.mtp"
+legacy="$tmp_dir/invalid-legacy-gate-rank-edge.sus2"
 python3 - "$gate_ranked" "$legacy" <<'PY'
 import sys
 source, target = sys.argv[1:]

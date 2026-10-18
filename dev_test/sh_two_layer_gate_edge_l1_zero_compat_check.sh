@@ -2,11 +2,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_edge_l1_zero"
+tmp_dir=".local_tmp/sh_two_layer_gate_edge_l1_zero"
 mkdir -p "$tmp_dir"
 
-base="$tmp_dir/base_gate.mtp"
-edge="$tmp_dir/edge_gate_zero.mtp"
+base="$tmp_dir/base_gate.sus2"
+edge="$tmp_dir/edge_gate_zero.sus2"
 base_pred="$tmp_dir/base_pred.cfg"
 edge_pred="$tmp_dir/edge_pred.cfg"
 

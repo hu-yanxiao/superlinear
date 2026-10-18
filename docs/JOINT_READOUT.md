@@ -43,7 +43,7 @@ Generate the topology independently, then perform data-dependent
 initialization without any optimizer updates:
 
 ```bash
-mlp-sus2 init-sh joint.topology.mtp \
+mlp-sus2 init-sh joint.topology.sus2 \
   --superlinear-mode=radial-coefficient-gate --joint-readout \
   --species-count=2 --l-max=3 --k-max=8 \
   --body-order=6 --body-l-max=3,3,3,2,1 \
@@ -53,17 +53,17 @@ mlp-sus2 init-sh joint.topology.mtp \
   --cutoff=6.5 --radial-basis-size=10 \
   --adaptive-radial-projection=shared-n \
   --adaptive-radial-amplitude-mode=species --readout-mode=shared
-mlp-sus2 train joint.topology.mtp train.cfg \
+mlp-sus2 train joint.topology.sus2 train.cfg \
   --init-params=same --init-random-seed=20260912 \
   --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 \
-  --max-iter=0 --trained-pot-name=joint.initialized.mtp
+  --max-iter=0 --trained-pot-name=joint.initialized.sus2
 ```
 
 The equivalent inline topology creation and initialization is:
 
 ```bash
 mlp-sus2 train train.cfg --init-sh \
-  --inline-sh-model=joint-inline.topology.mtp \
+  --inline-sh-model=joint-inline.topology.sus2 \
   --superlinear-mode=radial-coefficient-gate --joint-readout \
   --species-count=2 --l-max=3 --k-max=8 \
   --body-order=6 --body-l-max=3,3,3,2,1 \
@@ -75,7 +75,7 @@ mlp-sus2 train train.cfg --init-sh \
   --adaptive-radial-amplitude-mode=species --readout-mode=shared \
   --init-params=same --init-random-seed=20260912 \
   --energy-weight=1 --force-weight=0.1 --stress-weight=0.01 \
-  --max-iter=0 --trained-pot-name=joint-inline.initialized.mtp
+  --max-iter=0 --trained-pot-name=joint-inline.initialized.sus2
 ```
 
 Inline mode accepts exactly one positional argument, `train.cfg`; do not add
@@ -90,8 +90,8 @@ without consuming additional random draws.
 For an existing adaptive model:
 
 ```
-mlp-sus2 enable-joint-readout-dev old.mtp enabled.mtp
-mlp-sus2 train old.mtp train.cfg --joint-readout=true [training options]
+mlp-sus2 enable-joint-readout-dev old.sus2 enabled.sus2
+mlp-sus2 train old.sus2 train.cfg --joint-readout=true [training options]
 ```
 
 Enabling preserves every original physical coefficient and initializes only
@@ -117,7 +117,7 @@ Hessian terms use the same `1/S^2` factors.
 
 S is fixed during training and saved in `joint_readout_optimizer_scales`.
 Fresh initialization, or enabling joint readout directly within the current
-`train old.mtp ... --joint-readout` invocation, calibrates it from the data.
+`train old.sus2 ... --joint-readout` invocation, calibrates it from the data.
 Loading a joint-enabled checkpoint preserves its saved S rather than silently
 recalibrating it from the new dataset or current features. Changing S while
 keeping physical C fixed preserves energy, forces and virial but generally
@@ -128,7 +128,7 @@ The standalone `enable-joint-readout-dev` command has no dataset and writes an
 uncalibrated unit chart, S=1, with C=0. Loading that output retains its explicit
 unit chart; the loader does not guess calibration state from whether all
 scales equal 1. For data-calibrated initialization, prefer direct
-`train old.mtp train.cfg --joint-readout` (optionally with `--max-iter=0`) or
+`train old.sus2 train.cfg --joint-readout` (optionally with `--max-iter=0`) or
 the fresh topology/initialization examples above.
 
 ## File and execution contract

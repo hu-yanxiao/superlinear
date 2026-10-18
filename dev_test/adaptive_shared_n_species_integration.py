@@ -54,8 +54,8 @@ def main():
         return parse_prediction(target)
     def make_case(label, projection, amplitude_mode, gate='q-total', outer='same-k',
                   readout='shared', message=0, scaling='K', deep_checks=False):
-        top = native.out/(label+'.topology.mtp')
-        full = native.out/(label+'.materialized.mtp')
+        top = native.out/(label+'.topology.sus2')
+        full = native.out/(label+'.materialized.sus2')
         native.run(label+'-init', 'init-sh', top,
             *topology_args(gate=gate, outer=outer, readout=readout, message=message, scaling=scaling),
             '--adaptive-radial-projection='+projection,
@@ -76,8 +76,8 @@ def main():
             assert assignment(text,'version') == '1.5.0'
             assert assignment(text,'adaptive_radial_projection') == projection
             assert assignment(text,'adaptive_radial_amplitude_mode') == amplitude_mode
-        model = native.out/(label+'.mtp'); model.write_text(text)
-        roundtrip = native.out/(label+'.roundtrip.mtp')
+        model = native.out/(label+'.sus2'); model.write_text(text)
+        roundtrip = native.out/(label+'.roundtrip.sus2')
         native.run(label+'-roundtrip', 'roundtrip-model-dev', model, roundtrip)
         value = cfg_prediction(label+'-fast', model)
         close(label+'-native-roundtrip', value, cfg_prediction(label+'-roundtrip-efs',roundtrip), 2e-10,2e-10)
@@ -86,7 +86,7 @@ def main():
             close(label+'-old-binary',value,cfg_prediction(label+'-old',model,binary=args.old_cpp),2e-10,2e-10)
         else:
             native.run(label+'-old-reject', 'roundtrip-model-dev', model,
-                native.out/(label+'.old-should-not-exist.mtp'), binary=args.old_cpp, fail=True)
+                native.out/(label+'.old-should-not-exist.sus2'), binary=args.old_cpp, fail=True)
         layout = native.layout(label+'-layout',model)
         ranges = {key:(int(layout[key+'_begin']),int(layout[key+'_end']))
                   for key in ('adaptive_radial_amplitude','adaptive_radial_weight','gate_k_rank',
@@ -169,7 +169,7 @@ def main():
 
     import torch
     from sus2shpt.io.cfg import load_cfg
-    from sus2shpt.io.mtp import load_mtp_model,save_mtp_model
+    from sus2shpt.io.sus2 import load_mtp_model,save_mtp_model
     from sus2shpt.model.sus2_sh import SUS2SHPyTorch,_apply_product_levels
     from sus2shpt.model.neighbor import build_pair_list
     from sus2shpt.training import (TrainingOptions,rescale_initial_parameters,
@@ -207,11 +207,11 @@ def main():
         S=gate.index_select(1,obj.gate_scalar_moment_indices)*obj.gate_scalar_scale
         radial=obj._raw_radial_values(geo.pair_r,geo.center_types,geo.neighbor_types)
         G,O=obj.gate_k_rank,obj.outer_k_rank
-        gb=int(obj.mtp.spec.two_layer_gate_k_rank_basic_begin)
-        ob=int(obj.mtp.spec.outer_k_rank1_basic_begin)
+        gb=int(obj.sus2.spec.two_layer_gate_k_rank_basic_begin)
+        ob=int(obj.sus2.spec.outer_k_rank1_basic_begin)
         values=[];targets=[]
-        compact=getattr(obj.mtp.spec,'adaptive_radial_projection','full')=='shared-n'
-        species=getattr(obj.mtp.spec,'adaptive_radial_amplitude_mode','shared')=='species'
+        compact=getattr(obj.sus2.spec,'adaptive_radial_projection','full')=='shared-n'
+        species=getattr(obj.sus2.spec,'adaptive_radial_amplitude_mode','shared')=='species'
         for l in range(obj.lmax+1):
             for o in range(O):
                 mu=o*(obj.lmax+1)+l
@@ -326,7 +326,7 @@ def main():
             parametrize_adaptive_amplitudes(obj)
             _maybe_parametrize_radial_weight_norm(obj,TrainingOptions(radial_weight_norm=True))
             close('target-normalization-weightnorm-preserve',efs(obj),before)
-            exported=out/'target-normalized.mtp';save_mtp_model(obj.to_mtp_model(),exported)
+            exported=out/'target-normalized.sus2';save_mtp_model(obj.to_mtp_model(),exported)
             close('target-normalized-export-PT',efs(create(exported)),before)
             close('target-normalized-export-native',native_efs9('target-normalized-native',exported),before,8e-6,5e-7)
     report['status']='PASS';record('complete',{'cases':len(report['cases'])})

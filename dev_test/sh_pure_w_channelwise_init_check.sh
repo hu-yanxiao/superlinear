@@ -19,31 +19,31 @@ common=(--species-count=2 --l-max=2 --k-max=2 --body-order=4
 for scaling_map in K L LK; do
   for width in 1 4; do
     label="${scaling_map}-o${width}"
-    "$bin" init-sh "$task_tmp/$label.mtp" "${common[@]}" \
+    "$bin" init-sh "$task_tmp/$label.sus2" "${common[@]}" \
       --scaling-map="$scaling_map" --outer-k-rank="$width" > "$task_tmp/$label.init.log"
-    "$bin" roundtrip-model-dev "$task_tmp/$label.mtp" "$task_tmp/$label.roundtrip.mtp" \
+    "$bin" roundtrip-model-dev "$task_tmp/$label.sus2" "$task_tmp/$label.roundtrip.sus2" \
       > "$task_tmp/$label.roundtrip.log"
-    "$bin" calc-efs "$task_tmp/$label.roundtrip.mtp" "$task_tmp/one.cfg" \
+    "$bin" calc-efs "$task_tmp/$label.roundtrip.sus2" "$task_tmp/one.cfg" \
       "$task_tmp/$label.pred.cfg" > "$task_tmp/$label.predict.log"
   done
 done
-"$bin" init-sh "$task_tmp/duplicate.mtp" "${common[@]}" --scaling-map=LK \
+"$bin" init-sh "$task_tmp/duplicate.sus2" "${common[@]}" --scaling-map=LK \
   --outer-k-rank=4 > "$task_tmp/duplicate.log"
-cmp "$task_tmp/duplicate.mtp" "$task_tmp/LK-o4.mtp"
-"$bin" init-sh "$task_tmp/angular.mtp" --species-count=2 --l-max=2 --k-max=1 \
+cmp "$task_tmp/duplicate.sus2" "$task_tmp/LK-o4.sus2"
+"$bin" init-sh "$task_tmp/angular.sus2" --species-count=2 --l-max=2 --k-max=1 \
   --body-order=4 --body-l-max=2,2,2,2 --radial-basis-size=3 --cutoff=5 \
   --sh-factor-pruning=same-k --write-sh-scalar-info > "$task_tmp/angular.log"
 
 for invalid in --two-layer-gate-radial-mixing=none --two-layer-gate-k-rank=0 \
                --sh-factor-pruning=q-total --superlinear-mode=unknown \
                --outer-k-rank=2147483647; do
-  if "$bin" init-sh "$task_tmp/invalid.mtp" "${common[@]}" --outer-k-rank=4 \
+  if "$bin" init-sh "$task_tmp/invalid.sus2" "${common[@]}" --outer-k-rank=4 \
        "$invalid" > "$task_tmp/invalid.log" 2>&1; then
     echo "invalid pure-W option accepted: $invalid" >&2
     exit 1
   fi
 done
-if "$bin" init-sh "$task_tmp/invalid-legacy.mtp" --k-max=2 --outer-k-rank=4 \
+if "$bin" init-sh "$task_tmp/invalid-legacy.sus2" --k-max=2 --outer-k-rank=4 \
      > "$task_tmp/invalid-legacy.log" 2>&1; then
   echo "legacy outer rank > K was unexpectedly accepted" >&2
   exit 1
@@ -66,7 +66,7 @@ def tuples(text, name, size):
     assert len(values) % size == 0
     return [values[i:i+size] for i in range(0, len(values), size)]
 
-angular_text = (root / "angular.mtp").read_text()
+angular_text = (root / "angular.sus2").read_text()
 angular_count = scalar(angular_text, "alpha_scalar_moments")
 def primitive(channel, l, m):
     return math.sin(0.37 * (1 + channel * 7 + l * 3 + m))
@@ -81,7 +81,7 @@ for channel in range(4):
 for mapping in ("K", "L", "LK"):
     for width in (1, 4):
         label = f"{mapping}-o{width}"
-        text = (root / f"{label}.roundtrip.mtp").read_text()
+        text = (root / f"{label}.roundtrip.sus2").read_text()
         assert "outer_channel_mode = same-channel" in text
         assert "outer_radial_mode = pure-matrix" in text
         assert scalar(text, "outer_k_rank1_weight_count") == 0
@@ -130,14 +130,14 @@ for mapping in ("K", "L", "LK"):
             assert abs(values[int(moment)] - angular_values[channel][index // width]) < 1e-12
         zero = re.sub(r"(?m)^(\s*two_layer_gate_radial_mixing_coeffs\s*=\s*)\{.*\}$",
                       lambda m: m[1] + "{" + ", ".join("0" for _ in coeff) + "}", text)
-        (root / f"{label}.zero.mtp").write_text(zero)
+        (root / f"{label}.zero.sus2").write_text(zero)
 print(f"pure_w_topology_ok angular_scalars={angular_count}; O=1,4; K/L/LK; gate_body>outer_body")
 PY
 
 for width in 1 4; do
-  "$bin" roundtrip-model-dev "$task_tmp/LK-o${width}.zero.mtp" \
-    "$task_tmp/zero-o${width}.roundtrip.mtp" > "$task_tmp/zero-o${width}.log"
-  "$bin" calc-efs "$task_tmp/zero-o${width}.roundtrip.mtp" "$task_tmp/one.cfg" \
+  "$bin" roundtrip-model-dev "$task_tmp/LK-o${width}.zero.sus2" \
+    "$task_tmp/zero-o${width}.roundtrip.sus2" > "$task_tmp/zero-o${width}.log"
+  "$bin" calc-efs "$task_tmp/zero-o${width}.roundtrip.sus2" "$task_tmp/one.cfg" \
     "$task_tmp/zero-o${width}.cfg" > "$task_tmp/zero-o${width}.predict.log"
 done
 # With zero W, both widths have the same independent species constant; no
@@ -157,12 +157,12 @@ PY
 for initialization in default same; do
   args=(--superlinear-mode=pure-w-channelwise)
   if [[ $initialization == same ]]; then args+=(--init-params=same); fi
-  "$bin" train "$task_tmp/LK-o4.mtp" "$task_tmp/one.cfg" \
+  "$bin" train "$task_tmp/LK-o4.sus2" "$task_tmp/one.cfg" \
     --max-iter=0 --skip-preinit --radial-smooth=0 --shift \
     "${args[@]}" \
-    --curr-pot-name="$task_tmp/$initialization.current.mtp" \
-    --best-pot-name="$task_tmp/$initialization.best.mtp" \
-    --trained-pot-name="$task_tmp/$initialization.trained.mtp" \
+    --curr-pot-name="$task_tmp/$initialization.current.sus2" \
+    --best-pot-name="$task_tmp/$initialization.best.sus2" \
+    --trained-pot-name="$task_tmp/$initialization.trained.sus2" \
     > "$task_tmp/$initialization.train.log" 2>&1
   if grep -q 'Random initialization of nonlinear coefficients' "$task_tmp/$initialization.train.log"; then
     echo "same/default unexpectedly randomized parameters" >&2
@@ -170,16 +170,16 @@ for initialization in default same; do
   fi
 done
 "$bin" train "$task_tmp/one.cfg" "${common[@]}" --scaling-map=LK --outer-k-rank=4 \
-  --inline-sh-model="$task_tmp/inline.mtp" --max-iter=0 --skip-preinit --radial-smooth=0 \
-  --trained-pot-name="$task_tmp/inline.trained.mtp" > "$task_tmp/inline.train.log" 2>&1
+  --inline-sh-model="$task_tmp/inline.sus2" --max-iter=0 --skip-preinit --radial-smooth=0 \
+  --trained-pot-name="$task_tmp/inline.trained.sus2" > "$task_tmp/inline.train.log" 2>&1
 for label in random-a random-b random-other random-zero; do
   seed=2026090401
   args=(--init-params=random)
   if [[ $label == random-other ]]; then seed=2026090402; fi
   if [[ $label == random-zero ]]; then args+=(--two-layer-gate-radial-mixing-init-scale=0); fi
-  "$bin" train "$task_tmp/LK-o4.mtp" "$task_tmp/one.cfg" "${args[@]}" \
+  "$bin" train "$task_tmp/LK-o4.sus2" "$task_tmp/one.cfg" "${args[@]}" \
     --init-random-seed="$seed" --max-iter=0 --skip-preinit --radial-smooth=0 \
-    --trained-pot-name="$task_tmp/$label.trained.mtp" > "$task_tmp/$label.train.log" 2>&1
+    --trained-pot-name="$task_tmp/$label.trained.sus2" > "$task_tmp/$label.train.log" 2>&1
 done
 python3 - "$task_tmp" <<'PY'
 import re
@@ -193,11 +193,11 @@ def parameters(path):
              "two_layer_gate_radial_mixing_coeffs", "species_coeffs", "moment_coeffs")
     return {name: tuple(float(x) for x in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?",
                 re.search(rf"(?m)^\s*{name}\s*=\s*\{{(.*)\}}\s*$", text)[1])) for name in names}
-expected = parameters(root / "LK-o4.roundtrip.mtp")
+expected = parameters(root / "LK-o4.roundtrip.sus2")
 for name in ("default", "same", "inline"):
-    assert parameters(root / f"{name}.trained.mtp") == expected
+    assert parameters(root / f"{name}.trained.sus2") == expected
 print("pure_w_same_default_retains_all_physical_parameters_ok")
-random = {name: parameters(root / f"{name}.trained.mtp")
+random = {name: parameters(root / f"{name}.trained.sus2")
           for name in ("random-a", "random-b", "random-other", "random-zero")}
 assert random["random-a"] == random["random-b"], "same random seed must reproduce all physical parameters"
 w = "two_layer_gate_radial_mixing_coeffs"
@@ -215,14 +215,14 @@ def legacy_radial(path):
     block = re.search(r"(?ms)^\s*radial_coeffs\s*$\s*(.*?)^\s*alpha_moments_count\s*=", text)[1]
     return tuple(float(x) for row in re.findall(r"\{([^}]*)\}", block)
                  for x in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?", row))
-legacy = legacy_radial(root / "LK-o4.roundtrip.mtp")
+legacy = legacy_radial(root / "LK-o4.roundtrip.sus2")
 assert legacy
 for name in random:
-    assert legacy_radial(root / f"{name}.trained.mtp") == legacy
+    assert legacy_radial(root / f"{name}.trained.sus2") == legacy
 print("pure_w_random_seed_reproducible_gate_and_W_changed_unused_R_retained_ok")
 PY
 for mismatch in --superlinear-mode=legacy --sh-factor-pruning=q-total --two-layer-gate-body-order=4; do
-  if "$bin" train "$task_tmp/LK-o4.roundtrip.mtp" "$task_tmp/one.cfg" \
+  if "$bin" train "$task_tmp/LK-o4.roundtrip.sus2" "$task_tmp/one.cfg" \
        "$mismatch" --max-iter=0 > "$task_tmp/mismatch.log" 2>&1; then
     echo "loaded pure model accepted an incompatible CLI architecture: $mismatch" >&2
     exit 1

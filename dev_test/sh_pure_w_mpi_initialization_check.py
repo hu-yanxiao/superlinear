@@ -3,7 +3,7 @@
 
 Uses only supplied files, writes all generated artifacts below --output-dir,
 and does not modify the binary, seed, fixture or any source. Example:
-  python3 sh_pure_w_mpi_initialization_check.py /path/mlp-sus2 seed.mtp \
+  python3 sh_pure_w_mpi_initialization_check.py /path/mlp-sus2 seed.sus2 \
       pure_w_regularization.cfg --output-dir evidence
 Run this Python process once (not under mpirun); it launches both MPI commands.
 """
@@ -116,7 +116,7 @@ def parse_result(directory, ranks, atom_count):
         raise AssertionError(('unexpected coordinate blocks', diagnostics))
     return {'ranks': ranks, 'execution': execution[1], 'startup_loss': startup,
             'first_step_loss': accepted, 'diagnostics': diagnostics,
-            'calibrated_w': array((directory / 'ini.mtp').read_text(),
+            'calibrated_w': array((directory / 'ini.sus2').read_text(),
                                   'two_layer_gate_radial_mixing_coeffs')}
 
 
@@ -165,8 +165,8 @@ def main():
                    '--bfgs-coordinate-normalization=efs-head', '--energy-weight=1',
                    '--force-weight=0.3', '--stress-weight=0.1', '--force-loss=l2',
                    '--std-weight=0.1', '--scalar-head-l2=1e-5', '--radial-smooth=1e-6',
-                   '--gate-x-l2=0', '--trained-pot-name=trained.mtp',
-                   '--curr-pot-name=current.mtp', '--optimizer-trace-file=trace.csv']
+                   '--gate-x-l2=0', '--trained-pot-name=trained.sus2',
+                   '--curr-pot-name=current.sus2', '--optimizer-trace-file=trace.csv']
         (directory / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
         with (directory / 'output.log').open('w') as stream:
             result = subprocess.run(command, cwd=directory, env=env, stdout=stream,

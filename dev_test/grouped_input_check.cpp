@@ -133,13 +133,13 @@ int main() {
         Bad({"train", Fixture(model + training), "--model.response.layout=per-basis", "--model.response.latent_channels=2", "--check-config"}, "latent channels");
         Bad({"train", Fixture(model + training), "--model.angular_limit_by_body_order.7=1", "--check-config"}, "unknown setting");
         const auto angular = Run({"init-sh", Fixture(model +
-            "  angular_limit_by_body_order: {2: 3, 3: 2, 4: 1, 5: 1}\noutput:\n  model: seed.mtp\n"), "--check-config"});
+            "  angular_limit_by_body_order: {2: 3, 3: 2, 4: 1, 5: 1}\noutput:\n  model: seed.sus2\n"), "--check-config"});
         Require(angular.opts.at("body-l-max") == "3,2,1,1", "angular limit flow map");
         const auto block = Run({"init-sh", Fixture(
-            "model:\n  elements:\n    - H\n    - O\n  radial_channels: 2\n  interaction:\n    channels: 1\noutput:\n  model: seed.mtp\n"), "--check-config"});
+            "model:\n  elements:\n    - H\n    - O\n  radial_channels: 2\n  interaction:\n    channels: 1\noutput:\n  model: seed.sus2\n"), "--check-config"});
         Require(block.opts.at("species-count") == "2" && block.opts.at("outer-k-rank") == "1", "block list");
-        Bad({"init-sh", Fixture(model + "output:\n  model: seed.mtp\n"), "--max-iter=0", "--check-config"}, "does not use");
-        Bad({"init-sh", Fixture(model + "elements: [H, H]\noutput:\n  model: seed.mtp\n"), "--check-config"}, "duplicate element");
+        Bad({"init-sh", Fixture(model + "output:\n  model: seed.sus2\n"), "--max-iter=0", "--check-config"}, "does not use");
+        Bad({"init-sh", Fixture(model + "elements: [H, H]\noutput:\n  model: seed.sus2\n"), "--check-config"}, "duplicate element");
         const auto fixed = Run({"train", Fixture(model + training +
             "regularization:\n  radial_smoothness: 1e-6\n  radial_smoothness_grid: 128\n  energy_readout_l2: 1e-5\n  coordination_response_l2: 1e-4\n"), "--check-config"});
         Require(!fixed.opts.count("radial-smooth") && !fixed.opts.count("gate-full-l2"), "fixed controls must not become forbidden legacy overrides");
@@ -158,7 +158,7 @@ int main() {
         const auto static_cli = Run({"train", "data.cfg", "--coord-enabled", "false", "--interaction-channels=2",
             "--output.directory=" + root + "/static-cli", "--check-config"});
         Require(static_cli.opts.at("superlinear-mode") == "legacy", "static short CLI");
-        const auto static_kind = Run({"init-sh", Fixture("model:\n  kind: static-radial\n  interaction:\n    channels: 2\noutput:\n  model: static.mtp\n"), "--check-config"});
+        const auto static_kind = Run({"init-sh", Fixture("model:\n  kind: static-radial\n  interaction:\n    channels: 2\noutput:\n  model: static.sus2\n"), "--check-config"});
         Require(static_kind.opts.at("superlinear-mode") == "legacy", "static kind implies coordination disabled");
         const auto static_quoted = Run({"train", Fixture("model:\n  kind: 'static-radial'\n  interaction:\n    channels: 2\n" + training
             + "regularization:\n  energy_readout_l2: 0\n"), "--training.profile='native-static-v1'", "--check-config"});
@@ -203,7 +203,7 @@ int main() {
             Require(combination.opts.at("sh-factor-pruning") == (std::string(outer) == "cross" ? "q-total" : "same-k"), "independent Legacy outer coupling");
         }
         const auto compact = Run({"init-sh", "--model.kind=coordination-legacy", "--L=3", "--K=8", "--R=4", "--O=4",
-            "--output.model=" + root + "/compact.mtp", "--check-config"});
+            "--output.model=" + root + "/compact.sus2", "--check-config"});
         Require(compact.opts.at("l-max") == "3" && compact.opts.at("k-max") == "8" && compact.opts.at("two-layer-gate-k-rank") == "4" && compact.opts.at("outer-k-rank") == "4", "compact L/K/R/O aliases");
         Bad({"train", Fixture(legacy_model + training), "--model.response.layout=full", "--check-config"}, "unavailable");
         Bad({"train", Fixture(legacy_model + training), "--model.coordination.tensor_l_max=1", "--check-config"}, "tensor messages");
@@ -220,7 +220,7 @@ int main() {
         const auto fresh = Run({"train", config});
         Require(!fresh.check && fresh.opts.at("grouped-input") == "fresh", "trainer marker");
         Require(stat((root + "/run").c_str(), &info) == 0 && S_ISDIR(info.st_mode), "create output directory only for execution");
-        Fixture("keep", "run/initial.mtp");
+        Fixture("keep", "run/initial.sus2");
         Bad({"train", config}, "refusing to reuse/overwrite");
         std::cout << "GROUPED_INPUT_PASS checks=" << checks << " fixtures=" << root << '\n';
         return 0;

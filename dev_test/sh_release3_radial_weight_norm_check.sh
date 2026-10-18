@@ -11,23 +11,23 @@ sha256_file() {
   fi
 }
 
-tmp_dir=".codex_tmp/sh_release3_radial_weight_norm"
+tmp_dir=".local_tmp/sh_release3_radial_weight_norm"
 mkdir -p "$tmp_dir"
 
-initial_model="$tmp_dir/initial.mtp"
-seed_model="$tmp_dir/seed.mtp"
-signed_resume_model="$tmp_dir/signed_resume_seed.mtp"
+initial_model="$tmp_dir/initial.sus2"
+seed_model="$tmp_dir/seed.sus2"
+signed_resume_model="$tmp_dir/signed_resume_seed.sus2"
 signed_resume_trace="$tmp_dir/signed_resume.csv"
 signed_resume_none_trace="$tmp_dir/signed_resume_none.csv"
-signed_resume_refusal_model="$tmp_dir/signed_resume_refusal.mtp"
-signed_resume_opt_in_model="$tmp_dir/signed_resume_opt_in.mtp"
-untrained_weight_norm_model="$tmp_dir/untrained_weight_norm.mtp"
+signed_resume_refusal_model="$tmp_dir/signed_resume_refusal.sus2"
+signed_resume_opt_in_model="$tmp_dir/signed_resume_opt_in.sus2"
+untrained_weight_norm_model="$tmp_dir/untrained_weight_norm.sus2"
 train_cfg="$tmp_dir/one.cfg"
-physical_model="$tmp_dir/physical_step0.mtp"
-weight_norm_model="$tmp_dir/weight_norm_step0.mtp"
+physical_model="$tmp_dir/physical_step0.sus2"
+weight_norm_model="$tmp_dir/weight_norm_step0.sus2"
 physical_trace="$tmp_dir/physical.csv"
 weight_norm_trace="$tmp_dir/weight_norm.csv"
-rm -f "$tmp_dir"/*.mtp "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
+rm -f "$tmp_dir"/*.sus2 "$tmp_dir"/*.cfg "$tmp_dir"/*.csv "$tmp_dir"/*.log
 
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train_cfg"
 
@@ -206,7 +206,7 @@ grep -Eq "Repaired .*radial first coefficients; running one linear solve" \
   --radial-parameterization=weight-norm \
   --bfgs-coordinate-normalization=none \
   --optimizer-trace-file="$signed_resume_none_trace" \
-  --trained-pot-name="$tmp_dir/signed_resume_none_trained.mtp" \
+  --trained-pot-name="$tmp_dir/signed_resume_none_trained.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
@@ -219,7 +219,7 @@ grep -Eq "Repaired .*radial first coefficients; running one linear solve" \
   --bfgs-coordinate-normalization=efs-gn \
   --bfgs-coordinate-probes=2 \
   --optimizer-trace-file="$signed_resume_trace" \
-  --trained-pot-name="$tmp_dir/signed_resume_trained.mtp" \
+  --trained-pot-name="$tmp_dir/signed_resume_trained.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
@@ -271,7 +271,7 @@ PY
   --radial-parameterization=physical \
   --optimizer-trace-file="$physical_trace" \
   --curr-pot-name="$physical_model" \
-  --trained-pot-name="$tmp_dir/physical_trained.mtp" \
+  --trained-pot-name="$tmp_dir/physical_trained.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
@@ -283,7 +283,7 @@ PY
   --radial-parameterization=weight-norm \
   --optimizer-trace-file="$weight_norm_trace" \
   --curr-pot-name="$weight_norm_model" \
-  --trained-pot-name="$tmp_dir/weight_norm_trained.mtp" \
+  --trained-pot-name="$tmp_dir/weight_norm_trained.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \
@@ -306,7 +306,7 @@ fi
   --do-lin \
   --do-lin-steps=1 \
   --do-lin-freq=1 \
-  --trained-pot-name="$tmp_dir/do_lin_trained.mtp" \
+  --trained-pot-name="$tmp_dir/do_lin_trained.sus2" \
   --max-iter=1 \
   --skip-preinit \
   --energy-weight=1 \

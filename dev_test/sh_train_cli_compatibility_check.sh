@@ -41,13 +41,13 @@ common_init=(
 # Explicit inline mode remains supported.
 if ! "$bin" train "$one_cfg" --init-sh \
     "${common_init[@]}" \
-    --inline-sh-model="$tmp_dir/explicit-init.mtp" \
-    --trained-pot-name="$tmp_dir/explicit-trained.mtp" \
+    --inline-sh-model="$tmp_dir/explicit-init.sus2" \
+    --trained-pot-name="$tmp_dir/explicit-trained.sus2" \
     --max-iter=0 >"$tmp_dir/explicit.log" 2>&1; then
   cat "$tmp_dir/explicit.log" >&2
   exit 1
 fi
-test -s "$tmp_dir/explicit-init.mtp"
+test -s "$tmp_dir/explicit-init.sus2"
 grep -q "inline initial model written" "$tmp_dir/explicit.log"
 
 # A genuinely supplied SH construction option also keeps the documented
@@ -56,13 +56,13 @@ grep -q "inline initial model written" "$tmp_dir/explicit.log"
 if ! "$bin" train "$one_cfg" \
     "${common_init[@]}" \
     --outer-k-rank=0 \
-    --inline-sh-model="$tmp_dir/implicit-init.mtp" \
-    --trained-pot-name="$tmp_dir/implicit-trained.mtp" \
+    --inline-sh-model="$tmp_dir/implicit-init.sus2" \
+    --trained-pot-name="$tmp_dir/implicit-trained.sus2" \
     --max-iter=0 >"$tmp_dir/implicit.log" 2>&1; then
   cat "$tmp_dir/implicit.log" >&2
   exit 1
 fi
-test -s "$tmp_dir/implicit-init.mtp"
+test -s "$tmp_dir/implicit-init.sus2"
 grep -q "inline initial model written" "$tmp_dir/implicit.log"
 
 echo "SUS2-SH train CLI compatibility check passed"

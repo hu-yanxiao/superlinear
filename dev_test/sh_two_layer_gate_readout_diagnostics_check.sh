@@ -11,12 +11,12 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-readout-diagnostics-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL_ZERO="$WORKDIR/readout_zero.mtp"
-MODEL_ON="$WORKDIR/readout_on.mtp"
-MODEL_DISABLED="$WORKDIR/readout_disabled.mtp"
-MODEL_GATE_ZERO="$WORKDIR/readout_gate_zero.mtp"
-MODEL_LMP_ZERO="$WORKDIR/readout_lmp_zero.mtp"
-MODEL_LMP_ON="$WORKDIR/readout_lmp_on.mtp"
+MODEL_ZERO="$WORKDIR/readout_zero.sus2"
+MODEL_ON="$WORKDIR/readout_on.sus2"
+MODEL_DISABLED="$WORKDIR/readout_disabled.sus2"
+MODEL_GATE_ZERO="$WORKDIR/readout_gate_zero.sus2"
+MODEL_LMP_ZERO="$WORKDIR/readout_lmp_zero.sus2"
+MODEL_LMP_ON="$WORKDIR/readout_lmp_on.sus2"
 ONE_CFG="$WORKDIR/one.cfg"
 
 awk '{print} /^END_CFG/{exit}' "$REPO_ROOT/example/train.cfg" > "$ONE_CFG"

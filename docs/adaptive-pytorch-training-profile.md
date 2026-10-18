@@ -3,7 +3,7 @@
 This note documents the native C++ training profile used for adaptive-radial
 superlinear models exported from the PyTorch implementation.  The purpose is to
 make the C++ optimizer use the same fixed normalization and regularization
-math as the current PyTorch training code while keeping the saved `.mtp` model
+math as the current PyTorch training code while keeping the saved `.sus2` model
 in the ordinary physical coefficient format.
 
 The profile applies only when the loaded model uses adaptive radial
@@ -205,7 +205,7 @@ fixed atomic-energy penalties, and guard-compression penalties.
 
 ## Complete-checkpoint behavior
 
-A complete adaptive `.mtp` checkpoint is not reinitialized.  The native trainer:
+A complete adaptive `.sus2` checkpoint is not reinitialized.  The native trainer:
 
 - preserves physical coefficients exactly;
 - recomputes fixed-RMS optimizer coordinate scales from the supplied training
@@ -255,27 +255,27 @@ PyTorch entry point on the server:
 Native C++ adaptive profile continuation from a complete checkpoint:
 
 ```bash
-mpiexec.hydra -np 200 /work/phy-weigw/app/superlinear/mlp-sus2 train input.mtp train.cfg \
+mpiexec.hydra -np 200 /work/phy-weigw/app/superlinear/mlp-sus2 train input.sus2 train.cfg \
   --init-params=same \
   --energy-weight=1 --force-weight=0.01 --stress-weight=0.001 \
   --std-weight=0 --stdd-weight=0 \
   --max-iter=5000 \
-  --curr-pot-name=current.mtp \
-  --best-pot-name=best.mtp \
-  --trained-pot-name=trained.mtp
+  --curr-pot-name=current.sus2 \
+  --best-pot-name=best.sus2 \
+  --trained-pot-name=trained.sus2
 ```
 
 Native C++ fresh adaptive training from an incomplete adaptive model:
 
 ```bash
-mpiexec.hydra -np 200 /work/phy-weigw/app/superlinear/mlp-sus2 train fresh_adaptive.mtp train.cfg \
+mpiexec.hydra -np 200 /work/phy-weigw/app/superlinear/mlp-sus2 train fresh_adaptive.sus2 train.cfg \
   --init-params=same \
   --energy-weight=1 --force-weight=0.01 --stress-weight=0.001 \
   --std-weight=0 --stdd-weight=0 \
   --max-iter=5000 \
-  --curr-pot-name=current.mtp \
-  --best-pot-name=best.mtp \
-  --trained-pot-name=trained.mtp
+  --curr-pot-name=current.sus2 \
+  --best-pot-name=best.sus2 \
+  --trained-pot-name=trained.sus2
 ```
 
 For adaptive models, the profile supplies the fixed radial smoothness, scalar
@@ -312,11 +312,11 @@ For a complete adaptive checkpoint, native BFGS/L-BFGS can restrict the
 optimizer coordinates with, for example:
 
 ```sh
-mlp-sus2 train initial.mtp train.cfg --init-params=same --optimizer=bfgs \
+mlp-sus2 train initial.sus2 train.cfg --init-params=same --optimizer=bfgs \
   --max-iter=10000 --energy-weight=10 --force-weight=1 --stress-weight=0.1 \
   --std-weight=0 --stdd-weight=0 \
   --trainable-groups=shift,readout,radial,adaptive_weight,adaptive_amplitude \
-  --curr-pot-name=current.mtp --trained-pot-name=trained.mtp
+  --curr-pot-name=current.sus2 --trained-pot-name=trained.sus2
 ```
 
 The option is an allowlist: `shift` selects element energy offsets; `readout`

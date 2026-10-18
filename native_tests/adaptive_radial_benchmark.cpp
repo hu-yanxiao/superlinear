@@ -657,7 +657,7 @@ int Run(int argc, char** argv)
 {
 	if (argc < 3 || argc > 5) {
 		if (Rank() == 0)
-			std::cerr << "usage: adaptive_radial_benchmark model.mtp data.cfg "
+			std::cerr << "usage: adaptive_radial_benchmark model.sus2 data.cfg "
 			          << "[repeats=3] [max-configs=3]\n";
 		return 2;
 	}

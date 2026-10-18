@@ -76,25 +76,25 @@ CFG.write_text("""BEGIN_CFG
    0.041 -0.027 0.018 0.006 -0.004 0.003
 END_CFG
 """)
-init_config = yaml("model.yaml", MODEL + "output:\n  model: yaml-seed.mtp\n")
+init_config = yaml("model.yaml", MODEL + "output:\n  model: yaml-seed.sus2\n")
 run("init-check", ["init-sh", init_config, "--check-config"])
-assert not (ROOT / "yaml-seed.mtp").exists()
+assert not (ROOT / "yaml-seed.sus2").exists()
 run("init-yaml", ["init-sh", init_config])
-run("init-legacy", ["init-sh", ROOT / "legacy-seed.mtp"] + LEGACY)
-assert (ROOT / "yaml-seed.mtp").read_bytes() == (ROOT / "legacy-seed.mtp").read_bytes(), "topology differs"
+run("init-legacy", ["init-sh", ROOT / "legacy-seed.sus2"] + LEGACY)
+assert (ROOT / "yaml-seed.sus2").read_bytes() == (ROOT / "legacy-seed.sus2").read_bytes(), "topology differs"
 CHECKS += 1
 
 for sharing, semantic_alias in [("L", "angular"), ("K", "channel"), ("LK", "channel-angular"), ("pair", "pair")]:
     canonical_config = yaml("warp-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + sharing)
-                            + "output:\n  model: warp-" + sharing + ".mtp\n")
+                            + "output:\n  model: warp-" + sharing + ".sus2\n")
     alias_config = yaml("warp-alias-" + sharing + ".yaml", MODEL.replace("warp_sharing: LK", "warp_sharing: " + semantic_alias)
-                        + "output:\n  model: warp-alias-" + sharing + ".mtp\n")
+                        + "output:\n  model: warp-alias-" + sharing + ".sus2\n")
     run("warp-canonical-" + sharing, ["init-sh", canonical_config])
     run("warp-alias-" + sharing, ["init-sh", alias_config])
-    run("warp-legacy-" + sharing, ["init-sh", ROOT / ("warp-legacy-" + sharing + ".mtp")]
+    run("warp-legacy-" + sharing, ["init-sh", ROOT / ("warp-legacy-" + sharing + ".sus2")]
         + LEGACY + ["--scaling-map=" + sharing])
-    assert (ROOT / ("warp-" + sharing + ".mtp")).read_bytes() == (ROOT / ("warp-alias-" + sharing + ".mtp")).read_bytes() \
-        == (ROOT / ("warp-legacy-" + sharing + ".mtp")).read_bytes(), "warp sharing topology differs: " + sharing
+    assert (ROOT / ("warp-" + sharing + ".sus2")).read_bytes() == (ROOT / ("warp-alias-" + sharing + ".sus2")).read_bytes() \
+        == (ROOT / ("warp-legacy-" + sharing + ".sus2")).read_bytes(), "warp sharing topology differs: " + sharing
     CHECKS += 1
 
 for label, layout, semantic_alias, rank in [("full", "full", "per-basis", 1),
@@ -102,15 +102,15 @@ for label, layout, semantic_alias, rank in [("full", "full", "per-basis", 1),
                                            ("shared-n-2", "shared-n", "shared-latent", 2)]:
     response = "  response:\n    layout: " + layout + "\n    latent_channels: " + str(rank) + "\n"
     canonical_config = yaml("response-" + label + ".yaml", MODEL + response
-                            + "output:\n  model: response-" + label + ".mtp\n")
+                            + "output:\n  model: response-" + label + ".sus2\n")
     alias_config = yaml("response-alias-" + label + ".yaml", MODEL + response.replace("layout: " + layout, "layout: " + semantic_alias)
-                        + "output:\n  model: response-alias-" + label + ".mtp\n")
+                        + "output:\n  model: response-alias-" + label + ".sus2\n")
     run("response-canonical-" + label, ["init-sh", canonical_config])
     run("response-alias-" + label, ["init-sh", alias_config])
-    run("response-legacy-" + label, ["init-sh", ROOT / ("response-legacy-" + label + ".mtp")]
+    run("response-legacy-" + label, ["init-sh", ROOT / ("response-legacy-" + label + ".sus2")]
         + LEGACY + ["--adaptive-radial-projection=" + layout, "--adaptive-radial-shared-n-rank=" + str(rank)])
-    assert (ROOT / ("response-" + label + ".mtp")).read_bytes() == (ROOT / ("response-alias-" + label + ".mtp")).read_bytes() \
-        == (ROOT / ("response-legacy-" + label + ".mtp")).read_bytes(), "response topology differs: " + label
+    assert (ROOT / ("response-" + label + ".sus2")).read_bytes() == (ROOT / ("response-alias-" + label + ".sus2")).read_bytes() \
+        == (ROOT / ("response-legacy-" + label + ".sus2")).read_bytes(), "response topology differs: " + label
     CHECKS += 1
 
 train_config = yaml("train.yaml", MODEL + """initialization:
@@ -134,15 +134,15 @@ run("train-yaml", ["train", train_config])
 (ROOT / "legacy-run").mkdir()
 run("train-legacy", ["train", CFG] + LEGACY + ["--init-sh", "--init-params=same", "--init-random-seed=41",
     "--max-iter=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01", "--valid-cfgs=" + str(CFG),
-    "--inline-sh-model=" + str(ROOT / "legacy-run/initial.mtp"), "--curr-pot-name=" + str(ROOT / "legacy-run/current.mtp"),
-    "--best-pot-name=" + str(ROOT / "legacy-run/best.mtp"), "--trained-pot-name=" + str(ROOT / "legacy-run/final.mtp"),
+    "--inline-sh-model=" + str(ROOT / "legacy-run/initial.sus2"), "--curr-pot-name=" + str(ROOT / "legacy-run/current.sus2"),
+    "--best-pot-name=" + str(ROOT / "legacy-run/best.sus2"), "--trained-pot-name=" + str(ROOT / "legacy-run/final.sus2"),
     "--optimizer-trace-file=" + str(ROOT / "legacy-run/optimizer.csv")])
-for field in ["initial.mtp", "final.mtp", "optimizer.csv"]:
+for field in ["initial.sus2", "final.sus2", "optimizer.csv"]:
     assert (ROOT / "yaml-run" / field).read_bytes() == (ROOT / "legacy-run" / field).read_bytes(), field + " differs"
     CHECKS += 1
 
-run("predict-yaml", ["calc-efs", ROOT / "yaml-run/final.mtp", CFG, ROOT / "yaml-pred.cfg"])
-run("predict-legacy", ["calc-efs", ROOT / "legacy-run/final.mtp", CFG, ROOT / "legacy-pred.cfg"])
+run("predict-yaml", ["calc-efs", ROOT / "yaml-run/final.sus2", CFG, ROOT / "yaml-pred.cfg"])
+run("predict-legacy", ["calc-efs", ROOT / "legacy-run/final.sus2", CFG, ROOT / "legacy-pred.cfg"])
 assert (ROOT / "yaml-pred.cfg").read_bytes() == (ROOT / "legacy-pred.cfg").read_bytes(), "E/F/stress differs"
 CHECKS += 1
 
@@ -152,7 +152,7 @@ run("reject-conflict", ["train", train_config, "--max-iter=2", "--check-config"]
 run("reject-unknown", ["train", train_config, "--model.unknown=1", "--check-config"], failure="unknown setting")
 
 continue_config = yaml("continue.yaml", """data:
-  model: yaml-run/final.mtp
+  model: yaml-run/final.sus2
   train: tiny.cfg
 training:
   iterations: 0
@@ -160,9 +160,9 @@ output:
   directory: resumed
 """)
 run("continue", ["train", continue_config])
-assert (ROOT / "resumed/final.mtp").exists() and not (ROOT / "resumed/initial.mtp").exists()
+assert (ROOT / "resumed/final.sus2").exists() and not (ROOT / "resumed/initial.sus2").exists()
 bad_continue = yaml("incomplete.yaml", """data:
-  model: yaml-seed.mtp
+  model: yaml-seed.sus2
   train: tiny.cfg
 training:
   iterations: 0
@@ -193,17 +193,17 @@ STATIC_LEGACY = ["--superlinear-mode=legacy", "--species-count=2", "--l-max=1", 
                  "--cutoff=3.5", "--radial-basis-size=3", "--outer-k-rank=2", "--body-order=3",
                  "--sh-factor-pruning=q-total"]
 static_kind_config = yaml("static-kind.yaml", STATIC_MODEL.replace("kind: coordination-adaptive", "kind: 'static-radial'")
-                          .replace("  coordination:\n    enabled: false\n", "") + "output:\n  model: static-kind.mtp\n")
+                          .replace("  coordination:\n    enabled: false\n", "") + "output:\n  model: static-kind.sus2\n")
 run("static-quoted-kind", ["init-sh", static_kind_config])
 for sharing in ["L", "K", "LK"]:
     config = yaml("static-" + sharing + ".yaml", STATIC_MODEL.replace("warp_sharing: LK", "warp_sharing: " + sharing)
-                  + "output:\n  model: static-" + sharing + ".mtp\n")
+                  + "output:\n  model: static-" + sharing + ".sus2\n")
     run("static-init-" + sharing, ["init-sh", config])
-    run("static-legacy-init-" + sharing, ["init-sh", ROOT / ("static-legacy-" + sharing + ".mtp")]
+    run("static-legacy-init-" + sharing, ["init-sh", ROOT / ("static-legacy-" + sharing + ".sus2")]
         + STATIC_LEGACY + ["--scaling-map=" + sharing])
-    text = (ROOT / ("static-" + sharing + ".mtp")).read_text()
+    text = (ROOT / ("static-" + sharing + ".sus2")).read_text()
     assert "two_layer_gate" not in text and "adaptive_radial" not in text, "static topology contains coordination/response"
-    assert (ROOT / ("static-" + sharing + ".mtp")).read_bytes() == (ROOT / ("static-legacy-" + sharing + ".mtp")).read_bytes()
+    assert (ROOT / ("static-" + sharing + ".sus2")).read_bytes() == (ROOT / ("static-legacy-" + sharing + ".sus2")).read_bytes()
     CHECKS += 1
 
 STATIC_TRAINING = """initialization:
@@ -228,9 +228,9 @@ output:
 """
 static_train_config = yaml("static-train.yaml", STATIC_MODEL + STATIC_TRAINING)
 # Adaptive initialization earlier in this same fixture root legitimately uses
-# ini.mtp. Static runs must neither create nor modify that inherited artifact.
+# ini.sus2. Static runs must neither create nor modify that inherited artifact.
 def undeclared_initial_snapshot():
-    path = ROOT / "ini.mtp"
+    path = ROOT / "ini.sus2"
     return (path.read_bytes(), path.stat().st_mtime_ns) if path.exists() else None
 
 
@@ -241,18 +241,18 @@ assert undeclared_initial_snapshot() == static_undeclared_before, "static groupe
 run("static-train-legacy", ["train", CFG] + STATIC_LEGACY + ["--init-sh", "--init-params=random", "--init-random-seed=41",
     "--skip-preinit", "--max-iter=1", "--energy-weight=1", "--force-weight=0.1", "--stress-weight=0.01",
     "--radial-smooth=0", "--radial-smooth-grid=32", "--scalar-head-l2=1e-5", "--valid-cfgs=" + str(CFG),
-    "--inline-sh-model=" + str(ROOT / "static-legacy-run/initial.mtp"), "--curr-pot-name=" + str(ROOT / "static-legacy-run/current.mtp"),
-    "--best-pot-name=" + str(ROOT / "static-legacy-run/best.mtp"), "--trained-pot-name=" + str(ROOT / "static-legacy-run/final.mtp"),
+    "--inline-sh-model=" + str(ROOT / "static-legacy-run/initial.sus2"), "--curr-pot-name=" + str(ROOT / "static-legacy-run/current.sus2"),
+    "--best-pot-name=" + str(ROOT / "static-legacy-run/best.sus2"), "--trained-pot-name=" + str(ROOT / "static-legacy-run/final.sus2"),
     "--optimizer-trace-file=" + str(ROOT / "static-legacy-run/optimizer.csv")])
-for field in ["initial.mtp", "final.mtp", "optimizer.csv"]:
+for field in ["initial.sus2", "final.sus2", "optimizer.csv"]:
     assert (ROOT / "static-run" / field).read_bytes() == (ROOT / "static-legacy-run" / field).read_bytes(), "static " + field + " differs"
     CHECKS += 1
-run("static-predict-yaml", ["calc-efs", ROOT / "static-run/final.mtp", CFG, ROOT / "static-yaml-pred.cfg"])
-run("static-predict-legacy", ["calc-efs", ROOT / "static-legacy-run/final.mtp", CFG, ROOT / "static-legacy-pred.cfg"])
+run("static-predict-yaml", ["calc-efs", ROOT / "static-run/final.sus2", CFG, ROOT / "static-yaml-pred.cfg"])
+run("static-predict-legacy", ["calc-efs", ROOT / "static-legacy-run/final.sus2", CFG, ROOT / "static-legacy-pred.cfg"])
 assert (ROOT / "static-yaml-pred.cfg").read_bytes() == (ROOT / "static-legacy-pred.cfg").read_bytes()
 CHECKS += 1
 static_continue_config = yaml("static-continue.yaml", """data:
-  model: static-run/final.mtp
+  model: static-run/final.sus2
   train: tiny.cfg
 training:
   profile: 'native-static-v1'
@@ -261,7 +261,7 @@ output:
   directory: static-resumed
 """)
 run("static-continue", ["train", static_continue_config])
-assert (ROOT / "static-resumed/final.mtp").exists() and not (ROOT / "static-resumed/initial.mtp").exists()
+assert (ROOT / "static-resumed/final.sus2").exists() and not (ROOT / "static-resumed/initial.sus2").exists()
 default_static_config = yaml("static-defaults.yaml", STATIC_MODEL + """training:
   iterations: 1
 data:
@@ -271,7 +271,7 @@ output:
 """)
 default_output = run("static-default-training", ["train", default_static_config])
 assert "Initial untrained model warmup rescale+linear solve done" in default_output and "Pre-training started" not in default_output
-assert "coordination_response_l2" not in default_output and (ROOT / "static-defaults/final.mtp").exists()
+assert "coordination_response_l2" not in default_output and (ROOT / "static-defaults/final.sus2").exists()
 assert undeclared_initial_snapshot() == static_undeclared_before
 wrong_profile = yaml("static-wrong-profile.yaml", static_continue_config.read_text().replace("native-static-v1", "native-adaptive-v1")
                      .replace("static-resumed", "static-wrong-profile"))
@@ -290,7 +290,7 @@ for inner in ("cross", "diagonal"):
     for outer in ("cross", "diagonal"):
         label = "legacy-" + inner + "-" + outer
         legacy_model = """model:
-  kind: coordination-legacy
+  kind: coordination-effect
   elements: [H, O]
   l_max: 1
   radial_channels: 4
@@ -314,7 +314,7 @@ for inner in ("cross", "diagonal"):
         assert not (ROOT / label).exists()
         native_output = run(label + "-train", ["train", config])
         assert "Pre-training started" not in native_output
-        final = ROOT / label / "final.mtp"
+        final = ROOT / label / "final.sus2"
         text = final.read_text()
         assert "version = 1.8.0" in text and "readout_mode = species" in text
         assert undeclared_initial_snapshot() == static_undeclared_before
@@ -323,21 +323,21 @@ for inner in ("cross", "diagonal"):
   model: FINAL
   train: tiny.cfg
 training:
-  profile: native-legacy-v1
+  profile: native-effect-v1
   iterations: 1
 output:
   directory: RESUMED
 """.replace("FINAL", str(final)).replace("RESUMED", label + "-resumed"))
         run(label + "-continue", ["train", resumed])
-        assert (ROOT / (label + "-resumed") / "final.mtp").exists()
-        assert not (ROOT / (label + "-resumed") / "initial.mtp").exists()
+        assert (ROOT / (label + "-resumed") / "final.sus2").exists()
+        assert not (ROOT / (label + "-resumed") / "initial.sus2").exists()
 
 # Gate-free species head uses the same Legacy readout math and profile guard.
 static_species_config = yaml("static-species.yaml", STATIC_MODEL +
     "  readout:\n    element_mode: per-element\n" +
     STATIC_TRAINING.replace("directory: static-run", "directory: static-species"))
 run("static-species-train", ["train", static_species_config])
-run("static-species-predict", ["calc-efs", ROOT / "static-species/final.mtp", CFG, ROOT / "static-species-pred.cfg"])
+run("static-species-predict", ["calc-efs", ROOT / "static-species/final.sus2", CFG, ROOT / "static-species-pred.cfg"])
 
 if MPI:
     output = run("mpi-check", ["train", train_config, "--check-config"], mpi=True)
@@ -345,6 +345,6 @@ if MPI:
     CHECKS += 1
     static_mpi_config = yaml("static-mpi.yaml", STATIC_MODEL + STATIC_TRAINING.replace("directory: static-run", "directory: static-mpi"))
     run("static-mpi-train", ["train", static_mpi_config], mpi=True)
-    assert (ROOT / "static-mpi/final.mtp").exists() and undeclared_initial_snapshot() == static_undeclared_before
+    assert (ROOT / "static-mpi/final.sus2").exists() and undeclared_initial_snapshot() == static_undeclared_before
 
 print("GROUPED_NATIVE_CLI_PASS checks=" + str(CHECKS) + " fixtures=" + str(ROOT))

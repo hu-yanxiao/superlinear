@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_decoupled_active_gradient"
+tmp_dir=".local_tmp/sh_two_layer_gate_decoupled_active_gradient"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/init.mtp"
-active_model="$tmp_dir/active.mtp"
+init_model="$tmp_dir/init.sus2"
+active_model="$tmp_dir/active.sus2"
 train_cfg="$tmp_dir/train.cfg"
 probe_cfg="$tmp_dir/probe.cfg"
 train_log="$tmp_dir/train.log"

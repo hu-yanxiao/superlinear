@@ -241,7 +241,7 @@ TEST("Identical configurations reading test") {
 
 TEST("Testing Configuration periodic extension") {
 	std::ifstream ifs("configurations/period_ext_test.cfg", std::ios::binary);
-	MTP mtp("mlips/fitted.mtp");
+	MTP mtp("mlips/fitted.sus2");
 	for (int i = 0; i < 3; i++) {
 		Configuration cfg1, cfg2;
 		cfg1.Load(ifs);
@@ -392,9 +392,9 @@ TEST("VASP loading") {
 
 TEST("MTP file format v1.1.0 test") {
 	try {
-		MTP mtp102("mlips/fitted.mtp");
-		mtp102.Save("temp/MTPv1.1.0test.mtp");
-		MTP mtp103("temp/MTPv1.1.0test.mtp");
+		MTP mtp102("mlips/fitted.sus2");
+		mtp102.Save("temp/MTPv1.1.0test.sus2");
+		MTP mtp103("temp/MTPv1.1.0test.sus2");
 
 		Configuration cfg1;
 		Configuration cfg2;
@@ -423,18 +423,18 @@ TEST("MTP file format v1.1.0 test") {
 } END_TEST;
 
 TEST("MTP file reading 1") {
-	MTP basis("mlips/lightweight.mtp");
+	MTP basis("mlips/lightweight.sus2");
 } END_TEST;
 
 TEST("MTP file reading 2") {
-	MTP mtp("mlips/lightweight.mtp");
+	MTP mtp("mlips/lightweight.sus2");
 	for (double i : mtp.regress_coeffs)
 		if (i != 0.0) 
 			FAIL()
 } END_TEST;
 
 TEST("MTP file reading 3") {
-	MTP mtp("mlips/fitted.mtp");
+	MTP mtp("mlips/fitted.sus2");
 	double res=0;
 	for (double i : mtp.regress_coeffs)
 		res += i;
@@ -443,7 +443,7 @@ TEST("MTP file reading 3") {
 } END_TEST;
 
 TEST("MTP learning") {
-	MTP mtp("mlips/unfitted.mtp");
+	MTP mtp("mlips/unfitted.sus2");
 	LinearRegression regr(&mtp, 500, 1, 10);
 	std::ifstream ifs("configurations/reading_test.cfg", ios::binary);
 	Configuration cfg;
@@ -455,11 +455,11 @@ TEST("MTP learning") {
 	ifs.close();
 
 #ifdef GEN_TESTS
-	mtp.Save("mlips/fitted.mtp");
+	mtp.Save("mlips/fitted.sus2");
 #endif
 
 	// the MTP that is already trained
-	MTP mtp_ready("mlips/fitted.mtp");
+	MTP mtp_ready("mlips/fitted.sus2");
 	ifs.open("configurations/reading_test.cfg", ios::binary);
 	for (int count=0; cfg.Load(ifs); count++) {
 		Configuration cfg2(cfg);
@@ -500,20 +500,20 @@ TEST("MTP learning") {
 /*PAR_TEST("parallel trainer test")
 {
 	{
-		MTP mtp("paralel_fitting_test.mtp");
-		mtp.Save("temp/paralel_fitting_test.mtp");
+		MTP mtp("paralel_fitting_test.sus2");
+		mtp.Save("temp/paralel_fitting_test.sus2");
 	}
-	MTP mtp("temp/paralel_fitting_test.mtp");
+	MTP mtp("temp/paralel_fitting_test.sus2");
 	LinearRegression regr(&mtp, 500, 1, 10);
 	auto cfgs = LoadCfgs("configurations/reading_test.cfg");
 	regr.Train(cfgs);
 
-	train("temp/paralel_fitting_test.mtp", "configurations/reading_test.cfg", 500,1,10,0, "", nullptr);
+	train("temp/paralel_fitting_test.sus2", "configurations/reading_test.cfg", 500,1,10,0, "", nullptr);
 
 	for (auto& cfg : cfgs)
 		mtp.CalcEFS(cfg);
 
-	MTP mtpp("temp/paralel_fitting_test.mtp");
+	MTP mtpp("temp/paralel_fitting_test.sus2");
 
 	ErrorMonitor errmon;
 	for (auto& cfg : cfgs)

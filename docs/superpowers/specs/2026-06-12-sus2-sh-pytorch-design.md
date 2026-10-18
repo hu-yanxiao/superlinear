@@ -1,5 +1,7 @@
 # SUS2-SH-PyTorch Design
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Date: 2026-06-12
 
 ## Purpose
@@ -8,16 +10,16 @@ Date: 2026-06-12
 
 The phase-one goal is:
 
-1. Load an existing C++ SUS2-SH `.mtp` model.
+1. Load an existing C++ SUS2-SH `.sus2` model.
 2. Load a CFG structure set through ASE-compatible parsing.
 3. Reproduce C++ `calc-efs` energy, force, and stress for the same model and structure.
 4. Use PyTorch autograd for force and stress derivatives where practical.
 
-Training with Adam, LBFGS, batching, and `.mtp` export are later phases. They should be built only after parity is stable.
+Training with Adam, LBFGS, batching, and `.sus2` export are later phases. They should be built only after parity is stable.
 
 ## C++ Reference Branch
 
-The phase-one C++ reference is the SUS2-SH `codex/mu-body-order-gate` branch, not `main` and not the older `developer` branch.
+The phase-one C++ reference is the SUS2-SH `<historical-branch>` branch, not `main` and not the older `developer` branch.
 
 The current reference commit is:
 
@@ -28,10 +30,10 @@ The current reference commit is:
 The local reference worktree is:
 
 ```text
-/Users/hu-yanxiao/Projects/SUS2MLIP/.codex_tmp/sus2-sh-developer-tanh
+/Users/hu-yanxiao/Projects/SUS2MLIP/.local_tmp/sus2-sh-developer-tanh
 ```
 
-That path is a SUS2-SH worktree despite being located under the local `SUS2MLIP/.codex_tmp` directory. The repository remote is:
+That path is a SUS2-SH worktree despite being located under the local `SUS2MLIP/.local_tmp` directory. The repository remote is:
 
 ```text
 git@github.com:hu-yanxiao/SUS2-SH.git
@@ -40,7 +42,7 @@ git@github.com:hu-yanxiao/SUS2-SH.git
 The server reference tree is:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex
+<historical-path>
 ```
 
 Any parity assumptions for `mu-body-order` or double gate must be taken from this branch. The `main` branch must not be used as the mathematical source for the new gate mode.
@@ -50,8 +52,8 @@ Any parity assumptions for `mu-body-order` or double gate must be taken from thi
 The primary parity case is the latest double-gate mu-body-order model:
 
 ```text
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/double/ini.mtp
-/work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/double/codex_fd_checks/train_one.cfg
+/work/phy-weigw/hyx/5.28-mof-cl-h2o/new-gate/double/ini.sus2
+<historical-path>
 ```
 
 This case covers:
@@ -63,7 +65,7 @@ This case covers:
 - Energy, force, and stress targets.
 - The current stress sign convention used by the C++ code.
 
-Regression cases should include plain SH and single-gate mu-body-order models from the same `codex/mu-body-order-gate` line after the golden case is working.
+Regression cases should include plain SH and single-gate mu-body-order models from the same `<historical-branch>` line after the golden case is working.
 
 ## Repository Boundary
 
@@ -75,19 +77,19 @@ SUS2-SH-PyTorch
 
 Initial visibility is private.
 
-The repository should not reuse or modify the local `PySUS2SH` project. Code can inspect the SUS2-SH `codex/mu-body-order-gate` branch for formulas and parameter layout, but it should not depend on building the C++ source as a Python extension in phase one.
+The repository should not reuse or modify the local `PySUS2SH` project. Code can inspect the SUS2-SH `<historical-branch>` branch for formulas and parameter layout, but it should not depend on building the C++ source as a Python extension in phase one.
 
 ## Phase-One Scope
 
 Phase one implements a parity runner:
 
 ```text
-sus2shpt parity --model ini.mtp --cfg train_one.cfg --cpp-mlp /path/to/mlp-sus2
+sus2shpt parity --model ini.sus2 --cfg train_one.cfg --cpp-mlp /path/to/mlp-sus2
 ```
 
 The command should:
 
-1. Read model metadata and parameters from `.mtp`.
+1. Read model metadata and parameters from `.sus2`.
 2. Read one or more structures from CFG.
 3. Evaluate PyTorch energy, forces, and stress.
 4. Call C++ `mlp-sus2 calc-efs` as the oracle.
@@ -97,13 +99,13 @@ Phase one does not implement:
 
 - Dataset-scale training.
 - Adam/LBFGS optimizer loops.
-- `.mtp` export of updated parameters.
+- `.sus2` export of updated parameters.
 - Python `init-sh`.
 - GPU performance optimization beyond keeping tensor shapes compatible with later batching.
 
 ## Model Coverage
 
-The PyTorch model must support the latest C++ math used by the `codex/mu-body-order-gate` golden case.
+The PyTorch model must support the latest C++ math used by the `<historical-branch>` golden case.
 
 For each atom pair edge `i <- j`, the SH moment channel uses radial basis values and real spherical harmonics:
 
@@ -188,7 +190,7 @@ sus2shpt/
 
 ### IO Layer
 
-`io.mtp` parses enough of the `.mtp` file to reconstruct the exact C++ model:
+`io.sus2` parses enough of the `.sus2` file to reconstruct the exact C++ model:
 
 - Species count and element mapping.
 - `l_max`, `k_max`, `body_order`, body-l limits.
@@ -215,7 +217,7 @@ The model layer should be pure PyTorch and deterministic for parity:
 - Avoid stochastic operations.
 - Keep tensors on CPU first.
 - Add CUDA only after CPU parity passes.
-- Keep parameter tensors in one-to-one correspondence with `.mtp` parameter blocks.
+- Keep parameter tensors in one-to-one correspondence with `.sus2` parameter blocks.
 
 The SH product contraction should be represented as an explicit computation graph that matches the C++ scalar basis order. This is more important than speed in phase one.
 
@@ -243,7 +245,7 @@ The PyTorch stress path should be validated by both:
 Phase-one parity data flow:
 
 ```text
-.mtp -> MTPModelSpec -> SUS2SHPyTorch
+.sus2 -> MTPModelSpec -> SUS2SHPyTorch
 .cfg -> StructureBatch -> positions/lattice/species tensors
 SUS2SHPyTorch -> E
 autograd(E, positions) -> F
@@ -258,10 +260,10 @@ Batching should be represented at the API boundary but not optimized initially. 
 
 Required phase-one tests:
 
-1. `.mtp` parser smoke test on the golden `ini.mtp`.
+1. `.sus2` parser smoke test on the golden `ini.sus2`.
 2. CFG parser smoke test on `train_one.cfg`.
 3. Plain SH energy parity on a small known model.
-4. Single-gate energy/force/stress parity from the same `codex/mu-body-order-gate` branch.
+4. Single-gate energy/force/stress parity from the same `<historical-branch>` branch.
 5. Double-gate energy/force/stress parity on the golden case.
 6. Stress finite-difference sign check.
 7. Gate exact body-order bucket check:
@@ -287,7 +289,7 @@ Development and verification should run on the phy-weigw server for parity with 
 The C++ oracle binary for the current gate branch is:
 
 ```text
-/work/phy-weigw/20260321_Test/SUS2-SH-mu-body-gate-work-codex/bin/mlp-sus2
+<historical-path>
 ```
 
 The PyTorch environment can be a dedicated conda environment, for example:
@@ -314,9 +316,9 @@ After phase-one parity:
 1. Add Python `init-sh` reconstruction.
 2. Add mini-batch training with Adam.
 3. Add optional LBFGS or hybrid Adam-to-LBFGS training.
-4. Add exact `.mtp` export of the original parameterization.
+4. Add exact `.sus2` export of the original parameterization.
 5. Add GPU batching and memory-aware neighbor handling.
-6. Add parity tests for exported `.mtp` files by loading them back into C++.
+6. Add parity tests for exported `.sus2` files by loading them back into C++.
 
 ## Risks
 

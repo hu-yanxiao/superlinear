@@ -1,9 +1,11 @@
 # C++ 原生训练：分组物理输入
 
-维护分支 `codex/radial-coefficient-gate` 的开发版 `mlp-sus2` 现在支持
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
+维护分支 `main` 的开发版 `mlp-sus2` 现在支持
 分组 YAML 和物理语义 CLI。它是现有 `init-sh` / `train` 的输入适配层，
 复用现有模型方程、参数布局和训练实现，不新增求值算法。
-支持配位自适应、Legacy 配位乘性修正和无配位修正的静态径向模型；历史 CLI 的行为不变。
+支持配位自适应、Effect 配位环境调制和无配位修正的静态径向模型；模型方程不变。
 
 ```bash
 mlp-sus2 train run.yaml --check-config
@@ -35,7 +37,7 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 
 | 分组字段 | 原生选项 | 含义 / 允许值 / 默认值 |
 |---|---|---|
-| `model.kind` | `superlinear-mode` | 默认 `coordination-adaptive`；`coordination-legacy`（兼容 `legacy`）选择 Legacy；`static-radial` 默认关闭配位层；显式 `coordination.enabled: false` 也可选择静态模型 |
+| `model.kind` | `superlinear-mode` | 默认 `coordination-adaptive`；`coordination-effect`（可简写 `effect`）选择 Effect；`static-radial` 默认关闭配位层；显式 `coordination.enabled: false` 也可选择静态模型 |
 | `model.name` | `potential-name` | 模型名称；原生默认名称 |
 | `model.elements` 或顶层 `elements` | `species-count` | 按 CFG type 顺序的元素列表；推导元素数，不启用 ZBL、不改 CFG 类型 |
 | `model.species_count` | `species-count` | 不提供元素表时可单独指定；默认 2；和元素表冲突时报错 |
@@ -55,7 +57,7 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 | `model.coordination.tensor_l_max` | `tensor-message-lmax` | 0（默认）、1、2，且不超过 L |
 | `model.interaction.channels` | `outer-k-rank` | O；必须显式提供，避免误用旧架构的默认 0 |
 | `model.interaction.body_order` | `body-order` | 相互作用多体阶数，2..6；默认 5 |
-| `model.interaction.channel_coupling` | `sh-factor-pruning` | Adaptive / Legacy 默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
+| `model.interaction.channel_coupling` | `sh-factor-pruning` | Adaptive / Effect 默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
 | `model.angular_limit_by_body_order` | `body-l-max` | 如 `{2: 3, 3: 3, 4: 2, 5: 1}`；2..5 必须齐全，六体模型还需 6；也作用于配位图，保持原生语义 |
 | `model.response.layout` | `adaptive-radial-projection` | `full`（默认）、`shared-n`；兼容 `per-basis`→full、`shared-latent`→shared-n |
 | `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 共享投影数 d；默认 1；full 只能 1，shared-n 要求 1..N |
@@ -105,15 +107,15 @@ model:
 跨 n 共享不删除径向基 n。`latent_channels` 增大也不自动变成 `full`，
 两者仍是不同参数布局。以上结构在新模型初始化时确定；续训继承 checkpoint。
 
-## Legacy 配位模型
+## Effect 配位模型
 
-完整示例见 [Legacy 训练输入](../examples/grouped-native-legacy-train.yaml)。
-`model.kind: coordination-legacy` 使用已有乘性配位修正方程，不生成 Adaptive 的 U。
+完整示例见 [Effect 训练输入](../examples/grouped-native-effect-train.yaml)。
+`model.kind: coordination-effect` 使用已有配位环境仿射调制方程，不生成 Adaptive 的 U。
 K/R/O、L/K/LK 距离 scaling、截断、多体阶数和各阶角动量上限与 Adaptive 使用同一命名。
 
 ```yaml
 model:
-  kind: coordination-legacy
+  kind: coordination-effect
   l_max: 3
   radial_channels: 8
   coordination:
@@ -125,12 +127,12 @@ model:
   readout:
     element_mode: per-element    # shared / per-element
 training:
-  profile: native-legacy-v1
+  profile: native-effect-v1
 ```
 
 四种内/外层组合都支持；cross 允许同一层不同通道的标量乘积，diagonal 只保留
 同一通道内的乘积。两层各自构建乘积图，改变一层不强制改变另一层。历史未使用
-新分组入口的旧 CLI 默认不变。Legacy 不支持 `response.*`、非零张量层或 joint readout。
+新分组入口的旧 CLI 默认不变。Effect 不支持 `response.*`、非零张量层或 joint readout。
 
 记 Phi_iq 为外层标量、Z 为中心元素、s_Z 为能量平移、h_Z 为旧元素系数：
 
@@ -141,11 +143,11 @@ per-element: E_i = s_Z + h_Z + sum_q d_Zq Phi_iq
 
 独立读出只索引中心元素这一行，不计算所有元素的读出再筛选。旧共享模型可以精确
 转换为 `d_Zq = h_Z * d_q`，h_Z 为零或负数也成立。它与按邻居元素区分径向响应
-不同。Legacy 的独立读出或新增 diagonal 图布局使用 `version = 1.8.0`，避免旧读取器
-误解参数；**当前正式 GPUMD 尚不支持这些新 Legacy 布局**，本次支持范围为 C++ 和 PT。
+不同。Effect 的独立读出或新增 diagonal 图布局使用 `version = 1.8.0`，避免旧读取器
+误解参数；**当前正式 GPUMD 尚不支持这些新 Effect 布局**，本次支持范围为 C++ 和 PT。
 
-新分组入口默认内层 cross、外层 diagonal；`native-legacy-v1` 保留原生 rescale / 线性
-warmup，但不插入历史额外 75 步 pretraining。Legacy 续训显式指定该 profile 并省略
+新分组入口默认内层 cross、外层 diagonal；`native-effect-v1` 保留原生 rescale / 线性
+warmup，但不插入历史额外 75 步 pretraining。Effect 续训显式指定该 profile 并省略
 `model.*`；不会隐式改写 checkpoint 的结构。新模型支持 same / random 初始化。
 径向平滑及 readout/gate L2 可调，省略时保留原生默认；Adaptive 固定协议不变。
 
@@ -186,7 +188,7 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | `interaction.channel_coupling` | 仅 `cross`；显式 `diagonal` 会报错，不会被自动替换 |
 | `coordination.*` 除 enabled | 不可用，必须省略；G、配位多体阶数、独立配位 scaling、张量信息均不存在 |
 | `response.*` | 不可用，必须省略；full/shared-n、latent_channels、activation、element_mode 都不再有作用 |
-| `readout.element_mode/joint` | shared 或 per-element / false；joint:true 不支持；per-element 采用新 Legacy 1.8 格式 |
+| `readout.element_mode/joint` | shared 或 per-element / false；joint:true 不支持；per-element 采用新 Effect 1.8 格式 |
 | `initialization.parameters` | 新模型可用 same（默认）或 random；续训仅 same |
 | `initialization.seed` | 仅新模型显式 parameters:random 时可用，避免静默接受无效 seed |
 | slope/shift 初始化端点 | 可用，沿用原生距离 scaling 初始化 |
@@ -199,7 +201,7 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 静态模式自动选择 `native-static-v1`：物理径向参数化、原生 vibrations 加权；
 新模型保留原生 rescale + 线性读出 warmup，不使用自适应 fixed-RMS 标定。
 为使 iterations 与主 BFGS 步数对应并隔离输出目录，这个新分组 profile
-显式跳过历史额外 75 步 pretraining（不生成工作目录的 ini.mtp）。对应旧 CLI
+显式跳过历史额外 75 步 pretraining（不生成工作目录的 ini.sus2）。对应旧 CLI
 加 `--skip-preinit` 即可得到相同路径；历史 CLI 本身的默认行为未修改。
 
 静态模型续训必须显式声明 `training.profile: native-static-v1`，并省略所有
@@ -215,11 +217,11 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | 字段 | 原生选项 / 语义 |
 |---|---|
 | `initialization.seed` | `init-random-seed`；uint64；平衡初始化默认 seed=1 |
-| `initialization.parameters` | 自适应训练固定 same；Legacy / 静态新模型支持 same/random；续训保持已有物理系数 |
+| `initialization.parameters` | 自适应训练固定 same；Effect / 静态新模型支持 same/random；续训保持已有物理系数 |
 | `initialization.warp_slope_endpoints` | `scal-range`；两个端点列表；保持原生端点方向语义，不自动排序 |
 | `initialization.warp_shift_endpoints` | `s-range`；两个端点列表 |
 | `training.engine/device/dtype` | 仅 `native/cpu/float64`；可省略 |
-| `training.profile` | `native-adaptive-v1`、`native-legacy-v1` 或 `native-static-v1`；新训练按模型选择；Legacy / 静态续训必须显式声明 |
+| `training.profile` | `native-adaptive-v1`、`native-effect-v1` 或 `native-static-v1`；新训练按模型选择；Effect / 静态续训必须显式声明 |
 | `training.optimizer` | 分组入口仅 `bfgs`；其他优化器可用性以历史 CLI 为准 |
 | `training.iterations` | `max-iter`；BFGS 迭代上限，不是 Adam epoch；默认 1000 |
 | `training.convergence_tolerance` | `optimizer-conv-tol`；非负收敛阈值，保持原生默认 |
@@ -227,10 +229,10 @@ O>1 时保留独立 W；不要把静态 W 误认成配位响应 U。
 | `loss.profile` | 仅 `sus2-legacy`；不改变损失平均方式 |
 | `loss.energy_weight/force_weight/virial_weight` | `energy-weight/force-weight/stress-weight`；默认 1/0.01/0.001；不转换 virial/stress 单位或数据 |
 | `data.train/valid` | 训练 CFG / 可选验证 CFG；不读取或自动添加 test |
-| `data.model` | 完整 Adaptive / Legacy 或无 gate ranked SH checkpoint，用于续训；profile 必须匹配 |
-| `output.directory` | 为五项输出提供默认路径：`initial.mtp/current.mtp/best.mtp/final.mtp/optimizer.csv`；续训不生成 initial |
-| `output.initial_model/current/best/final/optimizer_trace` | 可分别指定路径；不使用 directory 时必须全部显式指定（续训不需 initial） |
-| `output.model` | 仅 init-sh 的拓扑输出路径；也可从 directory 默认生成 initial.mtp |
+| `data.model` | 完整 Adaptive / Effect 或无 gate ranked SH checkpoint，用于续训；profile 必须匹配 |
+| `output.directory` | 可选；训练省略时自动生成 `runs/<模型类型>-lL-kK-rR-oO-<唯一运行标记>`，静态模式不含 R；续训按 checkpoint 名称生成新目录。日志打印 `output_directory`；检查配置时不创建目录 |
+| `output.initial_model/current/best/final/optimizer_trace` | 可分别指定；省略时在运行目录生成 `initial.sus2/current.sus2/best.sus2/final.sus2/optimizer.csv`，续训不生成 initial。无 directory 时，全部不写采用自动目录；若选独立路径则需全部写全，避免混淆 |
+| `output.model` | 仅 init-sh 的拓扑输出路径；也可从 directory 默认生成 initial.sus2 |
 
 自适应模式的归一化及正则化沿用现有原生自适应训练协议，不因采用 YAML 而变动。
 以下四项可以省略，也可以显式写出固定值用于说明；不能修改其数值：
@@ -277,11 +279,15 @@ mlp-sus2 train train.cfg --coord-enabled false \
 不混用 YAML 的 data 路径和位置参数，允许位置数据路径搭配 CLI output.directory。
 
 YAML 路径相对 YAML 所在目录解析；仅通过 CLI 新添的路径相对启动目录。
+自动目录也位于 YAML 所在目录的 `runs/` 下。MPI 由 rank 0 生成唯一运行标记并
+广播，所有进程使用同一目录；用户仍可显式指定 `output.directory`。
+新模型输出（包括初始化、检查点、临时原子写入和归档）必须以 `.sus2` 结尾；
+历史模型文件仍可读取，不修改内部模型格式或已有文件。
 续训配置中不再写 `model.*` / `elements`，直接继承 checkpoint 架构。
 实际执行前拒绝复用或覆盖已存在的输出文件，拒绝输出互相重名或等于输入。
 该检查用于避免意外覆盖，不是并发作业锁；两个作业应使用不同输出目录。
 MPI 启动时，所有进程完成这些检查后才开始执行命令，避免较慢进程把
-本次主进程新写的 `initial.mtp` 误判为旧输出。非主进程异常会标明 rank。
+本次主进程新写的 `initial.sus2` 误判为旧输出。非主进程异常会标明 rank。
 输入数据和 checkpoint 永远不因配置翻译而改写。
 
 本入口支持明确、无需外部依赖的 YAML 子集：缩进映射、标量、单/双引号、

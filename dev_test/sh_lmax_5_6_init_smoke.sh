@@ -14,7 +14,7 @@ run_case() {
   local lmax=$1
   local body_lmax=$2
   local expected_radial=$3
-  local model="$WORKDIR/l${lmax}.mtp"
+  local model="$WORKDIR/l${lmax}.sus2"
 
   "$BIN" init-sh "$model" \
     --species-count=2 \

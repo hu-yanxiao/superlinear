@@ -1,6 +1,8 @@
 # Pure distance matrix with channelwise outer products
 
-Development branch: `codex/pure-w-channelwise`, forked from `0002956`.
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
+Development branch: `<historical-branch>`, forked from `0002956`.
 This is a new model variant, not an in-place change to existing checkpoints or running jobs.
 
 ## Agreed mathematical contract
@@ -129,12 +131,12 @@ can leave deterministic training in a permutation-symmetric subspace.
 Example of a new model (O can exceed K):
 
 ```bash
-bin/mlp-sus2 init-sh pure.mtp --superlinear-mode=pure-w-channelwise \
+bin/mlp-sus2 init-sh pure.sus2 --superlinear-mode=pure-w-channelwise \
   --species-count=2 --l-max=2 --k-max=2 --outer-k-rank=4 \
   --two-layer-gate-mode=mu-scalar-full --two-layer-gate-k-rank=2 \
   --body-order=4 --body-l-max=2,2,2,2 --scaling-map=LK \
   --radial-basis-size=4 --cutoff=5
-bin/mlp-sus2 train pure.mtp train.cfg --init-params=same \
+bin/mlp-sus2 train pure.sus2 train.cfg --init-params=same \
   --radial-parameterization=weight-norm --radial-smooth=1e-6
 ```
 
@@ -148,7 +150,7 @@ bash dev_test/sh_pure_w_regularization_check.sh
 bash dev_test/sh_pure_w_linear_components_check.sh
 ```
 
-The model-contract C++ harness links existing serial objects. Other checks use the CLI only. Test artifacts are generated outside tracked source paths or under `.codex_tmp/`.
+The model-contract C++ harness links existing serial objects. Other checks use the CLI only. Test artifacts are generated outside tracked source paths or under `.local_tmp/`.
 
 `calc-eij` is explicitly rejected for pure models until a compatible edge-energy decomposition is implemented. `calc-efs`, training, linear E/F/stress components and their gradients are the supported paths; separate GPU/GPUMD/LAMMPS ports are not included in this change.
 

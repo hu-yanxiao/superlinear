@@ -1,5 +1,7 @@
 # SUS2-SH Residual Staged Two-Layer Implementation Plan
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an opt-in SUS2-SH residual two-layer mode with \(E=E_0+E_1\), direct neighbor gate scale, and staged A/B/C training controls.
@@ -81,7 +83,7 @@
 **Files:**
 - Modify: `docs/sus2-sh-development.md`
 
-- [x] Sync to `/work/phy-weigw/20260321_Test/SUS2-SH-work-codex`.
+- [x] Sync to `<historical-path>`.
 - [x] Build on server.
 - [x] Run focused dev tests on server.
 - [x] Run 500-sample 100-step comparison under `/work/phy-weigw/hyx/200w/5.31-new-44421/`.

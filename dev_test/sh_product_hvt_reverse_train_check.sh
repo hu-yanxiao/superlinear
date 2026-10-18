@@ -11,7 +11,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/sus2sh-product-hvt-reverse-XXXXXX")
 trap 'rm -rf "$WORKDIR"' EXIT
 
-MODEL="$WORKDIR/qtotal_l3k2.mtp"
+MODEL="$WORKDIR/qtotal_l3k2.sus2"
 
 "$BIN" init-sh "$MODEL" \
   --species-count=2 \
@@ -35,8 +35,8 @@ run_train() {
     SUS2_SH_PRODUCT_HVT_REVERSE="$mode" \
       "$BIN" train "$MODEL" "$REPO_ROOT/dev_test/NaCl_small.cfgs" \
         --max-iter=1 \
-        --curr-pot-name=current.mtp \
-        --trained-pot-name=p.mtp \
+        --curr-pot-name=current.sus2 \
+        --trained-pot-name=p.sus2 \
         --skip-preinit \
         --init-params=same >logout 2>&1
   )
@@ -45,7 +45,7 @@ run_train() {
 run_train 0 "$WORKDIR/base"
 run_train 1 "$WORKDIR/hvt"
 
-python3 - "$WORKDIR/base/current.mtp" "$WORKDIR/hvt/current.mtp" <<'PY'
+python3 - "$WORKDIR/base/current.sus2" "$WORKDIR/hvt/current.sus2" <<'PY'
 import re
 import sys
 

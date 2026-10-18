@@ -8,13 +8,13 @@ LAMMPS_BIN="${LAMMPS_BIN:-/work/phy-weigw/apps/lammps-10Dec2025/src/lmp_ml_sus2_
 MPI_RUN="${MPI_RUN:-mpirun}"
 GATE_MODE="${GATE_MODE:-mu-body-linear-combo}"
 
-tmp_dir=".codex_tmp/lammps_two_layer_gate_lmp_smoke_${GATE_MODE}"
+tmp_dir=".local_tmp/lammps_two_layer_gate_lmp_smoke_${GATE_MODE}"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
-base_model="$tmp_dir/gated_base.mtp"
-direct_model="$tmp_dir/gated_nonzero.mtp"
-lmp_model="$tmp_dir/gated_nonzero_lmp.mtp"
+base_model="$tmp_dir/gated_base.sus2"
+direct_model="$tmp_dir/gated_nonzero.sus2"
+lmp_model="$tmp_dir/gated_nonzero_lmp.sus2"
 
 "$MLP_BIN" init-sh "$base_model" \
   --species-count=2 \

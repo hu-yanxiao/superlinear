@@ -3,10 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_release_semantics"
+tmp_dir=".local_tmp/sh_two_layer_gate_release_semantics"
 mkdir -p "$tmp_dir"
 
-model="$tmp_dir/release_gate.mtp"
+model="$tmp_dir/release_gate.sus2"
 reject_log="$tmp_dir/double_reject.log"
 
 ./bin/mlp-sus2 init-sh "$model" \
@@ -56,7 +56,7 @@ if not re.search(r"^two_layer_gate_scale_mode\s*=\s*additive-node\s*$", text, re
     raise SystemExit("missing additive-node gate scale mode")
 PY
 
-if ./bin/mlp-sus2 init-sh "$tmp_dir/double_gate.mtp" \
+if ./bin/mlp-sus2 init-sh "$tmp_dir/double_gate.sus2" \
   --species-count=2 \
   --l-max=2 \
   --k-max=2 \

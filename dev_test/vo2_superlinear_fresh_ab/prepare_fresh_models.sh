@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-SUPERLINEAR_BIN=${SUPERLINEAR_BIN:-/work/phy-weigw/20260321_Test/superlinear-work-codex/bin/mlp-sus2}
+SUPERLINEAR_BIN=${SUPERLINEAR_BIN:-$(cd "$SCRIPT_DIR/../.." && pwd)/bin/mlp-sus2}
 RELEASE3_BIN=${RELEASE3_BIN:-/work/phy-weigw/app/release3/mlp-sus2}
 TRAIN_CFG=${TRAIN_CFG:-/work/phy-weigw/hyx/vo2/9.1/train.cfg}
 SEED=${SEED:-2026090201}
@@ -75,10 +75,10 @@ run_init() {
   "$SUPERLINEAR_BIN" train "$TRAIN_CFG" \
     "${args[@]}" \
     --init-random-seed="$SEED" \
-    --inline-sh-model="$SEED_DIR/${label}.topology.mtp" \
-    --trained-pot-name="$SEED_DIR/${label}.raw.mtp" \
+    --inline-sh-model="$SEED_DIR/${label}.topology.sus2" \
+    --trained-pot-name="$SEED_DIR/${label}.raw.sus2" \
     >"$SEED_DIR/${label}.init.log" 2>&1
-  test -s "$SEED_DIR/${label}.raw.mtp"
+  test -s "$SEED_DIR/${label}.raw.sus2"
   grep -q "seed=${SEED}" "$SEED_DIR/${label}.init.log"
   grep -q "Deterministic fresh initialized model saved" "$SEED_DIR/${label}.init.log"
   if grep -q "Initial untrained model warmup" "$SEED_DIR/${label}.init.log"; then
@@ -92,17 +92,17 @@ run_init B0 1 0
 run_init B 1 "$MIX_SCALE"
 
 python3 "$SCRIPT_DIR/audit_fresh_models.py" \
-  "$SEED_DIR/A.raw.mtp" "$SEED_DIR/B0.raw.mtp" "$SEED_DIR/B.raw.mtp" \
+  "$SEED_DIR/A.raw.sus2" "$SEED_DIR/B0.raw.sus2" "$SEED_DIR/B.raw.sus2" \
   --mix-scale "$MIX_SCALE" | tee "$SEED_DIR/model_audit.txt"
 
 awk '{print} /^END_CFG/{exit}' "$TRAIN_CFG" >"$SEED_DIR/smoke.cfg"
-"$RELEASE3_BIN" calc-efs "$SEED_DIR/A.raw.mtp" "$SEED_DIR/smoke.cfg" \
+"$RELEASE3_BIN" calc-efs "$SEED_DIR/A.raw.sus2" "$SEED_DIR/smoke.cfg" \
   "$SEED_DIR/release3_A.efs.cfg" >"$SEED_DIR/release3_A.calc.log" 2>&1
-"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/A.raw.mtp" "$SEED_DIR/smoke.cfg" \
+"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/A.raw.sus2" "$SEED_DIR/smoke.cfg" \
   "$SEED_DIR/superlinear_A.efs.cfg" >"$SEED_DIR/superlinear_A.calc.log" 2>&1
-"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/B0.raw.mtp" "$SEED_DIR/smoke.cfg" \
+"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/B0.raw.sus2" "$SEED_DIR/smoke.cfg" \
   "$SEED_DIR/superlinear_B0.efs.cfg" >"$SEED_DIR/superlinear_B0.calc.log" 2>&1
-"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/B.raw.mtp" "$SEED_DIR/smoke.cfg" \
+"$SUPERLINEAR_BIN" calc-efs "$SEED_DIR/B.raw.sus2" "$SEED_DIR/smoke.cfg" \
   "$SEED_DIR/superlinear_B.efs.cfg" >"$SEED_DIR/superlinear_B.calc.log" 2>&1
 
 python3 "$SCRIPT_DIR/compare_cfg_numeric.py" \
@@ -120,7 +120,7 @@ python3 "$SCRIPT_DIR/compare_cfg_numeric.py" \
   echo "seed=$SEED"
   echo "mix_scale=$MIX_SCALE"
   sha256sum "$SUPERLINEAR_BIN" "$RELEASE3_BIN" "$TRAIN_CFG"
-  sha256sum "$SEED_DIR/A.raw.mtp" "$SEED_DIR/B0.raw.mtp" "$SEED_DIR/B.raw.mtp"
+  sha256sum "$SEED_DIR/A.raw.sus2" "$SEED_DIR/B0.raw.sus2" "$SEED_DIR/B.raw.sus2"
 } >"$SEED_DIR/metadata.txt"
 
 echo "fresh VO2 A/B0/B seed preparation passed: $SEED_DIR"

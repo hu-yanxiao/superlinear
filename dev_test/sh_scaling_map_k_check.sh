@@ -256,10 +256,10 @@ PY
 }
 
 for basis in RBChebyshev_sss RBLaguerre_log1p RBJacobi_sss; do
-  k_init="$tmp_dir/${basis}-K-init.mtp"
-  lk_init="$tmp_dir/${basis}-LK-init.mtp"
-  k_model="$tmp_dir/${basis}-K.mtp"
-  lk_model="$tmp_dir/${basis}-LK.mtp"
+  k_init="$tmp_dir/${basis}-K-init.sus2"
+  lk_init="$tmp_dir/${basis}-LK-init.sus2"
+  k_model="$tmp_dir/${basis}-K.sus2"
+  lk_model="$tmp_dir/${basis}-LK.sus2"
   k_pred="$tmp_dir/${basis}-K.cfg"
   lk_pred="$tmp_dir/${basis}-LK.cfg"
 
@@ -282,7 +282,7 @@ for basis in RBChebyshev_sss RBLaguerre_log1p RBJacobi_sss; do
   "$bin" calc-efs "$lk_model" "$one_cfg" "$lk_pred" >/dev/null
   compare_cfg "$k_pred" "$lk_pred"
 
-  roundtrip="$tmp_dir/${basis}-K-roundtrip.mtp"
+  roundtrip="$tmp_dir/${basis}-K-roundtrip.sus2"
   "$bin" roundtrip-model-dev "$k_model" "$roundtrip" >/dev/null
   check_counts "$roundtrip" K 16
   "$bin" calc-efs "$roundtrip" "$one_cfg" "$tmp_dir/${basis}-roundtrip.cfg" >/dev/null
@@ -299,8 +299,8 @@ for basis in RBChebyshev_sss RBLaguerre_log1p RBJacobi_sss; do
 done
 
 # Omitting the option must remain exactly the historical LK layout.
-default_init="$tmp_dir/default-init.mtp"
-default_model="$tmp_dir/default-roundtrip.mtp"
+default_init="$tmp_dir/default-init.sus2"
+default_model="$tmp_dir/default-roundtrip.sus2"
 "$bin" init-sh "$default_init" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss >/dev/null
 "$bin" roundtrip-model-dev "$default_init" "$default_model" >/dev/null
@@ -308,12 +308,12 @@ check_counts "$default_model" LK 48
 
 # The gate radial map follows the same scal/s sharing rule.  Gate additive
 # and full mu radial coefficients remain per mu.
-gate_k_init="$tmp_dir/gate-K-init.mtp"
-gate_lk_init="$tmp_dir/gate-LK-init.mtp"
-gate_k_seed="$tmp_dir/gate-K-seed.mtp"
-gate_lk_seed="$tmp_dir/gate-LK-seed.mtp"
-gate_k="$tmp_dir/gate-K.mtp"
-gate_lk="$tmp_dir/gate-LK.mtp"
+gate_k_init="$tmp_dir/gate-K-init.sus2"
+gate_lk_init="$tmp_dir/gate-LK-init.sus2"
+gate_k_seed="$tmp_dir/gate-K-seed.sus2"
+gate_lk_seed="$tmp_dir/gate-LK-seed.sus2"
+gate_k="$tmp_dir/gate-K.sus2"
+gate_lk="$tmp_dir/gate-LK.sus2"
 "$bin" init-sh "$gate_k_init" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss \
   --scaling-map=K --two-layer-gate \
@@ -342,7 +342,7 @@ check_counts "$gate_lk" LK 48 48
 "$bin" calc-efs "$gate_lk" "$probe_cfg" "$tmp_dir/gate-LK.cfg" >/dev/null
 compare_cfg "$tmp_dir/gate-K.cfg" "$tmp_dir/gate-LK.cfg"
 
-gate_perturbed="$tmp_dir/gate-K-perturbed.mtp"
+gate_perturbed="$tmp_dir/gate-K-perturbed.sus2"
 python3 - "$gate_k" "$gate_perturbed" <<'PY'
 import re
 import sys
@@ -460,9 +460,9 @@ PY
 # First activate the radial/scalar path on one configuration, then check it on
 # a different configuration.  Keep an exactly expanded LK copy to verify that
 # activation did not weaken the K/LK mathematical-equivalence check.
-main_k_active="$tmp_dir/main-K-active.mtp"
-main_lk_active="$tmp_dir/main-LK-active.mtp"
-"$bin" train "$tmp_dir/RBChebyshev_sss-K.mtp" "$one_cfg" \
+main_k_active="$tmp_dir/main-K-active.sus2"
+main_lk_active="$tmp_dir/main-LK-active.sus2"
+"$bin" train "$tmp_dir/RBChebyshev_sss-K.sus2" "$one_cfg" \
   --trained-pot-name="$main_k_active" \
   --max-iter=1 \
   --skip-preinit \
@@ -593,20 +593,20 @@ check_main_scaling_coordinate 12 shift-k1-pair00
 "$bin" train "$one_cfg" "${common[@]}" \
   --radial-basis-type=RBChebyshev_sss \
   --scaling-map=K \
-  --inline-sh-model="$tmp_dir/inline-K.mtp" \
-  --trained-pot-name="$tmp_dir/inline-K-trained.mtp" \
+  --inline-sh-model="$tmp_dir/inline-K.sus2" \
+  --trained-pot-name="$tmp_dir/inline-K-trained.sus2" \
   --max-iter=0 >"$tmp_dir/inline.log" 2>&1
-grep -q "^scaling_map = K$" "$tmp_dir/inline-K.mtp"
+grep -q "^scaling_map = K$" "$tmp_dir/inline-K.sus2"
 grep -q "inline initial model written" "$tmp_dir/inline.log"
 
-if "$bin" train "$tmp_dir/RBChebyshev_sss-K.mtp" "$one_cfg" \
+if "$bin" train "$tmp_dir/RBChebyshev_sss-K.sus2" "$one_cfg" \
     --scaling-map=LK --max-iter=0 >"$tmp_dir/map-mismatch.log" 2>&1; then
   echo "train unexpectedly converted an existing K model to LK" >&2
   exit 1
 fi
 grep -q "must match the loaded model" "$tmp_dir/map-mismatch.log"
 
-if "$bin" init-sh "$tmp_dir/invalid-KL.mtp" "${common[@]}" \
+if "$bin" init-sh "$tmp_dir/invalid-KL.sus2" "${common[@]}" \
     --radial-basis-type=RBChebyshev_sss --scaling-map=KL \
     >"$tmp_dir/invalid-KL.log" 2>&1; then
   echo "init-sh unexpectedly accepted scaling_map=KL for SUS2-SH" >&2

@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_train_weight"
+tmp_dir=".local_tmp/sh_two_layer_gate_train_weight"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/gated_init.mtp"
-trained_model="$tmp_dir/gated_trained.mtp"
+init_model="$tmp_dir/gated_init.sus2"
+trained_model="$tmp_dir/gated_trained.sus2"
 train="$tmp_dir/one.cfg"
 rm -f "$init_model" "$trained_model" "$train"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$train"

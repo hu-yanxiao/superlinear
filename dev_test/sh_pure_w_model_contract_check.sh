@@ -15,11 +15,11 @@ task_common=(--species-count=2 --l-max=1 --k-max=2 --body-order=3
              --two-layer-gate --two-layer-gate-mode=mu-scalar-full
              --two-layer-gate-body-order=3 --two-layer-gate-k-rank=2
              --two-layer-gate-radial-mixing=full --write-sh-scalar-info)
-"$task_bin" init-sh "$task_tmp/pure.mtp" "${task_common[@]}" \
+"$task_bin" init-sh "$task_tmp/pure.sus2" "${task_common[@]}" \
   --superlinear-mode=pure-w-channelwise --outer-k-rank=3 > "$task_tmp/pure.init.log"
-"$task_bin" init-sh "$task_tmp/rank1.mtp" "${task_common[@]}" \
+"$task_bin" init-sh "$task_tmp/rank1.sus2" "${task_common[@]}" \
   --superlinear-mode=pure-w-channelwise --outer-k-rank=1 > "$task_tmp/rank1.init.log"
-"$task_bin" init-sh "$task_tmp/legacy.mtp" "${task_common[@]}" \
+"$task_bin" init-sh "$task_tmp/legacy.sus2" "${task_common[@]}" \
   --outer-k-rank=2 > "$task_tmp/legacy.init.log"
 
 python3 - "$task_tmp" <<'PY'
@@ -28,10 +28,10 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-text = (root / "pure.mtp").read_text()
-rank1 = (root / "rank1.mtp").read_text()
+text = (root / "pure.sus2").read_text()
+rank1 = (root / "rank1.sus2").read_text()
 rank1 = re.sub(r"(?m)^outer_k_rank\s*=.*\n", "", rank1)
-(root / "implicit-rank1.mtp").write_text(rank1)
+(root / "implicit-rank1.sus2").write_text(rank1)
 cases = {
     "mismatched-modes": text.replace("outer_radial_mode = pure-matrix", "outer_radial_mode = legacy-plus-mixer"),
     "unknown-mode": text.replace("outer_channel_mode = same-channel", "outer_channel_mode = invalid"),
@@ -71,15 +71,15 @@ replacement = match[1] + "{" + ", ".join("{" + ",".join(p) + "}" for p in produc
 cases["cross-channel-product"] = text[:match.start()] + replacement + "\n" + text[match.end():]
 for label, value in cases.items():
     assert value != text, f"fixture mutation failed: {label}"
-    (root / f"{label}.mtp").write_text(value)
+    (root / f"{label}.sus2").write_text(value)
 PY
 
-"$task_bin" roundtrip-model-dev "$task_tmp/implicit-rank1.mtp" \
-  "$task_tmp/implicit-rank1.roundtrip.mtp" > "$task_tmp/rank1.roundtrip.log"
+"$task_bin" roundtrip-model-dev "$task_tmp/implicit-rank1.sus2" \
+  "$task_tmp/implicit-rank1.roundtrip.sus2" > "$task_tmp/rank1.roundtrip.log"
 for task_case in mismatched-modes unknown-mode missing-mode nonzero-p hidden-p \
                  huge-outer-rank overflow-outer-range cross-channel-product; do
-  if "$task_bin" roundtrip-model-dev "$task_tmp/$task_case.mtp" \
-      "$task_tmp/$task_case.roundtrip.mtp" > "$task_tmp/$task_case.log" 2>&1; then
+  if "$task_bin" roundtrip-model-dev "$task_tmp/$task_case.sus2" \
+      "$task_tmp/$task_case.roundtrip.sus2" > "$task_tmp/$task_case.log" 2>&1; then
     echo "invalid pure model accepted: $task_case" >&2
     exit 1
   fi
@@ -108,8 +108,8 @@ if [[ -n ${SUS2_TEST_LDLIBS:-} ]]; then read -r -a task_libs <<< "$SUS2_TEST_LDL
 "${CXX:-c++}" -std=c++11 -DMLIP_DEV -I./src -I./dev_src -I./cblas \
   dev_test/pure_w_model_contract_check.cpp "${task_objects[@]}" "${task_libs[@]}" \
   -o "$task_tmp/core-contract" > "$task_tmp/compile.log" 2>&1
-"$task_tmp/core-contract" "$task_tmp/pure.mtp" "$task_tmp/legacy.mtp" \
-  "$task_tmp/implicit-rank1.mtp" "$task_tmp/physical.roundtrip.mtp" \
+"$task_tmp/core-contract" "$task_tmp/pure.sus2" "$task_tmp/legacy.sus2" \
+  "$task_tmp/implicit-rank1.sus2" "$task_tmp/physical.roundtrip.sus2" \
   > "$task_tmp/core-contract.log" 2>&1
 cat "$task_tmp/core-contract.log"
 echo "pure_w_model_contract_check_ok"

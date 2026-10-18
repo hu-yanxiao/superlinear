@@ -15,10 +15,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT/'bin/mlp-sus2'
-(ROOT/'.codex_tmp').mkdir(exist_ok=True)
-OUT = Path(tempfile.mkdtemp(prefix='pure-w-execution-', dir=ROOT/'.codex_tmp'))
+(ROOT/'.local_tmp').mkdir(exist_ok=True)
+OUT = Path(tempfile.mkdtemp(prefix='pure-w-execution-', dir=ROOT/'.local_tmp'))
 BASE = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-CFG = ROOT/'codex_tests/pure_w_regularization.cfg'
+CFG = ROOT/'native_tests/pure_w_regularization.cfg'
 
 def run(label, cmd, env):
     result = subprocess.run(list(map(str,cmd)), cwd=ROOT, env=env, text=True,
@@ -35,7 +35,7 @@ for width in (1,2,4,8):
     assert 'PASS pure-W physics regression' in output
     fixture = Path(re.search(r'^Evidence: (.*)$',output,re.M)[1])
     for mapping in ('K','L','LK'):
-        model = fixture/f'{mapping}-k2-o{width}-r3-d0.mtp'
+        model = fixture/f'{mapping}-k2-o{width}-r3-d0.sus2'
         predictions = []
         for mode, graph in [('legacy','legacy'),('auto','legacy'),('packed','legacy'),('packed','batched'),('basis','legacy'),('basis','batched')]:
             label = f'O{width}-{mapping}-{mode}-{graph}'
@@ -74,7 +74,7 @@ for width in (1,2,4,8):
             reordered=terms[:start]+[t for lane in reversed(range(width))
                                     for t in terms[start+lane*per:start+(lane+1)*per]]
             src=src[:block.start()]+ 'sh_products = {'+', '.join(reordered)+'}'+src[block.end():]
-            permuted=OUT/f'O{width}-{mapping}-reordered.mtp'
+            permuted=OUT/f'O{width}-{mapping}-reordered.sus2'
             permuted.write_text(src)
             for mode,graph in [('legacy','legacy'),('packed','batched'),('basis','batched')]:
                 label=f'O{width}-{mapping}-reordered-{mode}'

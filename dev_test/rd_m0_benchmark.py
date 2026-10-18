@@ -75,8 +75,8 @@ def main():
     assert affinity, 'no available CPU affinity'
     os.sched_setaffinity(0, {affinity[0]})
     models = {}
-    for label, filename in [('sharedn_sharedreadout', 'vo2-sharedn-speciesamp.mtp'),
-                            ('fullu_speciesreadout', 'vo2-fullu-speciesreadout.mtp')]:
+    for label, filename in [('sharedn_sharedreadout', 'vo2-sharedn-speciesamp.sus2'),
+                            ('fullu_speciesreadout', 'vo2-fullu-speciesreadout.sus2')]:
         source = (args.models_dir/filename).resolve(strict=True)
         target = out/'inputs'/filename
         target.write_bytes(source.read_bytes())

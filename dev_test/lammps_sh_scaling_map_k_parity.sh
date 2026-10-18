@@ -143,8 +143,8 @@ common_init=(
 prepare_pair() {
   local case_name=$1
   shift
-  local init_model="$tmp_dir/$case_name.init.mtp"
-  local materialized="$tmp_dir/$case_name.materialized.mtp"
+  local init_model="$tmp_dir/$case_name.init.sus2"
+  local materialized="$tmp_dir/$case_name.materialized.sus2"
 
   "$MLP_BIN" init-sh "$init_model" "${common_init[@]}" "$@" >/dev/null
   "$MLP_BIN" roundtrip-model-dev "$init_model" "$materialized" >/dev/null
@@ -326,7 +326,7 @@ for basis_label, basis_type in (
             )
             if count != 1:
                 raise SystemExit(f"{case}: missing direct radial marker")
-            target = root / f"{case}.{basis_label}.{mode}.{mapping}.mtp"
+            target = root / f"{case}.{basis_label}.{mode}.{mapping}.sus2"
             target.write_text(content, encoding="utf-8")
 PY
 }
@@ -401,7 +401,7 @@ for case_name in full gate rank; do
   for basis_name in chebyshev laguerre; do
     for radial_mode in direct table; do
       for mapping in "$SH_SCALING_MAP" LK; do
-        model="$tmp_dir/$case_name.$basis_name.$radial_mode.$mapping.mtp"
+        model="$tmp_dir/$case_name.$basis_name.$radial_mode.$mapping.sus2"
         if [[ -n "$CPU_LAMMPS_BIN" ]]; then
           run_lammps "$CPU_LAMMPS_BIN" "$CPU_MPI_RANKS" sus2mtp \
             "$model" "cpu.$case_name.$basis_name.$radial_mode.$mapping" "$radial_mode"

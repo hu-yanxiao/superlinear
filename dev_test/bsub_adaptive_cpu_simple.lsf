@@ -20,7 +20,7 @@ export MLIP_CACHE_NEIGHBORHOODS=0
 bin=/work/phy-weigw/app/superlinear/mlp-sus2
 train_cfg=./train.cfg
 prefix=outer8gate3_cpu
-init_mtp=ini.mtp
+init_mtp=ini.sus2
 np=$(wc -l < "$LSB_DJOB_HOSTFILE")
 
 # Fresh training: use a new directory containing train.cfg.
@@ -41,6 +41,6 @@ mpiexec.hydra -machinefile "$LSB_DJOB_HOSTFILE" -np "$np" \
   --std-weight=0 --stdd-weight=0 \
   --optimizer=bfgs --bfgs-line-search=wolfe \
   --max-iter=5000 --optimizer-conv-tol=0 \
-  --curr-pot-name="${prefix}_current.mtp" \
-  --trained-pot-name="${prefix}_p.mtp" --best-pot-name="${prefix}_best.mtp" \
+  --curr-pot-name="${prefix}_current.sus2" \
+  --trained-pot-name="${prefix}_p.sus2" --best-pot-name="${prefix}_best.sus2" \
   > "${prefix}.log" 2>&1

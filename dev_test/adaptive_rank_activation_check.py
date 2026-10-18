@@ -29,7 +29,7 @@ def main():
     sys.path.insert(0, str(args.pytorch_root.resolve()))
     import torch
     from sus2shpt.io.cfg import load_cfg
-    from sus2shpt.io.mtp import load_mtp_model
+    from sus2shpt.io.sus2 import load_mtp_model
     from sus2shpt.model.sus2_sh import SUS2SHPyTorch
     torch.set_num_threads(1)
     from adaptive_species_readout_check import (
@@ -46,7 +46,7 @@ def main():
         PT supplies gate scalar values only. All E/F/S and mixed derivative
         acceptance checks below remain native analytic-vs-finite-difference.
         """
-        tmp=check.out/(label+'.precalibration.mtp'); tmp.write_text(text)
+        tmp=check.out/(label+'.precalibration.sus2'); tmp.write_text(text)
         obj=SUS2SHPyTorch(load_mtp_model(tmp),device='cpu',dtype=torch.float64)
         cfg=load_cfg(check.cfg)[0]
         positions=torch.tensor([a.position for a in cfg.atoms],dtype=torch.float64)
@@ -72,8 +72,8 @@ def main():
 
     def case(label, projection='shared-n', rank=2, activation='tanh',
              gate='q-total', outer='same-k', readout='species', message=0, joint=False):
-        top = check.out/(label+'.topology.mtp')
-        materialized = check.out/(label+'.materialized.mtp')
+        top = check.out/(label+'.topology.sus2')
+        materialized = check.out/(label+'.materialized.sus2')
         options = topology_args(gate=gate, outer=outer, readout=readout, message=message)
         options += ['--adaptive-radial-projection='+projection,
                     '--adaptive-radial-shared-n-rank='+str(rank),
@@ -100,13 +100,13 @@ def main():
             assert assignment(text, 'adaptive_radial_activation') == activation
             assert int(assignment(text, 'adaptive_radial_shared_n_rank')) == rank
             assert assignment(text, 'joint_readout_enabled') == ('true' if joint else 'false')
-        model = check.out/(label+'.mtp'); model.write_text(text)
-        roundtrip = check.out/(label+'.roundtrip.mtp')
+        model = check.out/(label+'.sus2'); model.write_text(text)
+        roundtrip = check.out/(label+'.roundtrip.sus2')
         check.run(label+'-roundtrip', 'roundtrip-model-dev', model, roundtrip)
         np.testing.assert_allclose(check.calc(label+'-efs', model),
             check.calc(label+'-roundtrip-efs', roundtrip), atol=2e-10, rtol=2e-10)
         if activation == 'tanh':
-            identity=check.out/(label+'.identity.mtp')
+            identity=check.out/(label+'.identity.sus2')
             identity.write_text(put(text,'adaptive_radial_activation','none'))
             difference=float(np.abs(check.calc(label+'-nonlinear',model)
                 -check.calc(label+'-identity',identity)).max())
@@ -164,7 +164,7 @@ def main():
         angular[backend]=parse_prediction(pred)
     np.testing.assert_allclose(angular['ry'],angular['rd-m0'],atol=2e-10,rtol=2e-10)
     check.record('tanh-RY-RD-parity',True)
-    zero=check.out/'zero-expansion.mtp'
+    zero=check.out/'zero-expansion.sus2'
     zero.write_text(put_numbers(target.read_text(),'adaptive_radial_amplitudes',
         np.zeros_like(numbers(target.read_text(),'adaptive_radial_amplitudes'))))
     zero_layout=check.layout('zero-expansion-layout',zero)
@@ -193,8 +193,8 @@ def main():
     for field in ('adaptive_radial_amplitude_optimizer_scales',):
         compact = re.sub(r'(?m)^'+field+r'\s*=.*\n?', '', compact)
         folded = re.sub(r'(?m)^'+field+r'\s*=.*\n?', '', folded)
-    cp=check.out/'compact-linear.mtp'; cp.write_text(compact)
-    fp=check.out/'folded-linear.mtp'; fp.write_text(folded)
+    cp=check.out/'compact-linear.sus2'; cp.write_text(compact)
+    fp=check.out/'folded-linear.sus2'; fp.write_text(folded)
     np.testing.assert_allclose(check.calc('compact-linear',cp),check.calc('folded-linear',fp),atol=2e-10,rtol=2e-10)
     check.record('exact-linear-fold', True)
 
@@ -211,11 +211,11 @@ def main():
         'bad_amplitude_count':put(original,'adaptive_radial_amplitude_count','27'),
     }
     for label, text in malformed.items():
-        path=check.out/(label+'.mtp'); path.write_text(text)
-        check.run(label,'roundtrip-model-dev',path,check.out/(label+'.unexpected.mtp'),fail=True)
+        path=check.out/(label+'.sus2'); path.write_text(text)
+        check.run(label,'roundtrip-model-dev',path,check.out/(label+'.unexpected.sus2'),fail=True)
     check.record('malformed-schema-rejected',list(malformed))
 
-    fresh = check.out/'fresh-tanh.mtp'; resumed=check.out/'resume-tanh.mtp'
+    fresh = check.out/'fresh-tanh.sus2'; resumed=check.out/'resume-tanh.sus2'
     train_opts=['--max-iter=0','--init-params=same','--init-random-seed=20260916',
                 '--energy-weight=1','--force-weight=.1','--stress-weight=.01',
                 '--std-weight=0','--stdd-weight=0']

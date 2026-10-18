@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 bin=${1:-./bin/mlp-sus2}
 old_bin=${OLD_BIN:-}
-tmp_dir=".codex_tmp/sh_superlinear_radial_mixing_gate_tangent_efs_fd"
+tmp_dir=".local_tmp/sh_superlinear_radial_mixing_gate_tangent_efs_fd"
 
 if [[ ! -x "$bin" ]]; then
   echo "missing mlp-sus2 binary: $bin" >&2
@@ -20,10 +20,10 @@ rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir"
 
 cfg="$tmp_dir/tiny_asym.cfg"
-seed_model="$tmp_dir/seed-random.mtp"
-inline_model="$tmp_dir/seed-topology.mtp"
-active_model="$tmp_dir/active-c.mtp"
-zero_model="$tmp_dir/zero-c.mtp"
+seed_model="$tmp_dir/seed-random.sus2"
+inline_model="$tmp_dir/seed-topology.sus2"
+active_model="$tmp_dir/active-c.sus2"
+zero_model="$tmp_dir/zero-c.sus2"
 
 cat > "$cfg" <<'CFG'
 BEGIN_CFG

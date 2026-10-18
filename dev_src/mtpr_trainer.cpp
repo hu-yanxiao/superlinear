@@ -2484,6 +2484,10 @@ void MTPR_trainer::random_sample(int prank, std::vector<Configuration>& training
 #ifndef ALGLIB
 void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapeev bfgs
 {
+	if (!curr_pot_name.empty())
+		sus2::ValidateModelOutputPath(curr_pot_name);
+	if (!best_pot_name.empty())
+		sus2::ValidateModelOutputPath(best_pot_name);
 
 	//cout << max_step_count << endl;
 
@@ -4865,8 +4869,8 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			if (bad_grad_active_idx >= 0 && prank == 0) {
 				const int bad_grad_full_idx = active_coeff_indices[bad_grad_active_idx];
 				const std::string dump_name = curr_pot_name.empty()
-					? "nonfinite-gradient-step-" + std::to_string(num_step) + ".mtp"
-					: curr_pot_name + ".nonfinite-gradient-step-" + std::to_string(num_step) + ".mtp";
+					? "nonfinite-gradient-step-" + std::to_string(num_step) + ".sus2"
+					: sus2::ModelOutputStem(curr_pot_name) + ".nonfinite-gradient-step-" + std::to_string(num_step) + ".sus2";
 				std::cerr << "[" << CurrentTimestamp() << "] "
 				          << optimizer_log_name << " non-finite gradient diagnostic"
 				          << " step=" << num_step

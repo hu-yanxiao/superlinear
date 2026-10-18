@@ -1,5 +1,7 @@
 # Release3 independent L-BFGS optimizer
 
+> Historical paths, branch labels, and evidence identifiers in this document are anonymized aliases, not current installation locations. Use the installation entry points in the repository README.
+
 Date: 2026-07-11
 
 ## Scope
@@ -95,7 +97,7 @@ historical BFGS/Wolfe defaults.
 ## 2026-07-11 server verification
 
 The validated MPI binary was built in
-`/work/phy-weigw/20260321_Test/SUS2-SH-release3-lbfgs-work-codex`.
+`<historical-path>`.
 Its SHA-256 is
 `7a4a91dc4480431c47c90d25036bd137d4da98853ea3a2e727c51cc55e60bf31`.
 

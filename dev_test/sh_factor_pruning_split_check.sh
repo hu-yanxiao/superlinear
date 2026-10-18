@@ -24,36 +24,36 @@ COMMON_OPTS=(
 )
 
 for mode in q-total legacy same-k; do
-  "$BIN" init-sh "$WORKDIR/$mode.mtp" "${COMMON_OPTS[@]}" \
+  "$BIN" init-sh "$WORKDIR/$mode.sus2" "${COMMON_OPTS[@]}" \
     --sh-factor-pruning="$mode" >/dev/null
 done
 
-"$BIN" init-sh "$WORKDIR/default.mtp" "${COMMON_OPTS[@]}" >/dev/null
-cmp "$WORKDIR/default.mtp" "$WORKDIR/q-total.mtp"
+"$BIN" init-sh "$WORKDIR/default.sus2" "${COMMON_OPTS[@]}" >/dev/null
+cmp "$WORKDIR/default.sus2" "$WORKDIR/q-total.sus2"
 
-"$BIN" init-sh "$WORKDIR/gate_q-total.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/gate_q-total.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate >/dev/null
-"$BIN" init-sh "$WORKDIR/gate_legacy.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/gate_legacy.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=legacy >/dev/null
-"$BIN" init-sh "$WORKDIR/gate_same-k.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/gate_same-k.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=same-k >/dev/null
-"$BIN" init-sh "$WORKDIR/multi.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/multi.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=legacy \
   --multi-layer-gate \
   --second-layer-gate-factor-pruning=same-k >/dev/null
-"$BIN" init-sh "$WORKDIR/multi_inherit.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/multi_inherit.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=legacy \
   --multi-layer-gate >/dev/null
-"$BIN" init-sh "$WORKDIR/multi_independent.mtp" "${COMMON_OPTS[@]}" \
+"$BIN" init-sh "$WORKDIR/multi_independent.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=q-total \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=same-k \
@@ -134,7 +134,7 @@ texts = {}
 spec_lists = {}
 spec_sets = {}
 for mode in ("q-total", "legacy", "same-k"):
-    texts[mode], spec_lists[mode] = model(root / f"{mode}.mtp")
+    texts[mode], spec_lists[mode] = model(root / f"{mode}.sus2")
     spec_sets[mode] = set(spec_lists[mode])
 
 if not spec_sets["same-k"] < spec_sets["legacy"] < spec_sets["q-total"]:
@@ -176,25 +176,25 @@ for graph_field in ("alpha_moments_count", "sh_product_count", "alpha_scalar_mom
     if not counts[0] <= counts[1] <= counts[2]:
         raise SystemExit(f"non-monotonic {graph_field}: {counts}")
 
-if selected(root / "gate_q-total.mtp", "two_layer_gate_scalar_indices") != spec_sets["q-total"]:
+if selected(root / "gate_q-total.sus2", "two_layer_gate_scalar_indices") != spec_sets["q-total"]:
     raise SystemExit("gate1 default did not inherit outer q-total")
-if selected(root / "gate_legacy.mtp", "two_layer_gate_scalar_indices") != spec_sets["legacy"]:
+if selected(root / "gate_legacy.sus2", "two_layer_gate_scalar_indices") != spec_sets["legacy"]:
     raise SystemExit("gate1 legacy indices do not match the direct legacy graph")
-if selected(root / "gate_same-k.mtp", "two_layer_gate_scalar_indices") != spec_sets["same-k"]:
+if selected(root / "gate_same-k.sus2", "two_layer_gate_scalar_indices") != spec_sets["same-k"]:
     raise SystemExit("gate1 same-k indices do not match the direct same-k graph")
-if selected(root / "multi.mtp", "two_layer_gate_scalar_indices") != spec_sets["legacy"]:
+if selected(root / "multi.sus2", "two_layer_gate_scalar_indices") != spec_sets["legacy"]:
     raise SystemExit("multi-gate gate1 legacy indices are incorrect")
-if selected(root / "multi.mtp", "second_layer_gate_scalar_indices") != spec_sets["same-k"]:
+if selected(root / "multi.sus2", "second_layer_gate_scalar_indices") != spec_sets["same-k"]:
     raise SystemExit("multi-gate gate2 same-k indices are incorrect")
-if selected(root / "multi_inherit.mtp", "second_layer_gate_scalar_indices") != spec_sets["legacy"]:
+if selected(root / "multi_inherit.sus2", "second_layer_gate_scalar_indices") != spec_sets["legacy"]:
     raise SystemExit("gate2 default did not inherit gate1 legacy pruning")
-if selected(root / "multi_independent.mtp", "two_layer_gate_scalar_indices") != spec_sets["same-k"]:
+if selected(root / "multi_independent.sus2", "two_layer_gate_scalar_indices") != spec_sets["same-k"]:
     raise SystemExit("independent multi-gate gate1 same-k indices are incorrect")
-if selected(root / "multi_independent.mtp", "second_layer_gate_scalar_indices") != spec_sets["q-total"]:
+if selected(root / "multi_independent.sus2", "second_layer_gate_scalar_indices") != spec_sets["q-total"]:
     raise SystemExit("gate2 could not independently select the outer q-total graph")
 
 closures = {
-    mode: gate_closure(root / f"gate_{mode}.mtp", "two_layer_gate_scalar_indices")
+    mode: gate_closure(root / f"gate_{mode}.sus2", "two_layer_gate_scalar_indices")
     for mode in ("same-k", "legacy", "q-total")
 }
 moment_counts = [closures[mode][0] for mode in ("same-k", "legacy", "q-total")]
@@ -218,7 +218,7 @@ print(
 )
 PY
 
-if "$BIN" init-sh "$WORKDIR/reject_gate_richer.mtp" "${COMMON_OPTS[@]}" \
+if "$BIN" init-sh "$WORKDIR/reject_gate_richer.sus2" "${COMMON_OPTS[@]}" \
   --sh-factor-pruning=legacy \
   --two-layer-gate \
   --two-layer-gate-factor-pruning=q-total >/dev/null 2>&1; then
@@ -226,13 +226,13 @@ if "$BIN" init-sh "$WORKDIR/reject_gate_richer.mtp" "${COMMON_OPTS[@]}" \
   exit 1
 fi
 
-if "$BIN" init-sh "$WORKDIR/reject_gate_without_gate.mtp" "${COMMON_OPTS[@]}" \
+if "$BIN" init-sh "$WORKDIR/reject_gate_without_gate.sus2" "${COMMON_OPTS[@]}" \
   --two-layer-gate-factor-pruning=legacy >/dev/null 2>&1; then
   echo "gate1 pruning without --two-layer-gate should be rejected" >&2
   exit 1
 fi
 
-if "$BIN" init-sh "$WORKDIR/reject_gate2_without_multi.mtp" "${COMMON_OPTS[@]}" \
+if "$BIN" init-sh "$WORKDIR/reject_gate2_without_multi.sus2" "${COMMON_OPTS[@]}" \
   --two-layer-gate \
   --second-layer-gate-factor-pruning=same-k >/dev/null 2>&1; then
   echo "gate2 pruning without --multi-layer-gate should be rejected" >&2

@@ -3,11 +3,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-tmp_dir=".codex_tmp/sh_two_layer_gate_readout_zero_gate_efs_fd"
+tmp_dir=".local_tmp/sh_two_layer_gate_readout_zero_gate_efs_fd"
 mkdir -p "$tmp_dir"
 
-init_model="$tmp_dir/readout_init.mtp"
-model="$tmp_dir/readout_zero_gate.mtp"
+init_model="$tmp_dir/readout_init.sus2"
+model="$tmp_dir/readout_zero_gate.sus2"
 cfg="$tmp_dir/one.cfg"
 rm -f "$init_model" "$model" "$cfg"
 awk '{print} /^END_CFG/{exit}' example/train.cfg > "$cfg"

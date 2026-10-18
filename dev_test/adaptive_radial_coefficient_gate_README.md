@@ -11,7 +11,7 @@ bash dev_test/adaptive_radial_coefficient_gate_check.sh ./bin/mlp-sus2
 ```
 
 The Python body creates its own asymmetric two-species fixture under
-`.codex_tmp/`, initializes models with `K`, `L`, and `LK` scaling maps, covers
+`.local_tmp/`, initializes models with `K`, `L`, and `LK` scaling maps, covers
 `O=1`, `O=2`, `O=K`, and `O=K` with gate-rank less than `K`, checks `O>K`
 rejection against raw `K`, and exercises decoupled gate scaling. Every accepted
 model is patched so base radial
@@ -41,10 +41,10 @@ Coverage in one invocation:
   these use a generated unit-center copy because the dev helper intentionally
   compares the raw linear-solver basis convention
 
-The fixture prints its evidence directory first. The evidence directory is created under `.codex_tmp` and is intentionally left in place for diagnosis.
+The fixture prints its evidence directory first. The evidence directory is created under `.local_tmp` and is intentionally left in place for diagnosis.
 
 The companion standalone source
-`codex_tests/adaptive_radial_benchmark.cpp` measures `CalcEFS`,
+`native_tests/adaptive_radial_benchmark.cpp` measures `CalcEFS`,
 full-cache `AccumulateEFSCombinationGrad`, and `CalcEFSComponents` on identical
 input configurations per process/rank. It also runs an in-process stale-state
 guard sequence across EFS, full-gradient, energy-only, coefficient/scaling/

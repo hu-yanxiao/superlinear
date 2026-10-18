@@ -72,7 +72,7 @@ train_common=(
 
 for mode in rank0 rank1 rank2 gate1_outer1 gate2_outer1 \
             gate1_outer2_body_default; do
-  init="$tmp_dir/$mode-init.mtp"
+  init="$tmp_dir/$mode-init.sus2"
   extra=()
   init_common=("${common[@]}")
   if [[ $mode == rank1 ]]; then
@@ -93,11 +93,11 @@ for mode in rank0 rank1 rank2 gate1_outer1 gate2_outer1 \
     done
   fi
   "$bin" init-sh "$init" "${init_common[@]}" "${extra[@]}" >/dev/null
-  materialized="$tmp_dir/$mode-materialized.mtp"
+  materialized="$tmp_dir/$mode-materialized.sus2"
   "$bin" roundtrip-model-dev "$init" "$materialized" >/dev/null
 
-  serial_model="$tmp_dir/$mode-serial.mtp"
-  mpi_model="$tmp_dir/$mode-mpi2.mtp"
+  serial_model="$tmp_dir/$mode-serial.sus2"
+  mpi_model="$tmp_dir/$mode-mpi2.sus2"
   "$bin" train "$materialized" "$cfg" "${train_common[@]}" \
     --trained-pot-name="$serial_model" >"$tmp_dir/$mode-serial.log" 2>&1
   timeout 300 mpirun -n 2 "$bin" train "$materialized" "$cfg" \
@@ -171,9 +171,9 @@ done
 # root's canonical physical model with independently unpacked non-root values.
 # Exercise that exact topology boundary: scaling_map=K, outer rank 2, gate rank
 # 4, and at least one non-initial TrainLinear refresh.
-periodic_init="$tmp_dir/scalingK-outer2-gate4-init.mtp"
-periodic_model="$tmp_dir/scalingK-outer2-gate4-materialized.mtp"
-periodic_trained="$tmp_dir/scalingK-outer2-gate4-trained.mtp"
+periodic_init="$tmp_dir/scalingK-outer2-gate4-init.sus2"
+periodic_model="$tmp_dir/scalingK-outer2-gate4-materialized.sus2"
+periodic_trained="$tmp_dir/scalingK-outer2-gate4-trained.sus2"
 periodic_trace="$tmp_dir/scalingK-outer2-gate4.csv"
 periodic_log="$tmp_dir/scalingK-outer2-gate4.log"
 periodic_common=()

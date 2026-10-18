@@ -18,9 +18,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / 'bin/mlp-sus2'
-CFG = ROOT / 'codex_tests/pure_w_regularization.cfg'
-(ROOT / '.codex_tmp').mkdir(exist_ok=True)
-TMP = Path(tempfile.mkdtemp(prefix='pure-w-balanced-cli-', dir=ROOT / '.codex_tmp'))
+CFG = ROOT / 'native_tests/pure_w_regularization.cfg'
+(ROOT / '.local_tmp').mkdir(exist_ok=True)
+TMP = Path(tempfile.mkdtemp(prefix='pure-w-balanced-cli-', dir=ROOT / '.local_tmp'))
 LAUNCHER = shlex.split(os.environ.get('SUS2_TEST_LAUNCHER', ''))
 ENV = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
            MLIP_CACHE_NEIGHBORHOODS='1', SUS2_SH_PRODUCT_ROWS='0',
@@ -81,7 +81,7 @@ def near(a, b, label, tolerance=2e-11):
 
 
 def seed(label, width=1, pure=True):
-    model = TMP / (label + '.mtp')
+    model = TMP / (label + '.sus2')
     run(label, 'init-sh', model, '--species-count=2', '--l-max=1', '--k-max=2',
         '--body-order=3', '--body-l-max=1,1,1,1', '--radial-basis-size=3',
         '--cutoff=5', '--scaling=1', '--scaling-map=LK', '--two-layer-gate',
@@ -92,10 +92,10 @@ def seed(label, width=1, pure=True):
 
 
 def train(label, model, balanced=True, steps=0, extra=(), failure=None, env=None):
-    output = TMP / (label + '.mtp')
+    output = TMP / (label + '.sus2')
     log = run(label, 'train', model, CFG, *COMMON, '--init-params=same',
               f'--max-iter={steps}', f'--trained-pot-name={output}',
-              f'--curr-pot-name={TMP / (label + ".current.mtp")}',
+              f'--curr-pot-name={TMP / (label + ".current.sus2")}',
               f'--optimizer-trace-file={TMP / (label + ".csv")}',
               *(['--pure-w-initialization=balanced', '--init-random-seed=123'] if balanced else []),
               *extra, failure=failure, env=env)
@@ -190,7 +190,7 @@ with (TMP / 'balanced-one-step.csv').open() as stream:
     losses = [float(row['total_loss']) for row in csv.DictReader(stream)]
 assert losses and all(math.isfinite(x) for x in losses), losses
 assert losses[-1] < start_loss - 1e-10 * max(1.0, abs(start_loss)), (start_loss, losses)
-initial = TMP / 'balanced-one-step' / 'ini.mtp'
+initial = TMP / 'balanced-one-step' / 'ini.sus2'
 near(values(base_src, 'two_layer_gate_radial_mixing_coeffs'),
      values(initial.read_text(), 'two_layer_gate_radial_mixing_coeffs'), 'max0/max1 initialized W', 0.0)
 assert global_scaling(trained.read_text()) == 1.0

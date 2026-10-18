@@ -78,10 +78,10 @@ scale would merely translate a, not improve that chart's local conditioning.
 After ordinary `init-sh` generates an incomplete pure-W seed:
 
 ```sh
-bin/mlp-sus2 train seed.mtp train.cfg \
+bin/mlp-sus2 train seed.sus2 train.cfg \
   --pure-w-initialization=balanced --init-random-seed=1 \
   --pure-w-init-target-rms=1 --max-iter=100 \
-  --curr-pot-name=current.mtp --trained-pot-name=trained.mtp
+  --curr-pot-name=current.sus2 --trained-pot-name=trained.sus2
 ```
 
 Balanced mode defaults to weight-norm and `efs-head` with BFGS. Explicit coordinate
@@ -97,7 +97,7 @@ is optional. These boundaries prevent a second initialization or inconsistent
 linear target. Standard resume does not repeat calibration, for example:
 
 ```sh
-bin/mlp-sus2 train current.mtp train.cfg --init-params=same \
+bin/mlp-sus2 train current.sus2 train.cfg --init-params=same \
   --radial-parameterization=weight-norm \
   --bfgs-coordinate-normalization=efs-gn --max-iter=100
 ```
@@ -111,7 +111,7 @@ On an MPI build, the two-active-rank regression is:
 
 ```sh
 python3 dev_test/sh_pure_w_mpi_initialization_check.py \
-  bin/mlp-sus2 seed.mtp codex_tests/pure_w_regularization.cfg
+  bin/mlp-sus2 seed.sus2 native_tests/pure_w_regularization.cfg
 ```
 
 Use an incomplete two-species pure-W seed with `Lmax=1`, `K=2`, `O=3`, gate

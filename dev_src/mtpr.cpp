@@ -14,6 +14,7 @@
 #include <limits>
 #include <sstream>
 #include "mtpr.h"
+#include "../src/model_path.h"
 
 #ifdef MLIP_INTEL_MKL
 #	include <mkl_cblas.h>
@@ -789,7 +790,7 @@ void ReadIntList(std::ifstream& ifs, std::vector<int>& values, int count)
 	for (int i = 0; i < count; ++i)
 		ifs >> values[i] >> comma;
 	if (ifs.fail())
-		ERROR("Error reading integer list from .mtp file");
+		ERROR("Error reading integer list from .sus2 file");
 }
 
 void ReadDoubleList(std::ifstream& ifs, std::vector<double>& values, int count)
@@ -800,7 +801,7 @@ void ReadDoubleList(std::ifstream& ifs, std::vector<double>& values, int count)
 	for (int i = 0; i < count; ++i)
 		ifs >> values[i] >> comma;
 	if (ifs.fail())
-		ERROR("Error reading floating-point list from .mtp file");
+		ERROR("Error reading floating-point list from .sus2 file");
 }
 
 void ReadDoubleListExact(std::ifstream& ifs,
@@ -4639,14 +4640,14 @@ void MLMTPR::Load(const string& filename)
 		}
 		if (tmpstr != "L") // optional 
 		{
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		}
 		ifs.ignore(2);
 		ifs >> L;
 		ifs >> tmpstr;
 		if (tmpstr != "scaling_map")
 		{
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		}
 			ifs.ignore(2);
 			ifs >> scaling_map;
@@ -4654,7 +4655,7 @@ void MLMTPR::Load(const string& filename)
 		L += 1;   // L=0,1 ...... L_max
 
 	if (tmpstr != "species_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> species_count;
 
@@ -4883,7 +4884,7 @@ void MLMTPR::Load(const string& filename)
 		}
 
 		if (tmpstr != "radial_basis_type")
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 		ifs.ignore(2);
 		ifs >> rbasis_type;
 	
@@ -4979,7 +4980,7 @@ void MLMTPR::Load(const string& filename)
 
 	ifs >> tmpstr;
 	if (tmpstr != "radial_funcs_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 		ifs >> radial_func_count;
 	mu_to_K.resize(radial_func_count);
@@ -5147,23 +5148,23 @@ void MLMTPR::Load(const string& filename)
 	}
 
 	if (tmpstr != "alpha_moments_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_moments_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_basic_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_index_basic_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_basic")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 
 	alpha_index_basic = new int[alpha_index_basic_count][4];
@@ -5196,7 +5197,7 @@ void MLMTPR::Load(const string& filename)
 		alpha_index_basic_.comp2[i]=alpha_index_basic[i][2];
 		alpha_index_basic_.comp3[i]=alpha_index_basic[i][3];
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 
 		if (alpha_index_basic[i][0]>radial_func_max)
 			radial_func_max = alpha_index_basic[i][0];
@@ -5214,15 +5215,15 @@ void MLMTPR::Load(const string& filename)
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_times_count")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_index_times_count;
 	if (ifs.fail())
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_index_times")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 
 	alpha_index_times = new int[alpha_index_times_count][4];
@@ -5243,7 +5244,7 @@ void MLMTPR::Load(const string& filename)
 		alpha_index_times_.comp2[i]=alpha_index_times[i][2];
 		alpha_index_times_.comp3[i]=alpha_index_times[i][3];
 		if (ifs.fail())
-			ERROR("Error reading .mtp file");
+			ERROR("Error reading .sus2 file");
 	}
 
 	ifs.ignore(1000, '\n');
@@ -5252,11 +5253,11 @@ void MLMTPR::Load(const string& filename)
 	if (is_sh_potential_ && tmpstr == "sh_product_count")
 		ReadSHProductGraph(ifs, tmpstr);
 	if (tmpstr != "alpha_scalar_moments")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
 	ifs >> alpha_scalar_moments;
 	if (alpha_scalar_moments < 0)
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 
 	alpha_moment_mapping = new int[alpha_scalar_moments];
 	if (alpha_moment_mapping == nullptr)
@@ -5264,14 +5265,14 @@ void MLMTPR::Load(const string& filename)
 
 	ifs >> tmpstr;
 	if (tmpstr != "alpha_moment_mapping")
-		ERROR("Error reading .mtp file");
+		ERROR("Error reading .sus2 file");
 	ifs.ignore(4);
 		for (int i = 0; i < alpha_scalar_moments; i++)
 		{
 			char tmpch = ' ';
 			ifs >> alpha_moment_mapping[i] >> tmpch;
 			if (ifs.fail())
-				ERROR("Error reading .mtp file");
+				ERROR("Error reading .sus2 file");
 		}
 		if (is_sh_potential_) {
 			for (int i = 0; i < alpha_scalar_moments; ++i) {
@@ -6872,6 +6873,7 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::Save(const string& filename)
 {
+	sus2::ValidateModelOutputPath(filename);
 	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
 		ValidateOuterModeConfiguration();
 		ValidateSHProductGraphDefinitions();
@@ -7537,6 +7539,7 @@ void MLMTPR::Save(const string& filename)
 
 void MLMTPR::Save_2(const string& filename)
 {
+	sus2::ValidateModelOutputPath(filename);
 	if (is_sh_potential_)
 		ERROR("SUS2-SH models should be saved with Save(), not Save_2().");
         ofstream ofs(filename);
