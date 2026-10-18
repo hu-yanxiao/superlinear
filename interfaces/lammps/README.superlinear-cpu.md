@@ -23,7 +23,15 @@ Adaptive or change elemental scaling.
 | Angular/body limits | Native L and per-body-order truncations; no historical benchmark-shape admission rule |
 | ZBL | Once-only pair contribution, including an outer cutoff larger than the ML cutoff |
 
-The native parser still determines which combinations are legal. Historical
+The native parser still determines which combinations are legal; these options
+are not an unrestricted Cartesian product. In particular, Pure-W requires a
+same-channel outer graph and shared readout. Tensor messages and joint readout
+belong to Adaptive; tensor message order is 0--2 and cannot exceed L. Shared-n
+rank must be between one and the radial basis count; full projection uses
+rank 1 for that option. Shared-n rank changes the internal
+projection layout, not by itself the communication width: the staged interface
+forwards complete radial coefficients and any enabled tensor components.
+Historical
 residual and multilayer gate architectures are explicitly rejected by the staged
 API; they are not silently approximated. Supporting a parameter dimension is
 not the same as having benchmarked every value: the regression matrix covers
@@ -149,3 +157,70 @@ with direct/table compared separately; finite differences under strain establish
 the pressure sign. MPI checks must include atoms crossing domain boundaries,
 multiple decompositions, triclinic cells, and dynamics/NPT. A successful build
 alone is not evidence that those numerical checks passed.
+
+## Qualification snapshot (2026-10-18)
+
+The implementation at commit `392cb02` passed 320 nonzero synthetic combination
+cases with simulated domain splits and 18 feature-ablation checks. These are
+finite representative tests, not all possible parameter combinations. The main
+synthetic shape uses K3/O3 and radial-basis size 3; additional cases cover L1--4,
+shared-n ranks 1--3, tensor/joint branches, independent coordinate warps and a
+Laguerre basis. The independent native radial-table test covers 36 basis classes,
+including explicit direct fallback for tables that cannot be qualified.
+
+The Intel AVX2 CPU candidate then passed two actual MPI suites on 1/2/4 ranks:
+170 positive checks and 12 negative checks, with zero failures. The two suites
+contain 20 distinct synthetic model combinations; the positive-check count also
+includes repeated rank/mode combinations, periodic self-images, migration, short
+NVE runs and 12 checks of the frozen FeCN6 model with original/reversed type
+mapping. It is not a count of 170 different model architectures. The supplementary
+suite explicitly covers all four inner/outer graph combinations with full-U,
+tanh activation and source-element amplitude, plus shared-n ranks 1--3 and tensor
+messages without joint readout. Negative checks cover hybrid/excluded-neighbor
+rejection and prompt rank-local failure without a communication deadlock.
+
+Qualification used `tabstep=0.001`, direct tolerance `1e-9` and table tolerance
+`2e-6` (absolute-plus-relative comparisons). The largest absolute force/virial
+differences in those actual MPI suites were about `9.1e-12 eV/Angstrom` /
+`7.8e-10 eV` for direct, and `1.5e-7 eV/Angstrom` / `4.0e-7 eV` for table.
+Tables remain an explicit approximation, not a change to the model coefficients.
+
+The qualified binary SHA256 is
+`d36f08d62eee06513b3c27768809b56b4a3d29317dbd06bc30a878088e2d98a8`.
+The frozen FeCN6 model SHA256 is
+`b7c488b4e1899054234b063749aded0274da049c0ec7e35072101b4dd538a6f4`.
+Later new model combinations still require their own qualification; these results
+do not claim exhaustive MPI coverage of every legal dimension, radial basis or
+Adaptive/ZBL combination.
+
+### Initial CPU NPT throughput
+
+The frozen 1736-atom K4FeCN6_water geometry (Legacy L4/K8/R3/O8) completed all
+16 short NPT measurements on one dual-socket Intel Xeon Platinum 8457C node:
+48 physical cores per socket, 96 total, no SMT. Intel MPI used one thread per
+rank, native double precision and an AVX2 build. Each ABBA sequence started from
+the same geometry/velocity seed at 330 K and 1 bar, with 0.5 fs steps, 20 warm-up
+steps and 200 measured steps. Table construction and initialization were excluded
+from the measured integration time.
+
+| MPI ranks | Direct atom.step/s | Table atom.step/s | Direct ns/day |
+| ---: | ---: | ---: | ---: |
+| 12 | 4,979 | 4,777 | 0.124 |
+| 24 | 7,856 | 7,516 | 0.195 |
+| 48 | 11,429 | 11,006 | 0.284 |
+| 96 | 12,688 | 11,290 | 0.316 |
+
+Values are the median of two measurements per mode/rank, not a long-trajectory
+performance guarantee. All runs reached the requested integration step with
+finite thermodynamic output; each measured window is only 0.1 ps and does not
+establish 100 ps stability. The table is slower for this model under the tested
+settings, so direct remains the default. The 64 MiB per-rank table budget can
+produce documented memory/domain fallbacks to the analytic implementation.
+
+This is a correctness-qualified initial CPU baseline, not a completed CPU
+performance optimization. Some Legacy graph/projection work still processes
+ghost rows whose neighborhoods are empty. Separating allocated storage size
+from owned-center work is a prospective optimization; its whole-program speedup
+requires profiling and requalification, and cannot be inferred from the ratio
+of ghost to owned atoms. GPU throughput numbers are not directly comparable to
+this FP64 CPU run.
