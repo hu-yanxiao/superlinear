@@ -1,0 +1,23 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pysuperlinear"
+version = "0.1.0"
+description = "In-process superlinear C++ energy, force and stress calculator for ASE"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["ase>=3.23", "numpy>=1.23"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+phonon = ["phonopy>=2.45,<3", "phono3py>=3.21,<4", "h5py>=3.10", "matplotlib>=3.7"]
+
+[tool.scikit-build]
+wheel.packages = ["pysuperlinear"]
+cmake.version = ">=3.18"
+build-dir = "build/{wheel_tag}"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

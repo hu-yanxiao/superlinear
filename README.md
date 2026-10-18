@@ -171,3 +171,15 @@ Remove the entire `model` group, add
 generated automatically. Keep the matching training profile: `native-static-v1` or `native-effect-v1`.
 Then run the same training command.
 This restores model parameters; BFGS optimizer history starts fresh.
+
+## Python / ASE / phonons
+
+```bash
+python -m pip install './interfaces/python[phonon]'
+```
+
+The in-process ASE calculator supports static, coordination-effect and Adaptive
+models, including element-specific readout. [Python examples](interfaces/python/README.md)
+include phonopy band structures and phono3py lattice thermal conductivity.
+Run thermal-conductivity calculations on compute nodes; example supercells and
+meshes are starting points, not converged predictions.
