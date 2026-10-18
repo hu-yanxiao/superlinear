@@ -296,6 +296,10 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
     const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
     const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
     const bool tangent=direction!=nullptr;
+    // Keep the vector object valid on the value-only path as well. Some IPO
+    // builds hoist its data-pointer load above the tangent branch.
+    const std::vector<Vector3> empty_direction;
+    const auto* safe_direction=tangent ? direction : &empty_direction;
     const bool rd_m0=RDM0Angular::Enabled();
     const std::vector<double>& angular_values=rd_m0
         ? two_layer_edge_rd_m0_values_cache_ : two_layer_edge_sh_values_cache_;
@@ -326,7 +330,7 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
             && !ex.tensor_message_tangents.empty())
             ? ex.tensor_message_tangents.data()+static_cast<size_t>(nbh.inds[j])*TC
             : nullptr;
-        const double wr=tangent ? ((*direction)[j][0]*nbh.vecs[j][0]+(*direction)[j][1]*nbh.vecs[j][1]+(*direction)[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
+        const double wr=tangent ? ((*safe_direction)[j][0]*nbh.vecs[j][0]+(*safe_direction)[j][1]*nbh.vecs[j][1]+(*safe_direction)[j][2]*nbh.vecs[j][2])/nbh.dists[j] : 0.0;
         for (int l=0; l<=sh_l_max_; ++l) {
             const double pole=(rd_m0 && tensor_enabled && l>=1 && l<=Lmsg)
                 ? RDM0Angular::PoleValue(l) : 1.0;
@@ -364,7 +368,7 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                     ex.values[node]+=species*value*angular;
                     if (tangent) {
                         double yt=angular_t;
-                        for (int a=0; a<3; ++a) yt+=dy[3*h+a]*(*direction)[j][a];
+                        for (int a=0; a<3; ++a) yt+=dy[3*h+a]*(*safe_direction)[j][a];
                         ex.tangents[node]+=species*(value_t*angular+value*yt);
                     }
                 }

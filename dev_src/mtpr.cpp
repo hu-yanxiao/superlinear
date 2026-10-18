@@ -6559,6 +6559,25 @@ void MLMTPR::CalcDescriptors(Configuration& cfg, ofstream& ofs)
 	ofs.precision(15);
 	Neighborhoods neighborhoods(cfg,p_RadialBasis->max_dist);
 	PrepareEvalCaches();
+	if (OuterUsesAdaptiveRadialCoefficients()) {
+		// Use the same configuration-level coefficient preparation and physical
+		// outer forward pass as energy evaluation, not the legacy basis path.
+		PrepareAdaptiveRadial(neighborhoods, false, false);
+		AdaptiveRadialExecution& ex = adaptive_radial_execution_;
+		ofs << "#start  " << cfg.size() << endl;
+		for (int ind = 0; ind < cfg.size(); ++ind) {
+			const Neighborhood& nbh = neighborhoods[ind];
+			ForwardAdaptiveRadialSite(nbh, ind, nullptr);
+			ofs << nbh.my_type;
+			for (int q = 0; q < alpha_scalar_moments; ++q)
+				ofs << '\t' << ex.values[alpha_moment_mapping[q]];
+			if (JointReadoutEnabled())
+				for (int q = 0; q < JointReadoutScalarCount(); ++q)
+					ofs << '\t' << ex.joint_values[joint_readout_graph_.scalar_mapping[q]];
+			ofs << endl;
+		}
+		return;
+	}
 	const bool use_two_layer_gate = RequiresTwoLayerGateEvaluation();
 	if (!use_two_layer_gate) {
 		active_two_layer_gate_values_ = nullptr;

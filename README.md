@@ -152,6 +152,18 @@ runs/<your-run>/
 Replace `<your-run>` with the generated directory printed in the log. Keep
 prediction output separate from the original labels.
 
+### Atomic descriptors
+
+```bash
+./bin/mlp-sus2 calc-descriptors runs/<your-run>/final.sus2 data/val.cfg descriptors.txt
+```
+
+Supports shared and `per-element` readout. Each structure starts with `#start N`,
+followed by one row per atom: CFG type, then raw outer scalar descriptors.
+Optional gate/joint readout scalars are appended. Final readout weights are not
+applied, and features are not expanded into per-element blocks; the type column
+identifies the element head. The output is descriptor text, not a CFG file.
+
 ## Continue training
 
 Remove the entire `model` group, add

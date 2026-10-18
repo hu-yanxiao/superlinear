@@ -2942,9 +2942,11 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("calc-descriptors",
 		"calculates descriptors in each neighborhood of configurations",
-		"mlp-sus2 calc-descriptors pot.sus2 in.cfg out.cfg:\n"
-		"calculates descriptors in each neighborhood of configurations from in.cfg and\n"
-		"writes configurations with calculated descriptors to out.cfg\n"
+		"mlp-sus2 calc-descriptors pot.sus2 in.cfg descriptors.txt:\n"
+		"writes raw per-atom scalar descriptors, grouped by #start N.\n"
+		"Each row contains CFG type, outer scalars, then optional gate/joint readout scalars.\n"
+		"Supports shared and per-element readout; final readout weights are not applied.\n"
+		"The output is descriptor text, not a CFG file.\n"
 		) {
 
 		if (args.size() != 3) {
