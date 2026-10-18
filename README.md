@@ -31,6 +31,11 @@ cp examples/train-static.yaml train.yaml
 
 ### Training acceleration
 
+Native `coordination-effect` parameter gradients use exact channelwise
+contractions automatically on supported single-layer, shared-radial paths.
+No enable flag is needed. Set `SUS2_SH_EFFECT_PARAM_FAST=0` to compare with
+the reference implementation. The model and loss are unchanged.
+
 These optional execution switches are **off by default**. Add them before the
 training command, or before `mpirun` in an LSF script:
 
@@ -46,10 +51,6 @@ cache takes precedence over `SITE_DER_CACHE`; it does not add another cache.
 Leave `MLIP_CACHE_NEIGHBORHOODS` unset for automatic memory-aware neighbor
 caching. Two-layer edge/tanh caches and MKL linear-solver fast paths are already
 enabled when applicable; they need no extra enable flag.
-
-Native `coordination-effect` parameter gradients automatically use exact
-channelwise contractions where applicable. Set `SUS2_SH_EFFECT_PARAM_FAST=0`
-to use the reference implementation.
 
 ### Static radial — L3/K4/O2
 
@@ -76,7 +77,7 @@ model:
 training:
   profile: native-static-v1
   optimizer: bfgs
-  iterations: 100
+  iterations: 100                  # Maximum BFGS steps; may converge earlier
 loss:
   energy_weight: 1
   force_weight: 0.01
@@ -116,7 +117,7 @@ model:
 training:
   profile: native-effect-v1
   optimizer: bfgs
-  iterations: 100
+  iterations: 100                  # Maximum BFGS steps; may converge earlier
 loss:
   energy_weight: 1
   force_weight: 0.01
@@ -157,3 +158,4 @@ Remove the entire `model` group, add
 `data.model: runs/<your-run>/current.sus2`. A new continuation directory is
 generated automatically. Keep the matching training profile: `native-static-v1` or `native-effect-v1`.
 Then run the same training command.
+This restores model parameters; BFGS optimizer history starts fresh.

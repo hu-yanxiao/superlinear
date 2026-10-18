@@ -19,7 +19,7 @@ model:
 training:
   profile: native-static-v1
   optimizer: bfgs
-  iterations: 100
+  iterations: 100                  # Maximum BFGS steps; may converge earlier
 loss:
   energy_weight: 1
   force_weight: 0.01
