@@ -145,4 +145,3 @@ Then run the same training command.
 - `iterations` is the BFGS iteration limit, **not epochs**.
 - `--check-config` checks options only; it does not read data or checkpoints.
 - The native YAML trainer runs on CPU in FP64. No Adam/GPU settings are implied.
-- [Full YAML reference](docs/grouped-native-input.md) · [License](LICENSE)
