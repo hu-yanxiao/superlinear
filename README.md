@@ -153,13 +153,3 @@ Remove the entire `model` group, add
 `data.model: runs/<your-run>/current.sus2`. A new continuation directory is
 generated automatically. Keep the matching training profile: `native-static-v1` or `native-effect-v1`.
 Then run the same training command.
-
-## Notes
-
-- Paths are relative to the YAML file. Existing output files are not overwritten.
-- Optional `output.directory` overrides the automatically generated directory.
-- `species_count` is the number of CFG types. Alternatively, use
-  `elements: [H, O]` in CFG type order.
-- `iterations` is the BFGS iteration limit, **not epochs**.
-- `--check-config` checks options only; it does not read data or checkpoints.
-- The native YAML trainer runs on CPU in FP64. No Adam/GPU settings are implied.
