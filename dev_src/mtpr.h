@@ -52,6 +52,19 @@ struct SHScalarInfo {
 class MLMTPR : public AnyLocalMLIP
 {
 protected:
+	// Domain inference scratch. Atom storage remains nall so native edge
+	// indices and cached source projections can refer directly to ghosts.
+	int distributed_owned_count_ = 0;
+	int distributed_atom_count_ = 0;
+	int distributed_stage_ = 0;
+	bool distributed_has_filtered_neighborhoods_ = false;
+	Neighborhoods distributed_ml_neighborhoods_;
+	const Neighborhoods& DistributedMLNeighborhoods(const Neighborhoods& neighborhoods) const;
+	void EvaluateAdaptiveRadialSites(Configuration& cfg,
+	                                const Neighborhoods& neighborhoods,
+	                                int owned_count, bool need_derivatives);
+	void ValidateDistributedDomain(const Configuration& cfg,
+	                               const Neighborhoods& neighborhoods) const;
 	void MemAlloc();
 	void ResizeLinearComponentStorage();
 
@@ -798,6 +811,27 @@ public:
 		std::vector<double>& out);
 		void CalcEFS(Configuration& cfg) override;
 		void CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods) override;
+		// Native owned/ghost inference. Neighborhoods have nall rows, with
+		// complete one-cutoff lists only for [0,nowned), and empty ghost rows.
+		// Begin -> forward copy -> Outer -> reverse add -> Finish. The caller
+		// subsequently reverse-communicates ordinary ghost force contributions.
+		// Each model instance holds one in-flight domain evaluation.
+		void BeginDistributedEFS(Configuration& cfg, const Neighborhoods& neighborhoods,
+		                         int nowned);
+		void ConfigureDistributedRadialTable(RadialTableMode mode,
+		                                     double spacing=0.001,
+		                                     size_t max_bytes=64*1024*1024);
+		RadialTableStats DistributedRadialTableStats() const;
+		void AbortDistributedEFS();
+		int DistributedForwardWidth() const;
+		int DistributedReverseWidth() const;
+		void PackDistributedForward(int atom, double* buffer) const;
+		void UnpackDistributedForward(int atom, const double* buffer);
+		void EvaluateDistributedOuterEFS(Configuration& cfg,
+		                                 const Neighborhoods& neighborhoods);
+		void PackDistributedReverse(int atom, double* buffer) const;
+		void AddDistributedReverse(int atom, const double* buffer);
+		void FinishDistributedEFS(Configuration& cfg, const Neighborhoods& neighborhoods);
 		void CalcEnergyAndSiteEnergies(Configuration& cfg) override;
 		void CalcEnergyAndSiteEnergies(Configuration& cfg, const Neighborhoods& neighborhoods) override;
 		void CalcEnergyAndSiteEnergiesWithSHBodyOrderContributions(

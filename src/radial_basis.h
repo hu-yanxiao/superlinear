@@ -10,9 +10,44 @@
 #define MLIP_RADIAL_BASIS_H
 
 #include "mlip.h"
+#include <cstdint>
+#include <map>
+
+enum class RadialTableMode { Direct, Table, Auto };
+
+struct RadialTableStats {
+	std::size_t tables = 0, bytes = 0, hits = 0;
+	std::size_t direct_fallbacks = 0, domain_fallbacks = 0;
+	std::size_t memory_fallbacks = 0, invalid_fallbacks = 0;
+};
 
 class AnyRadialBasis
-{	
+{
+private:
+	struct TableKey {
+		std::uint64_t slope, shift;
+		int channel;
+		bool operator<(const TableKey& other) const;
+	};
+	struct HermiteTable {
+		double lower, upper, step;
+		std::size_t intervals;
+		// Each knot stores [rb_size values, rb_size r-derivatives].
+		std::vector<double> knots;
+	};
+	RadialTableMode inference_table_mode_ = RadialTableMode::Direct;
+	bool inference_table_active_ = false, inference_table_building_ = false;
+	double inference_table_spacing_ = 0.001;
+	std::size_t inference_table_max_bytes_ = 64 * 1024 * 1024;
+	std::map<TableKey, HermiteTable> inference_tables_;
+	RadialTableStats inference_table_stats_;
+	std::uint64_t table_state_min_ = 0, table_state_max_ = 0, table_state_scaling_ = 0;
+	int table_state_size_ = -1, table_state_cutoff_p_ = -1;
+	std::string table_state_cutoff_;
+	void ClearInferenceRadialTables();
+protected:
+	// Inference only: parameter/mixed derivative blocks are unspecified on hits.
+	bool TryInferenceRadialTable(double r, double scal, double s, int k);
 public:
 	int rb_size;
 
@@ -35,6 +70,17 @@ public:
 	void WriteRadialBasis(std::ofstream& ofs);
 	void SetRadialCutoff(const std::string& cutoff_type, int cutoff_p);
 	void CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const;
+	// Both Table and Auto lazily try a table and explicitly fall back to direct
+	// evaluation outside [max(0,min_dist),max_dist], on non-finite samples or on
+	// the memory limit. min_dist is not a physical lower cutoff: smaller r stays
+	// direct. The cap bounds knot storage, not allocator/map overhead.
+	void ConfigureInferenceRadialTable(RadialTableMode mode,
+		double spacing = 0.001, std::size_t max_bytes = 64 * 1024 * 1024);
+	// A model must activate this only around inference, and restore it on exit.
+	// Disabled by default; training and parameter derivatives remain direct.
+	bool SetInferenceRadialTableActive(bool active);
+	bool IsInferenceRadialTableActive() const { return inference_table_active_; }
+	RadialTableStats GetInferenceRadialTableStats() const;
 
 	AnyRadialBasis(double _min_dist, double _max_dist, int _size);;
 	AnyRadialBasis(std::ifstream& ifs);

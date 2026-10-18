@@ -9,10 +9,217 @@
 #include "radial_basis.h"
 
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
+#include <limits>
+#include <stdexcept>
 
 using namespace std;
+
+namespace {
+std::uint64_t RadialDoubleBits(double value)
+{
+	std::uint64_t bits;
+	static_assert(sizeof(bits) == sizeof(value), "64-bit doubles required");
+	std::memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+}
+
+bool AnyRadialBasis::TableKey::operator<(const TableKey& other) const
+{
+	if (slope != other.slope) return slope < other.slope;
+	if (shift != other.shift) return shift < other.shift;
+	return channel < other.channel;
+}
+
+void AnyRadialBasis::ClearInferenceRadialTables()
+{
+	inference_tables_.clear();
+	inference_table_stats_.tables = 0;
+	inference_table_stats_.bytes = 0;
+	table_state_size_ = -1;
+}
+
+void AnyRadialBasis::ConfigureInferenceRadialTable(RadialTableMode mode,
+	double spacing, std::size_t max_bytes)
+{
+	if (mode != RadialTableMode::Direct && mode != RadialTableMode::Table &&
+		mode != RadialTableMode::Auto)
+		throw std::invalid_argument("Unknown inference radial table mode");
+	if (!(spacing > 0.0) || !std::isfinite(spacing))
+		throw std::invalid_argument("Radial table spacing must be finite and positive");
+	ClearInferenceRadialTables();
+	inference_table_stats_ = RadialTableStats();
+	inference_table_mode_ = mode;
+	inference_table_spacing_ = spacing;
+	inference_table_max_bytes_ = max_bytes;
+}
+
+bool AnyRadialBasis::SetInferenceRadialTableActive(bool active)
+{
+	const bool previous = inference_table_active_;
+	inference_table_active_ = active;
+	return previous;
+}
+
+RadialTableStats AnyRadialBasis::GetInferenceRadialTableStats() const
+{
+	return inference_table_stats_;
+}
+
+bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, int k)
+{
+	if (!inference_table_active_ || inference_table_building_ ||
+		inference_table_mode_ == RadialTableMode::Direct) return false;
+	// Each cache belongs to one concrete radial basis instance, so distinct
+	// basis types cannot alias. All mutable base state is checked separately.
+	if (table_state_size_ != rb_size || table_state_min_ != RadialDoubleBits(min_dist) ||
+		table_state_max_ != RadialDoubleBits(max_dist) ||
+		table_state_scaling_ != RadialDoubleBits(scaling) ||
+		table_state_cutoff_ != radial_cutoff_type || table_state_cutoff_p_ != radial_cutoff_p) {
+		ClearInferenceRadialTables();
+		table_state_size_ = rb_size;
+		table_state_min_ = RadialDoubleBits(min_dist);
+		table_state_max_ = RadialDoubleBits(max_dist);
+		table_state_scaling_ = RadialDoubleBits(scaling);
+		table_state_cutoff_ = radial_cutoff_type;
+		table_state_cutoff_p_ = radial_cutoff_p;
+	}
+	const double lower = std::max(0.0, min_dist);
+	if (!std::isfinite(r) || !std::isfinite(min_dist) || !std::isfinite(max_dist) ||
+		r < lower || r > max_dist || !(max_dist > lower)) {
+		++inference_table_stats_.domain_fallbacks;
+		++inference_table_stats_.direct_fallbacks;
+		return false;
+	}
+	if (rb_size <= 0 || !std::isfinite(scal) || !std::isfinite(s) || !std::isfinite(scaling)) {
+		++inference_table_stats_.invalid_fallbacks;
+		++inference_table_stats_.direct_fallbacks;
+		return false;
+	}
+	const TableKey key = {RadialDoubleBits(scal), RadialDoubleBits(s), k};
+	auto found = inference_tables_.find(key);
+	// Empty entries memoize a rejected direct basis, avoiding a table rebuild
+	// for every neighbor. Their metadata is outside the knot-storage cap.
+	if (found != inference_tables_.end() && found->second.knots.empty()) {
+		++inference_table_stats_.invalid_fallbacks;
+		++inference_table_stats_.direct_fallbacks;
+		return false;
+	}
+	if (found == inference_tables_.end()) {
+		const double count = std::ceil((max_dist - lower) / inference_table_spacing_);
+		const std::size_t width = 2 * static_cast<std::size_t>(rb_size);
+		const std::size_t available = inference_table_max_bytes_ - inference_table_stats_.bytes;
+		// Check in floating point before converting or multiplying, including
+		// absurdly small requested spacing. There is no grid-size clamp.
+		if (!std::isfinite(count) || count < 1.0 ||
+			count >= static_cast<double>(std::numeric_limits<std::size_t>::max()) ||
+			count + 1.0 > static_cast<double>(available / sizeof(double) / width)) {
+			++inference_table_stats_.memory_fallbacks;
+			++inference_table_stats_.direct_fallbacks;
+			return false;
+		}
+		HermiteTable table;
+		table.lower = lower;
+		table.upper = max_dist;
+		table.intervals = static_cast<std::size_t>(count);
+		if (table.intervals >= available / sizeof(double) / width) {
+			++inference_table_stats_.memory_fallbacks;
+			++inference_table_stats_.direct_fallbacks;
+			return false;
+		}
+		table.step = (max_dist - lower) / static_cast<double>(table.intervals);
+		const std::size_t storage = (table.intervals + 1) * width;
+		if (storage > table.knots.max_size()) {
+			++inference_table_stats_.memory_fallbacks;
+			++inference_table_stats_.direct_fallbacks;
+			return false;
+		}
+		// On failure the caller continues its direct evaluator, refreshing the
+		// scratch output. Bypass all interceptors while sampling direct knots.
+		struct BuildGuard {
+			bool& building;
+			explicit BuildGuard(bool& flag) : building(flag) { building = true; }
+			~BuildGuard() { building = false; }
+		} guard(inference_table_building_);
+		try {
+			auto reject_table = [&]() {
+				inference_tables_.emplace(key, HermiteTable());
+				++inference_table_stats_.invalid_fallbacks;
+				++inference_table_stats_.direct_fallbacks;
+			};
+			table.knots.resize(storage);
+			for (std::size_t node = 0; node <= table.intervals; ++node) {
+				const double node_r = node == table.intervals ? table.upper :
+					table.lower + node * table.step;
+				RB_CalcRDerOnly(node_r, scal, s, k);
+				for (int b = 0; b < rb_size; ++b) {
+					if (!std::isfinite(rb_vals[b]) || !std::isfinite(rb_ders[b])) {
+						reject_table();
+						return false;
+					}
+					table.knots[node * width + b] = rb_vals[b];
+					table.knots[node * width + rb_size + b] = rb_ders[b];
+				}
+			}
+			// Some historical radial bases have inconsistent value/derivative
+			// formulas; steep transforms may also be unresolved at the requested
+			// grid. Qualify every interval midpoint against the direct evaluator,
+			// then keep such cases direct. These local checks are safeguards, not
+			// an accuracy guarantee for arbitrary model coefficients.
+			for (std::size_t interval = 0; interval < table.intervals; ++interval) {
+				RB_CalcRDerOnly(table.lower + (interval + 0.5) * table.step, scal, s, k);
+				const double* left = table.knots.data() + interval * width;
+				const double* right = left + width;
+				for (int b = 0; b < rb_size; ++b) {
+					const double mid_value = 0.5*(left[b]+right[b]) +
+						0.125*table.step*(left[rb_size+b]-right[rb_size+b]);
+					const double mid_der = 1.5*(right[b]-left[b])/table.step -
+						0.25*(left[rb_size+b]+right[rb_size+b]);
+					if (!std::isfinite(rb_vals[b]) || !std::isfinite(rb_ders[b]) ||
+						std::abs(mid_value-rb_vals[b]) > 1e-7*(1+std::abs(rb_vals[b])) ||
+						std::abs(mid_der-rb_ders[b]) > 1e-4*(1+std::abs(rb_ders[b]))) {
+						reject_table();
+						return false;
+					}
+				}
+			}
+			found = inference_tables_.emplace(key, std::move(table)).first;
+		} catch (const std::bad_alloc&) {
+			++inference_table_stats_.memory_fallbacks;
+			++inference_table_stats_.direct_fallbacks;
+			return false;
+		}
+		inference_table_stats_.bytes += storage * sizeof(double);
+		++inference_table_stats_.tables;
+	}
+	const HermiteTable& table = found->second;
+	// The right endpoint belongs to the final interval, evaluated at t=1.
+	const double cell = (r - table.lower) / table.step;
+	const std::size_t interval = std::min(static_cast<std::size_t>(cell), table.intervals - 1);
+	const double left_r = table.lower + interval * table.step;
+	const double t = r == table.upper ? 1.0 : (r - left_r) / table.step;
+	const double t2 = t * t, t3 = t2 * t;
+	const double h00 = 2*t3 - 3*t2 + 1, h10 = t3 - 2*t2 + t;
+	const double h01 = -2*t3 + 3*t2, h11 = t3 - t2;
+	const double d00 = (6*t2 - 6*t) / table.step;
+	const double d10 = 3*t2 - 4*t + 1;
+	const double d01 = (-6*t2 + 6*t) / table.step, d11 = 3*t2 - 2*t;
+	const std::size_t width = 2 * static_cast<std::size_t>(rb_size);
+	const double* left = table.knots.data() + interval * width;
+	const double* right = left + width;
+	for (int b = 0; b < rb_size; ++b) {
+		const double y0 = left[b], y1 = right[b];
+		const double m0 = left[rb_size + b], m1 = right[rb_size + b];
+		rb_vals[b] = h00*y0 + h10*table.step*m0 + h01*y1 + h11*table.step*m1;
+		rb_ders[b] = d00*y0 + d10*m0 + d01*y1 + d11*m1;
+	}
+	++inference_table_stats_.hits;
+	return true;
+}
 
 void AnyRadialBasis::SetRadialCutoff(const std::string& cutoff_type, int cutoff_p)
 {
@@ -227,11 +434,13 @@ void ChebyshevCoordinateOnly(AnyRadialBasis& basis, double r, double scal, doubl
 
 void RadialBasis_Chebyshev_sss::RB_CalcRDerOnly(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
     ChebyshevCoordinateOnly<false>(*this, r, scal, s);
 }
 
 void RadialBasis_Chebyshev_sss_rational::RB_CalcRDerOnly(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
     ChebyshevCoordinateOnly<true>(*this, r, scal, s);
 }
 
@@ -819,6 +1028,7 @@ RadialBasis_Shapeev::RadialBasis_Shapeev(std::ifstream & ifs)
 
 void RadialBasis_Shapeev::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
 	if (r < min_dist) {
 		Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -842,6 +1052,7 @@ void RadialBasis_Shapeev::RB_Calc(double r, double scal, double s, int k)
 
 void RadialBasis_Chebyshev_ssss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -942,6 +1153,7 @@ rb_ders[1 +shift +rb_size * 4] = scaling * (_mult_s_r * cutoff_f + 2 * _mult_s *
 
 void RadialBasis_Chebyshev_sssss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1076,6 +1288,7 @@ rb_ders[1 +shift_ +rb_size * 4] = scaling * (__mult_s_r * cutoff_f + 2 * __mult_
 
 void RadialBasis_Bessel_sss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1132,6 +1345,7 @@ rb_ders[i+rb_size * 4] = scaling * (bessel_ddr* mult*mult_s * cutoff_f +  bessel
 
 void RadialBasis_Bessel_sssw::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1189,6 +1403,7 @@ rb_ders[i+rb_size * 4] = scaling * (bessel_ddr* mult*mult_s * cutoff_f +  bessel
 
 void RadialBasis_Chebyshev_Tri::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1258,6 +1473,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Chebyshev_sss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1310,6 +1526,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + mult_s * cutoff_der)
 
 void RadialBasis_Chebyshev_sss::RB_CalcValsOnly(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1343,6 +1560,7 @@ rb_vals[1] = scaling * (ksi * cutoff_f);
 
 void RadialBasis_Chebyshev_sss_rational::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1394,6 +1612,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + mult_s * cutoff_der)
 
 void RadialBasis_Chebyshev_sss_rational::RB_CalcValsOnly(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1430,6 +1649,7 @@ const std::vector<double> RadialBasis_Chebyshev_sssw::arr =
     {1.0, 5.0/7.0, 9.0/7.0, 3.0/7.0, 11.0/7.0, 13.0/7.0};
 void RadialBasis_Chebyshev_sssw::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1505,6 +1725,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Chebyshev_tanhexp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1569,6 +1790,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Chebyshev_tanhexp_w::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1637,6 +1859,7 @@ rb_ders[1 + rb_size * 4] = scaling * ((mult_s_r * cutoff_f + 2 * mult_s * Dr)*w-
 
 void RadialBasis_Chebyshev_sss_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1676,6 +1899,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 
 void RadialBasis_Chebyshev_sss_rational_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1714,6 +1938,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + ksi * cutoff_der);
 
 void RadialBasis_Chebyshev_sssw_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1765,6 +1990,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
 
 void RadialBasis_Chebyshev_s_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1808,6 +2034,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
 
 void RadialBasis_Chebyshev_s::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1866,6 +2093,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Chebyshev_ss_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1906,6 +2134,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
 
 void RadialBasis_Chebyshev_ssw_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -1946,6 +2175,7 @@ rb_ders[1] = scaling * (mult * cutoff_f + 2 * ksi * Dr);
 
 void RadialBasis_Chebyshev_sigma::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2025,51 +2255,61 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Laguerre_log1p::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pCalc(*this, r, scal, s, true, true);
 }
 
 void RadialBasis_Laguerre_log1p_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pCalc(*this, r, scal, s, true, false);
 }
 
 void RadialBasis_Laguerre_log1p_pos::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pPositiveCalc(*this, r, scal, s, true, true);
 }
 
 void RadialBasis_Laguerre_log1p_pos_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pPositiveCalc(*this, r, scal, s, true, false);
 }
 
 void RadialBasis_Laguerre_log1p_noenv::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pCalc(*this, r, scal, s, false, true);
 }
 
 void RadialBasis_Laguerre_log1p_noenv_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	LaguerreLog1pCalc(*this, r, scal, s, false, false);
 }
 
 void RadialBasis_Jacobi_sss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	JacobiSSSCalc(*this, r, scal, s, k, true, true);
 }
 
 void RadialBasis_Jacobi_sss_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	JacobiSSSCalc(*this, r, scal, s, k, true, false);
 }
 
 void RadialBasis_Jacobi_sss_noweight::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	JacobiSSSCalc(*this, r, scal, s, k, false, true);
 }
 
 void RadialBasis_Jacobi_sss_noweight_lmp::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 	JacobiSSSCalc(*this, r, scal, s, k, false, false);
 }
 
@@ -2078,6 +2318,7 @@ void RadialBasis_Jacobi_sss_noweight_lmp::RB_Calc(double r, double scal, double 
 
 void RadialBasis_Chebyshev_ss::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2132,6 +2373,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Chebyshev_ssw::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2183,6 +2425,7 @@ rb_ders[1 + rb_size * 4] = scaling * (mult_s_r * cutoff_f + 2 * mult_s * Dr);
 
 void RadialBasis_Besselw::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2239,6 +2482,7 @@ rb_ders[i+rb_size * 4] = scaling * (bessel_ddr* mult*mult_s * cutoff_f +  bessel
 
 void RadialBasis_Bessel::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
         if (r < min_dist) {
                 Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2297,6 +2541,7 @@ rb_ders[i+rb_size * 4] = scaling * (bessel_ddr* mult*mult_s * cutoff_f +  bessel
 
 void RadialBasis_Chebyshev::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
 	if (r < min_dist) {
 		Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2338,6 +2583,7 @@ void RadialBasis_Chebyshev::RB_Calc(double r, double scal, double s, int k)
 
 void RadialBasis_Chebyshev_repuls::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
 	if (r < min_dist) {
 		Warning("RadialBasis: r<min_dist. r = " + to_string(r) +
@@ -2404,6 +2650,7 @@ void RadialBasis_Chebyshev_repuls::RB_Calc(double r, double scal, double s, int 
 
 void RadialBasis_Taylor::RB_Calc(double r, double scal, double s, int k)
 {
+	if (TryInferenceRadialTable(r, scal, s, k)) return;
 #ifdef MLIP_DEBUG
 	if (r < min_dist) {
 		Warning("RadialBasis: r<min_dist. r = " + to_string(r) +

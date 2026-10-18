@@ -609,7 +609,8 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
     else
         ex.tensor_gate_moment_adjoints.clear();
     std::vector<Vector3> derivatives;
-    for (int i=0;i<atoms;++i) {
+    const int owned_atoms=distributed_stage_!=0 ? distributed_owned_count_ : atoms;
+    for (int i=0;i<owned_atoms;++i) {
         const Neighborhood& nbh=neighborhoods[i];
         if (tensor_enabled || JointReadoutEnabled()) {
             std::fill(ex.tensor_gate_moment_adjoints.begin(),ex.tensor_gate_moment_adjoints.end(),0.0);
@@ -664,12 +665,44 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
     const bool cache_for_gradient=need_derivatives && two_layer_full_edge_cache_for_next_calc_;
     ResetEFS(cfg);
     PrepareAdaptiveRadial(neighborhoods,need_derivatives,cache_for_gradient);
+    EvaluateAdaptiveRadialSites(cfg,neighborhoods,cfg.size(),need_derivatives);
+    if (need_derivatives) FinishAdaptiveRadialGateForces(cfg,neighborhoods);
+    if (HasZBL() && ZBLEvaluationEnabled()) {
+        if (need_derivatives) ZBL().AddTo(cfg);
+        else cfg.energy+=ZBL().ComputeEnergy(cfg);
+    }
+    if (cache_for_gradient) {
+        AdaptiveRadialExecution& ex=adaptive_radial_execution_;
+        ex.cached_scaling=scaling;
+        ex.cached_coefficients=regression_coeffs;
+        ex.cached_edge_geometry.clear(); ex.cached_edge_metadata.clear();
+        for (int i=0;i<neighborhoods.size();++i) {
+            const Neighborhood& nbh=neighborhoods[i];
+            ex.cached_edge_metadata.push_back(nbh.my_type);
+            ex.cached_edge_metadata.push_back(nbh.count);
+            for (int j=0;j<nbh.count;++j) {
+                ex.cached_edge_metadata.push_back(nbh.inds[j]);
+                ex.cached_edge_metadata.push_back(nbh.types[j]);
+                for (int a=0;a<3;++a) ex.cached_edge_geometry.push_back(nbh.vecs[j][a]);
+                ex.cached_edge_geometry.push_back(nbh.dists[j]);
+            }
+        }
+        ex.reusable_full_cache=true;
+    }
+}
+
+// Shared by full-configuration evaluation and the distributed outer stage.
+// Keeping the readout and reverse graph here makes every adaptive extension
+// (including tensor messages and the joint head) follow the native equations.
+void MLMTPR::EvaluateAdaptiveRadialSites(Configuration& cfg,
+                                        const Neighborhoods& neighborhoods,
+                                        int owned_count,bool need_derivatives) {
     cfg.has_energy(true); cfg.has_forces(need_derivatives); cfg.has_stresses(need_derivatives); cfg.has_site_energies(true);
     cfg.cal_se.resize(cfg.size()); cfg.cal_se0.resize(cfg.size());
     cfg.type_mean.assign(cfg.unique_elems.size(),0.0);
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
     const bool species_readout=UsesSpeciesReadout();
-	    for (int i=0;i<cfg.size();++i) {
+	    for (int i=0;i<owned_count;++i) {
 	        ForwardAdaptiveRadialSite(neighborhoods[i],i,nullptr);
 	        const int type=neighborhoods[i].my_type;
 	        const double center=linear_coeffs[type];
@@ -703,28 +736,6 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
             ReverseAdaptiveRadialGraph(false);
             AccumulateAdaptiveRadialEdgeForces(cfg,neighborhoods[i],i);
         }
-    }
-    if (need_derivatives) FinishAdaptiveRadialGateForces(cfg,neighborhoods);
-    if (HasZBL() && ZBLEvaluationEnabled()) {
-        if (need_derivatives) ZBL().AddTo(cfg);
-        else cfg.energy+=ZBL().ComputeEnergy(cfg);
-    }
-    if (cache_for_gradient) {
-        ex.cached_scaling=scaling;
-        ex.cached_coefficients=regression_coeffs;
-        ex.cached_edge_geometry.clear(); ex.cached_edge_metadata.clear();
-        for (int i=0;i<neighborhoods.size();++i) {
-            const Neighborhood& nbh=neighborhoods[i];
-            ex.cached_edge_metadata.push_back(nbh.my_type);
-            ex.cached_edge_metadata.push_back(nbh.count);
-            for (int j=0;j<nbh.count;++j) {
-                ex.cached_edge_metadata.push_back(nbh.inds[j]);
-                ex.cached_edge_metadata.push_back(nbh.types[j]);
-                for (int a=0;a<3;++a) ex.cached_edge_geometry.push_back(nbh.vecs[j][a]);
-                ex.cached_edge_geometry.push_back(nbh.dists[j]);
-            }
-        }
-        ex.reusable_full_cache=true;
     }
 }
 

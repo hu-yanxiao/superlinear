@@ -1,5 +1,10 @@
 # ML-SUS2 LAMMPS Interface
 
+For current native superlinear models, see
+[the dedicated CPU interface guide](README.superlinear-cpu.md). Its separate
+`sus2/superlinear` style uses the current native core and explicit element
+mapping. The historical styles documented below remain available.
+
 This directory is the maintained LAMMPS interface snapshot for SUS2-SH models.
 It was refreshed from the server runtime tree:
 

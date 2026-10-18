@@ -1,0 +1,14 @@
+# Native superlinear CPU adapter; retain the maintained Intel AVX2 make route.
+include ../MAKE/OPTIONS/Makefile.ml_sus2_avx2
+include ../../lib/sus2-superlinear/Makefile.native-config
+CCFLAGS += -I../../lib/sus2-superlinear/include
+# Keep native ABI macros local to the adapter; do not change other packages'
+# interpretation of their MKL headers.
+# The canonical LAMMPS target uses fast floating point. Keep finite-value
+# validation and native-boundary arithmetic precise in this adapter object.
+pair_sus2_superlinear.o: CCFLAGS += $(SUS2_SUPERLINEAR_CPPFLAGS) -fp-model precise
+EXTRA_LIB += ../../lib/sus2-superlinear/libsus2_superlinear_native.a $(SUS2_SUPERLINEAR_BLAS_LIBS)
+EXTRA_LINK_DEPENDS += ../../lib/sus2-superlinear/libsus2_superlinear_native.a
+# The base makefile has already expanded target prerequisites before this
+# include finishes; add the archive explicitly for reliable incremental relink.
+$(EXE): ../../lib/sus2-superlinear/libsus2_superlinear_native.a

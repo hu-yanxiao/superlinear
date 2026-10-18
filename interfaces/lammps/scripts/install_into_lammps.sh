@@ -19,8 +19,10 @@ install -d "$LAMMPS_SRC/ML-SUS2"
 install -d "$LAMMPS_SRC/KOKKOS"
 install -d "$LAMMPS_SRC/MAKE/OPTIONS"
 
-cp "$PKG_ROOT"/ML-SUS2/*.cpp "$PKG_ROOT"/ML-SUS2/*.h "$LAMMPS_SRC/ML-SUS2/"
-cp "$PKG_ROOT"/ML-SUS2/*.cpp "$PKG_ROOT"/ML-SUS2/*.h "$LAMMPS_SRC/"
+# The native superlinear adapter has a separate static-library installation.
+# Keep this historical installer usable without that library.
+cp "$PKG_ROOT"/ML-SUS2/pair_sus2_mtp.* "$PKG_ROOT"/ML-SUS2/sus2_mtp_* "$LAMMPS_SRC/ML-SUS2/"
+cp "$PKG_ROOT"/ML-SUS2/pair_sus2_mtp.* "$PKG_ROOT"/ML-SUS2/sus2_mtp_* "$LAMMPS_SRC/"
 cp "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.cpp \
    "$PKG_ROOT"/ML-SUS2-KK/pair_sus2_mtp_kokkos.h \
    "$PKG_ROOT"/ML-SUS2-KK/sus2_mtp_gate_cache_layout.h \

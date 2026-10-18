@@ -8604,7 +8604,8 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 		            body_combo_seed_cache.data(),
 		            body_count);
 	}
-	for (int ind = 0; ind < cfg.size(); ++ind) {
+	const int owned_atoms = distributed_stage_ != 0 ? distributed_owned_count_ : cfg.size();
+	for (int ind = 0; ind < owned_atoms; ++ind) {
 		const double* gate_adjoints = two_layer_gate_adjoints_.data()
 			+ static_cast<size_t>(ind) * radial_func_count;
 		bool has_adjoint = false;
@@ -8809,12 +8810,10 @@ void MLMTPR::CalcEFS(Configuration& cfg, const Neighborhoods& neighborhoods)
 
 				for (int ind = 0; ind < cfg.size(); ++ind) {
 					const Neighborhood& nbh = neighborhoods[ind];
-					if (ind < 2)
 					buff_site_energy_0 = 0.0;
 					buff_site_energy_ = 0.0;
 					buff_site_energy_ders_.resize(nbh.count);
 					MLMTPR::CalcSiteEnergyDers(nbh);
-					if (ind < 2)
 					cfg.cal_se[ind] = buff_site_energy_;
 					cfg.cal_se0[ind] = buff_site_energy_0;
 					cfg.energy += buff_site_energy_;
