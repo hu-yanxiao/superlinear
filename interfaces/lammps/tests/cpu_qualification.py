@@ -362,17 +362,30 @@ class Qualification:
             text = model.read_text()
             species = int(re.search(r"(?m)^\s*species_count\s*=\s*(\d+)", text)[1])
             elements = case.get("_elements", ["H", "O"])
-            type_order = case.get("_type_order", list(range(species)))
+            declared_types = case.get("_declared_types", species)
+            type_order = case.get("_type_order", list(range(declared_types)))
             require(species == len(elements), "Element list must match native model species count")
-            require(sorted(type_order) == list(range(species)), "LAMMPS type order must be a model-species permutation")
-            require(np.all((geometry.types >= 0) & (geometry.types < species)), "Fixture type outside native species map")
+            require(1 <= declared_types <= species, "Invalid declared LAMMPS type count")
+            require(sorted(type_order) == list(range(declared_types)), "LAMMPS type order must be a declared-prefix permutation")
+            require(np.all((geometry.types >= 0) & (geometry.types < declared_types)), "Fixture type outside declared species map")
             record["model_elements"] = elements
             record["lammps_type_native_indices"] = type_order
-            write_data(directory / "system.data", geometry, species, type_order)
+            write_data(directory / "system.data", geometry, declared_types, type_order)
+            input_form = case.get("_input_form", "symbols")
+            require(input_form in ("symbols", "numbered-style", "numbered-coeff"), "Invalid test input form")
+            record["input_form"] = input_form
+            radial = f"radial_mode {mode} tabstep {self.args.tabstep:.17g}"
+            if input_form == "symbols":
+                pair_lines = [f"pair_style {self.args.pair_style} model_elements {','.join(elements)} {radial}",
+                              f'pair_coeff * * "{model}" ' + " ".join(elements[i] for i in type_order)]
+            else:
+                require(self.args.pair_style == "sus2/embedded", "Numbered input is for the embedded interface")
+                require(type_order == list(range(declared_types)), "Numbered input cannot remap type order")
+                pair_lines = ([f'pair_style {self.args.pair_style} "{model}" {radial}', 'pair_coeff * *']
+                              if input_form == "numbered-style" else
+                              [f'pair_style {self.args.pair_style} {radial}', f'pair_coeff * * "{model}"'])
             styles = ["units metal", "atom_style atomic", "boundary p p p", "newton on",
-                      "atom_modify map array sort 0 0.0", 'read_data "system.data"', "mass * 1.0",
-                      f"pair_style {self.args.pair_style} model_elements {','.join(elements)} radial_mode {mode} tabstep {self.args.tabstep:.17g}",
-                      f'pair_coeff * * "{model}" ' + " ".join(elements[i] for i in type_order), "neighbor 0.4 bin",
+                      "atom_modify map array sort 0 0.0", 'read_data "system.data"', "mass * 1.0"] + pair_lines + ["neighbor 0.4 bin",
                       "neigh_modify every 1 delay 0 check no", "compute site all pe/atom pair",
                       "compute pairpressure all pressure NULL pair"]
             styles += [f"variable w{k} equal c_pairpressure[{k}]*vol/{METAL_NKTV2P:.17g}"

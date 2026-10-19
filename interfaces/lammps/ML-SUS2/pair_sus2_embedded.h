@@ -29,6 +29,7 @@ class PairSUS2Embedded : public Pair {
   std::unique_ptr<Embedded> embedded_;
   std::vector<int> type_map_;
   std::vector<std::string> model_elements_;
+  std::string model_file_;
   std::string radial_mode_="direct";
   double tabstep_=1e-3,cutoff_=0;
   std::size_t table_max_bytes_=64*1024*1024;

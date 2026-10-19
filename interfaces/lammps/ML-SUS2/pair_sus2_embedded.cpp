@@ -86,7 +86,18 @@ void PairSUS2Embedded::settings(int narg,char** arg)
 {
   if (embedded_->kernel) error->all(FLERR,"Set sus2/embedded options before pair_coeff");
   try {
-    for(int i=0;i<narg;i+=2) {
+    // Historical input convention: the optional first argument is the model
+    // filename. Without it, retain the model-in-pair_coeff form.
+    int first=0;
+    if(narg%2!=0) {
+      const std::string token(arg[0]);
+      if(token=="model_elements" || token=="radial_mode" || token=="tabstep" ||
+         token=="table_max_mb" || token=="profile_every")
+        throw std::runtime_error("sus2/embedded options require key/value pairs");
+      model_file_=token;
+      first=1;
+    }
+    for(int i=first;i<narg;i+=2) {
       if(i+1>=narg) throw std::runtime_error("sus2/embedded options require key/value pairs");
       const std::string key(arg[i]);
       if(key=="model_elements") model_elements_=parse_elements(arg[i+1]);
@@ -111,10 +122,16 @@ void PairSUS2Embedded::settings(int narg,char** arg)
 }
 void PairSUS2Embedded::coeff(int narg,char** arg)
 {
-  if(narg!=atom->ntypes+3 || std::strcmp(arg[0],"*") || std::strcmp(arg[1],"*"))
-    error->all(FLERR,"Expected pair_coeff * * model.sus2 symbol1 ... symbolN for sus2/embedded");
+  if(narg<2 || std::strcmp(arg[0],"*") || std::strcmp(arg[1],"*") ||
+     (narg!=2 && narg!=3 && narg!=atom->ntypes+3))
+    error->all(FLERR,"Expected pair_coeff * * [model.sus2 [symbol1 ... symbolN]] for sus2/embedded");
   try {
-    SUS2SL::Model model; model.load(arg[2]);
+    if(narg==2 && model_file_.empty())
+      throw std::runtime_error("Specify the model filename in pair_style or pair_coeff");
+    if(narg>=3 && !model_file_.empty())
+      throw std::runtime_error("Specify the model filename only once, in pair_style or pair_coeff");
+    const bool numbered_types=narg<=3;
+    SUS2SL::Model model; model.load(narg==2?model_file_:arg[2]);
     std::vector<std::string> metadata;
     const auto atomic_numbers=model.integers("zbl_atomic_numbers");
     if(!atomic_numbers.empty()) {
@@ -126,17 +143,29 @@ void PairSUS2Embedded::coeff(int narg,char** arg)
         metadata.push_back(symbols()[z]);
       }
     }
-    if(model_elements_.empty()) model_elements_=metadata;
-    if(static_cast<int>(model_elements_.size())!=model.species_count)
-      throw std::runtime_error("Specify pair_style sus2/embedded model_elements H,O,... in model species order");
-    if(!metadata.empty() && metadata!=model_elements_)
+    if(!model_elements_.empty() && static_cast<int>(model_elements_.size())!=model.species_count)
+      throw std::runtime_error("model_elements length does not match model species count");
+    if(!metadata.empty() && !model_elements_.empty() && metadata!=model_elements_)
       throw std::runtime_error("model_elements disagrees with ZBL atomic-number metadata");
+    // Do not persist inferred metadata: a later pair_coeff may load a different
+    // model. Explicit model_elements remains an input option, not mutable state.
+    const auto& elements=model_elements_.empty()?metadata:model_elements_;
+    if(!numbered_types && static_cast<int>(elements.size())!=model.species_count)
+      throw std::runtime_error("Specify pair_style sus2/embedded model_elements H,O,... in model species order");
     std::vector<int> mapping(atom->ntypes+1,-1);
-    for(int i=1;i<=atom->ntypes;++i) {
-      const auto found=std::find(model_elements_.begin(),model_elements_.end(),arg[i+2]);
-      if(found==model_elements_.end())
-        throw std::runtime_error("Unmapped pair_coeff symbol: "+std::string(arg[i+2])+"; NULL/hybrid mappings are not supported");
-      mapping[i]=static_cast<int>(found-model_elements_.begin());
+    if(numbered_types) {
+      if(atom->ntypes>model.species_count)
+        throw std::runtime_error("LAMMPS atom type count exceeds model species count for numbered mapping");
+      // Match PairSUS2MTP: data type 1 -> native species 0, etc. Masses and
+      // comments are not element metadata and must never be used to guess.
+      for(int i=1;i<=atom->ntypes;++i) mapping[i]=i-1;
+    } else {
+      for(int i=1;i<=atom->ntypes;++i) {
+        const auto found=std::find(elements.begin(),elements.end(),arg[i+2]);
+        if(found==elements.end())
+          throw std::runtime_error("Unmapped pair_coeff symbol: "+std::string(arg[i+2])+"; NULL/hybrid mappings are not supported");
+        mapping[i]=static_cast<int>(found-elements.begin());
+      }
     }
     std::unique_ptr<SUS2SL::Kernel> kernel(new SUS2SL::Kernel(model));
     const auto mode=radial_mode_=="direct"?SUS2SL::RadialTableMode::Direct:

@@ -23,6 +23,12 @@ make -C /path/to/lammps/src ml_sus2_embedded_avx2 -j4
 ```
 
 See the [Static C input and element mapping](README.superlinear-embedded-cpu.md#static-carbon-example).
+The numbered form is `pair_style sus2/embedded model.sus2 radial_mode direct`
+followed by `pair_coeff * *`: type i maps to native species i-1, not by mass or
+comments. [Direct](examples/static-carbon/in.direct) and [Table](examples/static-carbon/in.table)
+templates read user-supplied `data.in` and `model.sus2`. Reinstall and rebuild
+for this syntax addition; kernel mathematics are unchanged. Explicit symbol
+mappings remain available.
 No external SUS2 inference archive or training/Python runtime is required.
 The sections below describe the **historical SUS2-SH interfaces**, not the
 installation or model support of `sus2/embedded`.

@@ -39,8 +39,8 @@ older native-wrapper interface separate; the installer will reject it.
 
 #### Static C: key LAMMPS input lines
 
-Assume `static-C.sus2` is your native-exported, **one-species carbon Static**
-model, and `diamond.data` has one atom type (C). Paths are relative to the
+Assume `model.sus2` is your native-exported, **one-species carbon Static**
+model, and `data.in` has one atom type (C). Paths are relative to the
 directory where LAMMPS is launched; these are user-supplied files.
 
 ```lammps
@@ -48,11 +48,11 @@ units metal
 atom_style atomic
 boundary p p p
 newton on
-read_data diamond.data
+read_data data.in
 mass 1 12.0107
 
-pair_style sus2/embedded model_elements C radial_mode table tabstep 0.001 table_max_mb 64
-pair_coeff * * static-C.sus2 C
+pair_style sus2/embedded model.sus2 radial_mode direct
+pair_coeff * *
 
 neighbor 1.0 bin
 neigh_modify every 1 delay 0 check yes
@@ -60,18 +60,26 @@ run 0
 ```
 
 Static mode is read from the model file; there is no extra `static` pair-style
-switch. `model_elements C` specifies model species order, while the final `C`
-in `pair_coeff` maps LAMMPS atom type 1. To evaluate the same model without
-interpolation, replace the pair-style line with:
+switch. Numbered mapping sends LAMMPS type i to native model species i-1.
+`Masses` and data-file comments do not infer elements. The number of LAMMPS
+types must not exceed the model species count; this form only selects a prefix.
+Arbitrary subsets/reordering require the existing explicit `model_elements`
+plus `pair_coeff` symbols syntax. For interpolation, replace the pair-style line with:
 
 ```lammps
-pair_style sus2/embedded model_elements C radial_mode direct
+pair_style sus2/embedded model.sus2 radial_mode table
+# Optional defaults: tabstep 0.001 table_max_mb 64
 ```
 
 Table mode uses conservative Hermite interpolation; `tabstep` is in angstrom
 and `table_max_mb` is a **per-MPI-process** knot-storage budget in MiB, not
 total process memory. It retains direct fallback and is not always faster.
 Direct is the default. Check E/F/virial for each new model and table spacing.
+Ready-to-run inputs using your `data.in` and `model.sus2` in the working directory:
+[Direct](interfaces/lammps/examples/static-carbon/in.direct) and
+[Table](interfaces/lammps/examples/static-carbon/in.table).
+Reinstall and rebuild LAMMPS to enable this numbered shorthand; old binaries
+do not acquire it by editing an input file. Kernel mathematics are unchanged.
 See the [2016-atom diamond example](interfaces/lammps/examples/static-carbon/in.diamond)
 and [complete installation, MD and capability notes](interfaces/lammps/README.superlinear-embedded-cpu.md).
 

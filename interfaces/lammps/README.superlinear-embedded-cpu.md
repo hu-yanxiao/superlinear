@@ -49,7 +49,7 @@ The make target therefore still needs those libraries.
 
 ## Static carbon example
 
-For a native-exported one-species carbon Static model named `static-C.sus2`
+For a native-exported one-species carbon Static model named `model.sus2`
 and a LAMMPS data file with atom type 1 = C, the key lines are:
 
 ```lammps
@@ -57,10 +57,10 @@ units metal
 atom_style atomic
 boundary p p p
 newton on
-read_data diamond.data
+read_data data.in
 mass 1 12.0107
-pair_style sus2/embedded model_elements C radial_mode table tabstep 0.001 table_max_mb 64
-pair_coeff * * static-C.sus2 C
+pair_style sus2/embedded model.sus2 radial_mode direct
+pair_coeff * *
 neighbor 1.0 bin
 neigh_modify every 1 delay 0 check yes
 run 0
@@ -69,9 +69,42 @@ run 0
 These model/data filenames are user-supplied, not bundled trained weights.
 Paths are resolved from the LAMMPS working directory. The model file selects
 Static versus other supported architectures; there is no extra `static` flag.
-`model_elements` gives the **model species order**; the symbols after the model
-filename in `pair_coeff` give the **LAMMPS atom-type order**. For this model both
-are simply `C`. Do not substitute the historical `sus2mtp` syntax.
+Numbered mapping sends **LAMMPS type i to native model species i-1**. Neither
+`Masses` nor data-file comments infer elements. The number of declared LAMMPS
+types must not exceed the model species count: this selects only its prefix,
+not an arbitrary subset. The user must match the model's native species order.
+
+Alternatively put the filename in `pair_coeff`, without symbols:
+
+```lammps
+pair_style sus2/embedded radial_mode direct
+pair_coeff * * model.sus2
+```
+
+Specify the filename in only one place, never both commands. For arbitrary
+subsets/reordering, the existing explicit syntax is unchanged:
+
+```lammps
+pair_style sus2/embedded model_elements C radial_mode direct
+pair_coeff * * model.sus2 C
+```
+
+Here `model_elements` gives the **full model species order**; the symbols after
+the filename map each **LAMMPS atom type**. This C example is equivalent to the
+numbered form. For multielement models give the full model list and one symbol
+per LAMMPS type. NULL mappings remain unsupported.
+
+Reinstall and rebuild to obtain the numbered shorthand; old binaries do not
+support it. This syntax change does not change kernel mathematics.
+[Direct](examples/static-carbon/in.direct) and [Table](examples/static-carbon/in.table)
+templates use your `data.in` and `model.sus2`; no checkpoint is bundled. From
+the repository root, with those files in the working directory:
+
+```bash
+mpirun -n 4 "$LAMMPS_ROOT/src/lmp_ml_sus2_embedded_avx2" \
+  -in interfaces/lammps/examples/static-carbon/in.direct
+# Or use in.table with the same files.
+```
 
 The repository also provides a [self-generating 2016-atom diamond input](examples/static-carbon/in.diamond)
 (7 x 6 x 6 conventional cells, lattice parameter 3.56054 angstrom). It runs a
@@ -105,7 +138,8 @@ run 1000                          # 0.5 ps; a short check, not equilibration
 For an explicit analytical reference use:
 
 ```lammps
-pair_style sus2/embedded model_elements C radial_mode direct
+pair_style sus2/embedded model.sus2 radial_mode direct
+pair_coeff * *
 ```
 
 Tables use cubic Hermite values and the derivative of the **same interpolant**.
@@ -147,13 +181,24 @@ use native-exported models rather than hand-editing model graphs.
 
 ## Verification and source provenance
 
-The 2026-10-19 package publishes the previously qualified inference source and
-Intel build files byte for byte. Publication adds documentation and
-installation/example entry points, not new model math.
-The qualified candidate passed native-oracle comparisons and real MPI checks;
-the Static/Effect carbon pair also passed eight model/mode/rank E/F/virial checks
-and 24 short NPT runs on 2016-atom diamond. Those are bounded qualifications,
-not proof of long-time stability for arbitrary models.
+The 2026-10-19 package includes the qualified inference source and Intel build
+files. The numbered shorthand changes pair-input handling, not kernel
+mathematics. The rebuilt numbered-input binary passed:
+
+- 92 existing native-oracle/MPI checks and 3 expected error-input rejections;
+- 56 numbered/explicit input checks and 12 expected error-input rejections,
+  including Direct/Table, multiple model families, prefixes, reordered
+  explicit symbols, atom migration and short NVE checks;
+- 2 Direct/Table checks reloading H/O, C/N and H/O models into the same pair
+  instance without retaining inferred element metadata;
+- 4 four-rank runs of the Direct/Table templates and self-generated diamond
+  example, each with 2016 atoms.
+
+The original tolerances were retained (direct 1e-9, table 2e-6 in the native
+oracle comparisons). Separately, the earlier Static/Effect carbon package
+passed eight model/mode/rank E/F/virial checks and 24 short NPT runs on
+2016-atom diamond. These are bounded qualifications, not proof of long-time
+stability for arbitrary models.
 
 For a local installer-only regression (not compilation or numerical proof):
 
@@ -165,3 +210,7 @@ python3 interfaces/lammps/tests/embedded_install_check.py
 independent native oracle. `tests/cpu_qualification.py` accepts a real LAMMPS
 binary and an external native fixture tool supporting `eval-efs MODEL CFG`;
 the oracle and frozen test datasets are test inputs, not runtime dependencies.
+`tests/embedded_input_check.py` and `tests/embedded_reload_check.py` add the
+numbered-input and same-instance reload regressions using those external
+fixtures. Run these MPI tools inside a four-core CPU allocation; they do not
+submit scheduler jobs themselves.

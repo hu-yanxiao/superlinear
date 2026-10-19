@@ -1,0 +1,20 @@
+# Supply data.in and native-exported model.sus2; no checkpoint is bundled.
+# Type 1 -> native species 0 (C); Masses/comments do not infer elements.
+# Reinstall and rebuild for this syntax; qualify interpolated E/F/virial.
+units metal
+atom_style atomic
+boundary p p p
+newton on
+read_data data.in
+mass 1 12.0107
+# table: force-consistent radial interpolation; validate against direct first.
+pair_style sus2/embedded model.sus2 radial_mode table
+# Optional explicit defaults (replace the preceding pair_style, do not add both):
+# pair_style sus2/embedded model.sus2 radial_mode table tabstep 0.001 table_max_mb 64
+# tabstep: angstrom; table_max_mb: per-rank knot storage MiB, not total RAM.
+pair_coeff * *
+neighbor 1.0 bin
+neigh_modify every 1 delay 0 check yes
+thermo 1
+thermo_style custom step atoms pe press vol
+run 0

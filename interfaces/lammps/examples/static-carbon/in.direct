@@ -1,0 +1,17 @@
+# Supply data.in and native-exported model.sus2 in the working directory.
+# Type 1 -> native species 0 (C for this one-species Static model).
+# Masses/comments do not infer elements. Reinstall and rebuild for this syntax.
+units metal
+atom_style atomic
+boundary p p p
+newton on
+read_data data.in
+mass 1 12.0107
+# direct: analytical radial evaluation, no interpolation (default mode).
+pair_style sus2/embedded model.sus2 radial_mode direct
+pair_coeff * *
+neighbor 1.0 bin
+neigh_modify every 1 delay 0 check yes
+thermo 1
+thermo_style custom step atoms pe press vol
+run 0
