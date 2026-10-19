@@ -5,6 +5,23 @@ The model is loaded once per calculator. Subsequent ASE calls pass NumPy arrays
 directly to `MLMTPR::CalcEFS`: no subprocess launch or temporary CFG files.
 No model mathematics, trained coefficients or native installed binary changes.
 
+## End-to-end crystal example
+
+The repository [README](../../README.md#python-relaxation-phonons-and-lattice-thermal-conductivity)
+contains copyable Python scripts for **zero-pressure atomic/cell relaxation →
+phonon bands → lattice thermal conductivity**, using carbon diamond as an
+explicit example. It saves the accepted relaxed geometry, checks the returned
+band stability report, and separates a transport dry run from real RTA/LBTE
+execution. Use your own chemically suitable model and its full native species
+order; the example does not infer chemistry from filenames.
+
+For variable-cell relaxation it uses ASE's
+[`FrechetCellFilter`](https://docs.ase-lib.org/ase/filters.html) with BFGS, records
+the underlying atoms in a trajectory, and checks physical forces and stress
+separately from the filter's generalized convergence criterion. The shorter ASE
+example below intentionally keeps the cell fixed. Phonon workflows never relax
+the input automatically and require a fully periodic, unconstrained crystal.
+
 ## Build from this source checkout
 
 ```sh

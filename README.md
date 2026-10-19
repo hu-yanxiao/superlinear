@@ -256,14 +256,159 @@ generated automatically. Keep the matching training profile: `native-static-v1` 
 Then run the same training command.
 This restores model parameters; BFGS optimizer history starts fresh.
 
-## Python / ASE / phonons
+## Python: relaxation, phonons and lattice thermal conductivity
 
 ```bash
 python -m pip install './interfaces/python[phonon]'
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 ```
 
 The in-process ASE calculator supports static, coordination-effect and Adaptive
-models, including element-specific readout. [Python examples](interfaces/python/README.md)
-include phonopy band structures and phono3py lattice thermal conductivity.
-Run thermal-conductivity calculations on compute nodes; example supercells and
-meshes are starting points, not converged predictions.
+models, including element-specific readout. It evaluates energy, forces and
+stress with the native C++ engine; it does not launch the training executable.
+Build requirements are a C++17 compiler, BLAS and Python development headers.
+Use a dedicated Python environment and run the following scripts in a **new
+working directory** with your `model.sus2`. On a cluster, run them on a CPU
+compute allocation, not the login node.
+
+This carbon-diamond example assumes a separately verified carbon model with
+native type order `["C"]`. For another model, replace **every** `species=["C"]`
+with its **full, ordered model species list**, even when the structure contains
+only a subset of those elements. Unlike the LAMMPS numbered-type input, Python
+requires this explicit mapping. The examples do not change model coefficients.
+
+### 1. Relax atomic positions and the cell
+
+Save as `01_relax.py`. `FrechetCellFilter` relaxes positions and the full cell at
+zero external pressure. To hold the cell fixed, use `BFGS(atoms, ...)` instead.
+Here `3.56` Angstrom is only a starting lattice constant, not a fitted result.
+
+```python
+import numpy as np
+from ase.build import bulk
+from ase.filters import FrechetCellFilter
+from ase.io import write
+from ase.io.trajectory import Trajectory
+from ase.optimize import BFGS
+from pysuperlinear import SuperlinearCalculator
+
+atoms = bulk("C", "diamond", a=3.56)  # Two-atom primitive cell; fully periodic.
+# Or: from ase.io import read; atoms = read("structure.extxyz")
+atoms.calc = SuperlinearCalculator("model.sus2", species=["C"])
+with Trajectory("relax.traj", "w", atoms) as trajectory:
+    opt = BFGS(FrechetCellFilter(atoms), logfile="relax.log", maxstep=0.05)
+    opt.attach(trajectory.write, interval=1)
+    converged = opt.run(fmax=1e-4, steps=1000)
+
+# Check real forces and stress separately from the cell filter's generalized fmax.
+force_max = np.linalg.norm(atoms.get_forces(), axis=1).max()
+stress_max = np.abs(atoms.get_stress()).max()
+print("max force [eV/A]:", force_max, "max stress [eV/A^3]:", stress_max)
+if not converged or force_max > 1e-3 or stress_max > 1e-4:
+    raise RuntimeError("Relaxation not accepted; inspect relax.log before phonons.")
+write("relaxed.json", atoms)  # Keep this exact geometry for bands and transport.
+```
+
+```bash
+python 01_relax.py
+```
+
+The stress acceptance check above assumes the zero-pressure, variable-cell
+example. For a deliberately fixed cell or nonzero target pressure, define the
+corresponding stress criterion rather than applying this one unchanged.
+
+### 2. Calculate the phonon band structure
+
+Save as `02_band.py`. The default band path is chosen by ASE for the relaxed
+primitive cell. A custom path can be passed with `band_path`; see the
+[Python interface guide](interfaces/python/README.md#phonopy-bands-and-phono3py-lattice-thermal-conductivity).
+
+```python
+from ase.io import read
+from pysuperlinear.phonons import run_band_structure
+
+def main():
+    band = run_band_structure(
+        read("relaxed.json"), "model.sus2", species=["C"], output="band-C",
+        supercell=(3, 3, 3), displacement=0.01, primitive_matrix="P",
+        stability_mesh=(5, 5, 5), workers=1,
+    )
+    print(band["stability"])
+    # Bands preserve imaginary frequencies; a completed band run is not a stability pass.
+    if band["stability"]["substantial_imaginary_count"]:
+        raise RuntimeError("Imaginary modes found; investigate before transport.")
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+python 02_band.py
+```
+
+Results include `band-C/band.png`, `band.pdf`, `band.yaml`, `band.csv`,
+`fc2.hdf5` and `metadata.json`. The sampled stability check does not establish
+stability at every wave vector. Do not discard imaginary modes to obtain kappa.
+
+### 3. Plan, then calculate lattice thermal conductivity
+
+After checking the bands, save as `03_kappa.py`. The first command below only
+estimates displacement counts, FC3 memory and (if selected) LBTE matrix memory;
+it evaluates **no forces or
+thermal conductivity**. The second explicitly starts the calculation using the
+same saved structure, model and protocol.
+
+```python
+import argparse
+from ase.io import read
+from pysuperlinear.phonons import run_thermal_conductivity
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run", action="store_true", help="Execute the existing dry-run plan")
+    args = parser.parse_args()
+    result = run_thermal_conductivity(
+        read("relaxed.json"), "model.sus2", species=["C"], output="kappa-C",
+        supercell=(3, 3, 3), fc2_supercell=(4, 4, 4), displacement=0.01,
+        pair_cutoff=None,  # All displacement pairs within this finite supercell.
+        mesh=(11, 11, 11), temperatures=(300.0,), lbte=False,  # RTA; True selects LBTE.
+        primitive_matrix="P", workers=1, dry_run=not args.run, resume=args.run,
+    )
+    if args.run:
+        print("T [K]:", result["temperature_K"])
+        print("kappa [W/(m K)], xx yy zz yz xz xy:", result["kappa_W_mK"])
+    else:
+        print(result["plan"])
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+python 03_kappa.py           # Inspect kappa-C/metadata.json and the printed plan first.
+python 03_kappa.py --run     # Real force constants and transport; can be expensive.
+```
+
+Transport builds its own FC2/FC3 from forces and rechecks stability; it does not
+reuse `band-C/fc2.hdf5`. Substantial imaginary modes stop transport without a
+kappa result. Outputs include `kappa-C/kappa.csv`, HDF5/PNG/PDF results, FC2/FC3,
+force checkpoints and provenance in `metadata.json`.
+
+- **Convergence:** these are starting settings, not converged predictions.
+  Check equilibrium, displacement amplitude, FC2/FC3 supercell sizes, q-mesh and
+  frequency cutoff. A two-atom input gives 54/128 atoms for the example FC3/FC2
+  supercells; an eight-atom conventional input gives 216/512 instead.
+- **RTA or LBTE:** `lbte=False` is RTA; `True` requests direct LBTE, which can
+  require much more memory. Changing this or another physical setting requires
+  a new output directory and a new dry-run plan. The current wrapper includes
+  intrinsic three-phonon scattering, **not** isotope, boundary, four-phonon or
+  electronic contributions, and supplies no non-analytical correction (NAC).
+- **Parallelism and restart:** increase `workers` only within the CPU allocation;
+  these are independent force-evaluation processes, not threads sharing a model.
+  Keep the `__main__` guard and the thread environment variables above. Resume a
+  stopped run with identical inputs and `resume=True`; do not rerelax the cell or
+  overwrite the model in place. The workflow verifies fingerprints and reuses
+  force checkpoints, not arbitrary cached force-constant files.
+
+See the [full Python interface guide](interfaces/python/README.md) for CLI
+equivalents, displacement-pair cutoffs, output conventions and validation.
