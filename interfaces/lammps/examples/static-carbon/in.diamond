@@ -1,0 +1,22 @@
+# From the superlinear repository root, supply a native-exported C Static model:
+# mpirun -n 4 /path/to/lammps/src/lmp_ml_sus2_embedded_avx2 \
+#   -var model "/absolute/path/to/static-C.sus2" -var radial table \
+#   -in interfaces/lammps/examples/static-carbon/in.diamond
+# Both variables are required; model paths must not contain whitespace.
+# Use -var radial direct for reference.
+units metal
+atom_style atomic
+boundary p p p
+newton on
+lattice diamond 3.56054
+region box block 0 7 0 6 0 6 units lattice
+create_box 1 box
+create_atoms 1 box
+mass 1 12.0107
+pair_style sus2/embedded model_elements C radial_mode ${radial} tabstep 0.001 table_max_mb 64
+pair_coeff * * ${model} C
+neighbor 1.0 bin
+neigh_modify every 1 delay 0 check yes
+thermo 1
+thermo_style custom step atoms pe press vol
+run 0

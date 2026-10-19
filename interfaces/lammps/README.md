@@ -1,5 +1,34 @@
 # ML-SUS2 LAMMPS Interface
 
+## Current superlinear models: self-contained CPU interface
+
+Use [`sus2/embedded`](README.superlinear-embedded-cpu.md). Its parser, model
+evaluation, radial tables, MPI support, installer and Intel make targets are
+all provided here in the **superlinear model-code repository**:
+
+```text
+ML-SUS2/pair_sus2_embedded.{cpp,h}
+ML-SUS2/sus2_sl_*.{cpp,h}
+MAKE/OPTIONS/Makefile.ml_sus2_embedded*
+scripts/install_superlinear_embedded_cpu.sh
+examples/static-carbon/in.diamond
+```
+
+Install with the dedicated script, not the historical installer below:
+
+```bash
+# From the superlinear repository root; use a separate LAMMPS source tree.
+bash interfaces/lammps/scripts/install_superlinear_embedded_cpu.sh /path/to/lammps
+make -C /path/to/lammps/src ml_sus2_embedded_avx2 -j4
+```
+
+See the [Static C input and element mapping](README.superlinear-embedded-cpu.md#static-carbon-example).
+No external SUS2 inference archive or training/Python runtime is required.
+The sections below describe the **historical SUS2-SH interfaces**, not the
+installation or model support of `sus2/embedded`.
+
+## Historical SUS2-SH interfaces
+
 This directory is the maintained LAMMPS interface snapshot for SUS2-SH models.
 It was refreshed from the server runtime tree:
 

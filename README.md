@@ -13,6 +13,68 @@ make -j4 mlp
 ./bin/mlp-sus2 help
 ```
 
+### LAMMPS CPU interface
+
+The matching interface sources, installer and make targets are shipped **in
+this repository**, under [`interfaces/lammps/`](interfaces/lammps/README.superlinear-embedded-cpu.md).
+Use the self-contained `sus2/embedded` pair style for current superlinear
+models; it does not require the training executable, a native inference
+library or Python at runtime. The historical `sus2mtp` interface remains
+separate.
+
+From the superlinear repository root, with Intel classic C++, Intel MPI, MKL
+and TBB available, install into a separate LAMMPS source tree (validated with
+LAMMPS 10 Dec 2025):
+
+```bash
+LAMMPS_ROOT=/absolute/path/to/lammps
+bash interfaces/lammps/scripts/install_superlinear_embedded_cpu.sh "$LAMMPS_ROOT"
+make -C "$LAMMPS_ROOT/src" ml_sus2_embedded_avx2 -j4
+"$LAMMPS_ROOT/src/lmp_ml_sus2_embedded_avx2" -h
+```
+
+The help output must list `sus2/embedded`. No `make yes-ML-SUS2`, separate
+interface repository, or native-library build is needed. Keep a tree with the
+older native-wrapper interface separate; the installer will reject it.
+
+#### Static C: key LAMMPS input lines
+
+Assume `static-C.sus2` is your native-exported, **one-species carbon Static**
+model, and `diamond.data` has one atom type (C). Paths are relative to the
+directory where LAMMPS is launched; these are user-supplied files.
+
+```lammps
+units metal
+atom_style atomic
+boundary p p p
+newton on
+read_data diamond.data
+mass 1 12.0107
+
+pair_style sus2/embedded model_elements C radial_mode table tabstep 0.001 table_max_mb 64
+pair_coeff * * static-C.sus2 C
+
+neighbor 1.0 bin
+neigh_modify every 1 delay 0 check yes
+run 0
+```
+
+Static mode is read from the model file; there is no extra `static` pair-style
+switch. `model_elements C` specifies model species order, while the final `C`
+in `pair_coeff` maps LAMMPS atom type 1. To evaluate the same model without
+interpolation, replace the pair-style line with:
+
+```lammps
+pair_style sus2/embedded model_elements C radial_mode direct
+```
+
+Table mode uses conservative Hermite interpolation; `tabstep` is in angstrom
+and `table_max_mb` is a **per-MPI-process** knot-storage budget in MiB, not
+total process memory. It retains direct fallback and is not always faster.
+Direct is the default. Check E/F/virial for each new model and table spacing.
+See the [2016-atom diamond example](interfaces/lammps/examples/static-carbon/in.diamond)
+and [complete installation, MD and capability notes](interfaces/lammps/README.superlinear-embedded-cpu.md).
+
 ## Training
 
 Choose one template, copy it to the repository root, and edit its data paths

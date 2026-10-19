@@ -1,0 +1,4 @@
+# Self-contained superlinear CPU package: no SUS2 native/training library.
+# Retain the established Intel MPI / AVX2 route and precise validation/math.
+include ../MAKE/OPTIONS/Makefile.ml_sus2_embedded_base_avx2
+pair_sus2_embedded.o $(patsubst ../%.cpp,%.o,$(wildcard ../sus2_sl_*.cpp)): CCFLAGS += -fp-model precise
