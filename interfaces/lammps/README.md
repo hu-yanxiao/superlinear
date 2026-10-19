@@ -30,6 +30,9 @@ templates read user-supplied `data.in` and `model.sus2`. Reinstall and rebuild
 for this syntax addition; kernel mathematics are unchanged. Explicit symbol
 mappings remain available.
 No external SUS2 inference archive or training/Python runtime is required.
+The maintained cluster entry is `/work/phy-weigw/app/superlinear/lmp`; see
+the [build and deployment notes](README.superlinear-embedded-cpu.md#maintained-cluster-installation).
+It does not replace the historical SUS2 LAMMPS executable.
 The sections below describe the **historical SUS2-SH interfaces**, not the
 installation or model support of `sus2/embedded`.
 

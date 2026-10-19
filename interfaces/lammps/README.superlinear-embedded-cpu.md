@@ -47,6 +47,41 @@ Although the embedded inference engine has no BLAS dependency, the preserved
 Intel LAMMPS make target links MKL/TBB for its general LAMMPS configuration.
 The make target therefore still needs those libraries.
 
+### Maintained cluster installation
+
+The stable superlinear CPU LAMMPS executable is:
+
+```text
+/work/phy-weigw/app/superlinear/lmp
+```
+
+Load the Intel/GCC environment above before launching it with `mpirun`.
+Use this executable for both `radial_mode direct` and `radial_mode table`.
+The corresponding interface sources and installation scripts remain under
+`interfaces/lammps/` in the superlinear repository. The cluster source mirror is
+`/work/phy-weigw/20260321_Test/superlinear-radial-coefficient-gate-work-codex`;
+the installed LAMMPS sources are under `/work/phy-weigw/apps/lammps-10Dec2025`.
+
+For an update, synchronize the committed interface files, rerun the dedicated
+installer, and rebuild `ml_sus2_embedded_avx2`. Reinstallation refreshes the
+embedded sources; normal `make` recompiles them while reusing unchanged
+LAMMPS core objects. Retain the target's `-fp-model precise` override for
+`pair_sus2_embedded.o` and `sus2_sl_*.o`, and the existing Intel link settings.
+Do not switch precision or remove optimization flags simply to shorten a build.
+
+Before replacing the stable entry, run the native-reference E/F/virial
+qualification, Direct/Table and numbered/explicit input checks, MPI and model
+reload checks, and the provided carbon examples. Install only the passing
+binary, back up an existing entry, and replace it atomically. Release provenance
+is recorded beside it in `LAMMPS_PRODUCTION.json` (source commit, file hashes,
+binary hash and qualification reports). The installer itself never publishes
+the binary. A new installation does not restart existing jobs.
+
+This is a separate superlinear entry: the historical
+`/work/phy-weigw/cpu-lammps/lmp.ml-sus2_tabstep_intelmpi`, native training and
+GPUMD executables are not replaced by this workflow. Interface/docs synchronization
+does not imply updating unrelated training sources in an older server checkout.
+
 ## Static carbon example
 
 For a native-exported one-species carbon Static model named `model.sus2`

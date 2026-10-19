@@ -37,6 +37,20 @@ The help output must list `sus2/embedded`. No `make yes-ML-SUS2`, separate
 interface repository, or native-library build is needed. Keep a tree with the
 older native-wrapper interface separate; the installer will reject it.
 
+On the maintained phy-weigw cluster, the stable **superlinear CPU LAMMPS**
+entry is `/work/phy-weigw/app/superlinear/lmp`. Load the Intel environment
+listed in the [build notes](interfaces/lammps/README.superlinear-embedded-cpu.md#install-and-build), then use:
+
+```bash
+mpirun -n 4 /work/phy-weigw/app/superlinear/lmp -in in.direct
+# Or: -in in.table (with the same data.in and model.sus2)
+```
+
+This entry is separate from the historical SUS2 LAMMPS executable, the
+training executable and GPUMD. Updating the source requires reinstalling the
+interface and rebuilding; production installation follows numerical checks
+and retains a backup of any previous binary.
+
 #### Static C: key LAMMPS input lines
 
 Assume `model.sus2` is your native-exported, **one-species carbon Static**
