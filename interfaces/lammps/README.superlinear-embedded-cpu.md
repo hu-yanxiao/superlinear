@@ -279,3 +279,22 @@ c++ -O2 -std=c++17 -Iinterfaces/lammps/ML-SUS2 \
 This checks noncontiguous original species indices, lazy construction,
 selection reset, explicit zero/finite caps and default storage above 64 MiB.
 It does not replace actual MPI lifecycle or native-reference E/F/virial checks.
+
+`tests/embedded_species_check.py` provides a bounded four-rank regression
+against a frozen pre-change LAMMPS CPU binary:
+
+```bash
+python interfaces/lammps/tests/embedded_species_check.py \
+  --candidate /absolute/path/to/new/lmp --reference /absolute/path/to/frozen/lmp \
+  --model /absolute/path/to/eight-species-model.mtp \
+  --cfg /absolute/path/to/fecn6-water.cfg --out /new/qualification/directory
+```
+
+It compares Direct/Table E/F/global virial/site energies for the six-species
+FeCN6 geometry, then checks type changes, creation/deletion, repeated `run 0`,
+migration, same-pair reload and explicit zero/small caps with empty MPI ranks.
+The report retains the original `1e-9` direct and `2e-6` table tolerances.
+Default/auto storage must avoid memory and invalid fallbacks; distances outside
+the table domain must still use direct evaluation. `tests/embedded_efs.cpp`
+also accepts optional storage budget and `present` species-selection arguments
+and emits `RADIAL_STATS_JSON` for portable diagnostics.
