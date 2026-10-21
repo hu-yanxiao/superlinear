@@ -181,10 +181,23 @@ Tables use cubic Hermite values and the derivative of the **same interpolant**.
 Fixed inner/outer radial coefficient contractions are tabulated together with
 their derivatives; identical complete requests share storage. Dynamic Adaptive
 coefficients are not frozen into distance-only functions. `tabstep 0.001` is in
-angstrom. `table_max_mb 64` allows 64 MiB of knot storage **per MPI process**,
-not 64 MiB for the whole job or a limit on total process memory. Metadata has a
-separate bounded allocation. Out-of-domain, unsafe and over-budget requests
-fall back to direct evaluation.
+angstrom. The default `table_max_mb auto` allocates knot storage lazily for
+actual requests, without a fixed 64 MiB cap. It does not reserve all tables in
+advance. To impose an optional knot-storage limit, use a numeric value such as
+`table_max_mb 64` (64 MiB **per MPI process**); `table_max_mb 0` disables knot
+storage and evaluates directly. The limit does not cover total process memory
+or request metadata. Out-of-domain, unsafe and over-budget requests, and failed
+allocations, fall back to direct evaluation.
+
+Frozen request metadata includes only ordered pairs of species actually present
+among owned atoms across all MPI ranks. Declaring eight LAMMPS types does not
+retain absent species: six present species produce 36 ordered pairs instead of
+64, while preserving the original model species indices and input mapping.
+The global presence set is refreshed at initialization and neighbor rebuilding,
+covering type changes, atom creation/deletion, migration and repeated `run 0`.
+Ranks with no owned atoms still participate. A new model clears the previous
+selection. Knots remain lazy; pruning metadata alone does not claim savings for
+unused tables that were never allocated.
 
 Read-table mode is numerical interpolation and must be checked against direct
 or native E/F/virial results for the chosen model and spacing. It is not always
@@ -249,3 +262,20 @@ the oracle and frozen test datasets are test inputs, not runtime dependencies.
 numbered-input and same-instance reload regressions using those external
 fixtures. Run these MPI tools inside a four-core CPU allocation; they do not
 submit scheduler jobs themselves.
+
+For focused storage/selection checks, compile and run the standalone regression
+with an external eight-species model (the fixture is never modified):
+
+```bash
+c++ -O2 -std=c++17 -Iinterfaces/lammps/ML-SUS2 \
+  interfaces/lammps/tests/embedded_radial_selection_check.cpp \
+  interfaces/lammps/ML-SUS2/sus2_sl_model.cpp \
+  interfaces/lammps/ML-SUS2/sus2_sl_radial.cpp \
+  interfaces/lammps/ML-SUS2/sus2_sl_radial_math.cpp \
+  -o /tmp/embedded-radial-selection-check
+/tmp/embedded-radial-selection-check /absolute/path/to/eight-species-model.mtp
+```
+
+This checks noncontiguous original species indices, lazy construction,
+selection reset, explicit zero/finite caps and default storage above 64 MiB.
+It does not replace actual MPI lifecycle or native-reference E/F/virial checks.

@@ -6,6 +6,7 @@
 #include "sus2_sl_adaptive.h"
 #include "sus2_sl_zbl.h"
 #include <memory>
+#include <limits>
 namespace LAMMPS_NS { namespace SUS2SL {
 // Edges are directed, owned-center full neighbors. d = x[j]-x[i].
 struct Edge { int i,j; std::array<double,3> d; };
@@ -14,7 +15,13 @@ struct Result { double energy=0; std::vector<double> site_energy;
 class Kernel {
  public:
   explicit Kernel(const Model&);
-  void configure_radial(RadialTableMode,double spacing=0.001,std::size_t max_bytes=67108864);
+  void configure_radial(RadialTableMode,double spacing=0.001,
+                        std::size_t max_bytes=std::numeric_limits<std::size_t>::max());
+  // Model species IDs, not compact LAMMPS type numbers. An explicitly empty
+  // selection admits no frozen tables; an unset selection preserves standalone
+  // callers' historical all-model-species behavior.
+  void configure_species(std::vector<int>);
+  int species_count() const { return model_.species_count; }
   int communication_width() const;
   double cutoff() const { return model_.cutoff(); }
   RadialTableStats radial_stats() const { return radial_.stats(); }
@@ -67,6 +74,9 @@ class Kernel {
   std::vector<EdgeMetadata> edge_metadata_;
   bool metadata_cache_enabled_=false;
   bool frozen_enabled_=false;
+  bool species_configured_=false,edge_metadata_requested_=false;
+  std::vector<int> active_species_;
+  RadialTableMode radial_mode_=RadialTableMode::Direct;
   bool reverse_stream_=true;
   bool profile_enabled_=false;
   std::array<double,5> outer_profile_{};

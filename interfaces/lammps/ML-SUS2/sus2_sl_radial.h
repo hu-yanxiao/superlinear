@@ -20,7 +20,7 @@ class Radial {
   Radial(const std::string& type, double min_dist, double max_dist, int size,
          double scaling = 1.0, const std::string& cutoff = "legacy", int p = 5);
   void configure(RadialTableMode mode, double spacing = 0.001,
-                 std::size_t max_bytes = 64 * 1024 * 1024);
+                 std::size_t max_bytes = std::numeric_limits<std::size_t>::max());
   // With derivatives=false only vals is refreshed; ders remains unchanged.
   void eval(double r, double slope, double shift, int k,
             std::vector<double>& vals, std::vector<double>& ders,
@@ -31,6 +31,9 @@ class Radial {
   // Frozen Legacy coefficient contractions. Dynamic Adaptive coefficients must
   // continue to use eval(). Calling configure invalidates knots, not requests.
   void freeze(const Model& model);
+  // Only ordered pairs of these original model species receive requests.
+  // An explicitly empty set creates no frozen requests; freeze(model) uses all.
+  void freeze(const Model& model, const std::vector<int>& used_species);
   bool eval_frozen(double r, int pair, bool gate,
                    std::vector<double>& vals, std::vector<double>& ders,
                    RadialInterpolation* interpolation=nullptr, bool derivatives=true);
@@ -53,11 +56,13 @@ class Radial {
   std::vector<Frozen> frozen_;
   std::vector<Tile> frozen_tiles_;
   std::vector<std::size_t> frozen_ids_;
-  std::size_t frozen_pairs_=0;
-  int frozen_funcs_=0;
+  std::vector<int> frozen_species_slots_;
+  std::size_t frozen_pairs_=0, frozen_model_pairs_=0;
+  std::size_t frozen_used_species_=0;
+  int frozen_model_species_=0, frozen_funcs_=0;
   RadialTableMode mode_=RadialTableMode::Direct;
   double spacing_=0.001;
-  std::size_t budget_=64*1024*1024;
+  std::size_t budget_=std::numeric_limits<std::size_t>::max();
   RadialTableStats frozen_stats_, retired_stats_;
   bool tiled_=true;
   bool bulk_=true;

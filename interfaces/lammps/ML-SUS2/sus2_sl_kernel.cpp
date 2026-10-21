@@ -82,10 +82,26 @@ void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
  const bool enabled=setting&&std::string(setting)=="1";
  reverse_stream_=!reverse||std::string(reverse)=="1";
  std::vector<EdgeMetadata>().swap(edge_metadata_);
+ radial_mode_=m;edge_metadata_requested_=enabled;
  radial_.configure(m,s,n);
- if(m!=RadialTableMode::Direct)radial_.freeze(model_);
+ if(m!=RadialTableMode::Direct){
+  if(species_configured_)radial_.freeze(model_,active_species_);
+  else radial_.freeze(model_);
+ }
  frozen_enabled_=radial_.frozen_available();
  metadata_cache_enabled_=enabled&&frozen_enabled_&&(gated_||(!pure_&&!adaptive_mode_));
+}
+void Kernel::configure_species(std::vector<int> species){
+ std::sort(species.begin(),species.end());
+ species.erase(std::unique(species.begin(),species.end()),species.end());
+ for(int t:species)if(t<0||t>=model_.species_count)
+  throw std::out_of_range("Radial table selection has an invalid model species ID");
+ if(species_configured_&&species==active_species_)return;
+ active_species_=std::move(species);species_configured_=true;
+ std::vector<EdgeMetadata>().swap(edge_metadata_);
+ if(radial_mode_!=RadialTableMode::Direct)radial_.freeze(model_,active_species_);
+ frozen_enabled_=radial_.frozen_available();
+ metadata_cache_enabled_=edge_metadata_requested_&&frozen_enabled_&&(gated_||(!pure_&&!adaptive_mode_));
 }
 int Kernel::communication_width()const{return feature_width_;}
 Kernel::EdgeMetadata* Kernel::edge_metadata(const Edge&e){

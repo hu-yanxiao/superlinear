@@ -2,6 +2,7 @@
 // Build from repo root: c++ -O2 -std=c++17 -Iinterfaces/lammps/ML-SUS2 \
 // interfaces/lammps/tests/embedded_efs.cpp interfaces/lammps/ML-SUS2/sus2_sl_*.cpp -o embedded-efs
 // Usage: embedded-efs MODEL CFG [domains=1] [direct|table] [tabstep=.001]
+//                     [table_max_mb=auto] [species=all|present]
 #include "sus2_sl_kernel.h"
 #include <algorithm>
 #include <cmath>
@@ -66,11 +67,21 @@ std::vector<Edge> edges(const Geometry& g,double cutoff)
 int main(int argc,char** argv)
 {
  try {
-  if(argc<3 || argc>6) throw std::runtime_error("Usage: embedded-efs MODEL CFG [domains] [direct|table] [tabstep]");
+  if(argc<3 || argc>8) throw std::runtime_error("Usage: embedded-efs MODEL CFG [domains] [direct|table] [tabstep] [table_max_mb=auto] [all|present]");
   Model model; model.load(argv[1]); Geometry g=read_cfg(argv[2]);
   int domains=argc>3?std::stoi(argv[3]):1; if(domains<1||domains>128) throw std::runtime_error("Invalid domains");
   std::string mode=argc>4?argv[4]:"direct"; if(mode!="direct"&&mode!="table") throw std::runtime_error("Invalid mode");
   double step=argc>5?std::stod(argv[5]):.001; auto ed=edges(g,model.cutoff());
+  std::size_t budget=std::numeric_limits<std::size_t>::max();
+  if(argc>6&&std::string(argv[6])!="auto") {
+    const double mb=std::stod(argv[6]);
+    if(!std::isfinite(mb)||mb<0||mb>=double(budget)/1048576.)throw std::runtime_error("Invalid table_max_mb");
+    budget=std::size_t(mb*1048576.);
+  }
+  const std::string selection=argc>7?argv[7]:"all";
+  if(selection!="all"&&selection!="present")throw std::runtime_error("Invalid species selection");
+  std::vector<int> species=g.type;
+  std::sort(species.begin(),species.end());species.erase(std::unique(species.begin(),species.end()),species.end());
   const int n=g.x.size(); std::vector<int> owner(n),owner_local(n);
   std::vector<std::vector<int>> map(domains),local(domains,std::vector<int>(n));
   std::vector<int> owned(domains); std::vector<std::unique_ptr<Kernel>> kernels;
@@ -79,7 +90,9 @@ int main(int argc,char** argv)
     owned[p]=map[p].size(); for(int i=0;i<n;++i) if(i%domains!=p) map[p].push_back(i);
     std::vector<int> types; for(int i=0;i<n;++i) {local[p][map[p][i]]=i; types.push_back(g.type[map[p][i]]);}
     std::vector<Edge> pe; for(auto e:ed) if(e.i%domains==p) {e.i=local[p][e.i];e.j=local[p][e.j];pe.push_back(e);}
-    kernels.emplace_back(new Kernel(model)); kernels.back()->configure_radial(mode=="direct"?RadialTableMode::Direct:RadialTableMode::Table,step);
+    kernels.emplace_back(new Kernel(model));
+    if(selection=="present")kernels.back()->configure_species(species);
+    kernels.back()->configure_radial(mode=="direct"?RadialTableMode::Direct:RadialTableMode::Table,step,budget);
     kernels.back()->begin(owned[p],n,types,pe);
   }
   const int width=kernels[0]->communication_width(); std::vector<double> buffer(width);
@@ -101,5 +114,14 @@ int main(int argc,char** argv)
   const auto& w=total.virial;std::cout<<"],\"virial\":[";vector({{w[0],w[3],w[4]}});std::cout<<',';
   vector({{w[3],w[1],w[5]}});std::cout<<',';vector({{w[4],w[5],w[2]}});std::cout<<"],\"site_energies\":[";
   for(int i=0;i<n;++i){if(i)std::cout<<',';std::cout<<total.site_energy[i];}std::cout<<"]}\n";
+  RadialTableStats stats;
+  for(const auto& k:kernels){const auto s=k->radial_stats();stats.tables+=s.tables;stats.bytes+=s.bytes;stats.hits+=s.hits;
+    stats.direct_fallbacks+=s.direct_fallbacks;stats.domain_fallbacks+=s.domain_fallbacks;
+    stats.memory_fallbacks+=s.memory_fallbacks;stats.invalid_fallbacks+=s.invalid_fallbacks;}
+  std::cout<<"RADIAL_STATS_JSON {\"active_species\":"<<(selection=="present"?species.size():model.species_count)
+    <<",\"model_species\":"<<model.species_count<<",\"tables\":"<<stats.tables<<",\"bytes\":"<<stats.bytes
+    <<",\"hits\":"<<stats.hits<<",\"direct_fallbacks\":"<<stats.direct_fallbacks
+    <<",\"domain_fallbacks\":"<<stats.domain_fallbacks<<",\"memory_fallbacks\":"<<stats.memory_fallbacks
+    <<",\"invalid_fallbacks\":"<<stats.invalid_fallbacks<<"}\n";
  } catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

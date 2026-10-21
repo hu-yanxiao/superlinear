@@ -82,12 +82,16 @@ plus `pair_coeff` symbols syntax. For interpolation, replace the pair-style line
 
 ```lammps
 pair_style sus2/embedded model.sus2 radial_mode table
-# Optional defaults: tabstep 0.001 table_max_mb 64
+# Optional defaults: tabstep 0.001 table_max_mb auto
 ```
 
-Table mode uses conservative Hermite interpolation; `tabstep` is in angstrom
-and `table_max_mb` is a **per-MPI-process** knot-storage budget in MiB, not
-total process memory. It retains direct fallback and is not always faster.
+Table mode uses conservative Hermite interpolation; `tabstep` is in angstrom.
+The default `table_max_mb auto` grows knot storage lazily to meet actual
+requests, without a fixed 64 MiB cap. Frozen request metadata includes only
+species present anywhere in the system, retaining their original model indices.
+An optional numeric `table_max_mb` limits knot storage in MiB **per MPI process**;
+zero disables knot storage. This is not a limit on total process memory.
+It retains direct fallback and is not always faster.
 Direct is the default. Check E/F/virial for each new model and table spacing.
 Ready-to-run inputs using your `data.in` and `model.sus2` in the working directory:
 [Direct](interfaces/lammps/examples/static-carbon/in.direct) and

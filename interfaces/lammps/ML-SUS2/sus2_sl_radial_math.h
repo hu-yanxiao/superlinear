@@ -17,6 +17,7 @@
 #include <iostream>
 #include <cstdint>
 #include <map>
+#include <limits>
 
 namespace LAMMPS_NS { namespace SUS2SL { namespace radial_math {
 
@@ -46,7 +47,7 @@ private:
 	RadialTableMode inference_table_mode_ = RadialTableMode::Direct;
 	bool inference_table_active_ = false, inference_table_building_ = false;
 	double inference_table_spacing_ = 0.001;
-	std::size_t inference_table_max_bytes_ = 64 * 1024 * 1024;
+	std::size_t inference_table_max_bytes_ = std::numeric_limits<std::size_t>::max();
 	std::map<TableKey, HermiteTable> inference_tables_;
 	RadialTableStats inference_table_stats_;
 	std::uint64_t table_state_min_ = 0, table_state_max_ = 0, table_state_scaling_ = 0;
@@ -80,10 +81,11 @@ public:
 	void CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const;
 	// Both Table and Auto lazily try a table and explicitly fall back to direct
 	// evaluation outside [max(0,min_dist),max_dist], on non-finite samples or on
-	// the memory limit. min_dist is not a physical lower cutoff: smaller r stays
-	// direct. The cap bounds knot storage, not allocator/map overhead.
+	// an explicitly configured memory limit. Storage grows lazily with requests;
+	// the default has no fixed cap. min_dist is not a physical lower cutoff:
+	// smaller r stays direct. A cap bounds knots, not allocator/map overhead.
 	void ConfigureInferenceRadialTable(RadialTableMode mode,
-		double spacing = 0.001, std::size_t max_bytes = 64 * 1024 * 1024);
+		double spacing = 0.001, std::size_t max_bytes = std::numeric_limits<std::size_t>::max());
 	// A model must activate this only around inference, and restore it on exit.
 	// Disabled by default; training and parameter derivatives remain direct.
 	bool SetInferenceRadialTableActive(bool active);

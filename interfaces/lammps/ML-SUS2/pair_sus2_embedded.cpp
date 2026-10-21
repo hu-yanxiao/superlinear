@@ -63,6 +63,7 @@ struct PairSUS2Embedded::Embedded {
   std::unique_ptr<SUS2SL::Kernel> kernel;
   std::vector<int> types;
   std::vector<SUS2SL::Edge> edges;
+  std::vector<int> active_species_flags;
 };
 PairSUS2Embedded::PairSUS2Embedded(LAMMPS* lmp) : Pair(lmp),embedded_(new Embedded)
 {
@@ -107,6 +108,10 @@ void PairSUS2Embedded::settings(int narg,char** arg)
           throw std::runtime_error("radial_mode must be auto, direct or table");
       } else if(key=="tabstep") tabstep_=positive_number(arg[i+1],key);
       else if(key=="table_max_mb") {
+        if(std::strcmp(arg[i+1],"auto")==0) {
+          table_max_bytes_=std::numeric_limits<std::size_t>::max();
+          continue;
+        }
         const double mb=positive_number(arg[i+1],key,true);
         if(mb>=static_cast<double>(std::numeric_limits<std::size_t>::max())/(1024*1024))
           throw std::runtime_error("table_max_mb exceeds addressable memory");
@@ -168,13 +173,17 @@ void PairSUS2Embedded::coeff(int narg,char** arg)
       }
     }
     std::unique_ptr<SUS2SL::Kernel> kernel(new SUS2SL::Kernel(model));
+    // Actual atom types are not known until run initialization. Avoid building
+    // all-model table metadata merely because the file supports many elements.
+    kernel->configure_species({});
     const auto mode=radial_mode_=="direct"?SUS2SL::RadialTableMode::Direct:
       (radial_mode_=="table"?SUS2SL::RadialTableMode::Table:SUS2SL::RadialTableMode::Auto);
     kernel->configure_radial(mode,tabstep_,table_max_bytes_);
     kernel->configure_profile(profile_every_!=0);
     cutoff_=kernel->cutoff();
     comm_forward=comm_reverse=kernel->communication_width();
-    type_map_=std::move(mapping); embedded_->kernel=std::move(kernel); radial_reported_=false;
+    type_map_=std::move(mapping); embedded_->kernel=std::move(kernel);
+    embedded_->active_species_flags.clear();radial_reported_=false;
     profile_calls_=0; profile_seconds_.fill(0); profile_outer_seconds_.fill(0); profile_radial_previous_.fill(0);
     if(!allocated) allocate();
     for(int i=1;i<=atom->ntypes;++i) for(int j=1;j<=atom->ntypes;++j) setflag[i][j]=1;
@@ -192,6 +201,38 @@ void PairSUS2Embedded::init_style()
   if(atom->molecular) for(int k=1;k<=3;++k) if(force->special_lj[k]!=1.0)
     error->all(FLERR,"sus2/embedded requires special_bonds lj 1 1 1 for molecular atom styles");
   neighbor->add_request(this,NeighConst::REQ_FULL);
+  try {update_table_species();}
+  catch(const std::exception& e) {error->one(FLERR,"Embedded SUS2 species selection: {}",e.what());}
+}
+void PairSUS2Embedded::update_table_species()
+{
+  if(radial_mode_=="direct")return;
+  const int count=embedded_->kernel->species_count();
+  std::vector<int> flags(count,0);
+  for(int i=0;i<atom->nlocal;++i) {
+    const int type=atom->type[i];
+    if(type<=0||type>=static_cast<int>(type_map_.size()))
+      throw std::runtime_error("Atom type is outside the configured SUS2 mapping");
+    flags[type_map_[type]]=1;
+  }
+  // Owned atoms only; OR across ranks preserves species absent on an empty
+  // rank or temporarily represented there only by ghosts. Repeated run/run 0
+  // initialization and neighbor rebuilds also cover inserted/deleted types.
+  MPI_Allreduce(MPI_IN_PLACE,flags.data(),count,MPI_INT,MPI_MAX,world);
+  if(flags==embedded_->active_species_flags)return;
+  std::vector<int> species;
+  for(int t=0;t<count;++t)if(flags[t])species.push_back(t);
+  embedded_->kernel->configure_species(species);
+  embedded_->active_species_flags=std::move(flags);
+  radial_reported_=false;
+  profile_calls_=0;profile_seconds_.fill(0);profile_outer_seconds_.fill(0);
+  profile_radial_previous_.fill(0);
+  if(comm->me==0) {
+    const std::size_t active=species.size(),total=static_cast<std::size_t>(count);
+    utils::logmesg(lmp,"SUS2 radial table species: active={}/{} pairs={}/{} allocation={}\n",
+      active,total,active*active,total*total,
+      table_max_bytes_==std::numeric_limits<std::size_t>::max()?"adaptive":"explicit-cap");
+  }
 }
 double PairSUS2Embedded::init_one(int i,int j)
 {
@@ -204,6 +245,10 @@ void PairSUS2Embedded::compute(int eflag,int vflag)
   if(vflag_atom || cvflag_atom)
     error->all(FLERR,"sus2/embedded supports global virial only; per-atom and centroid virials are not implemented");
   try {
+    // Neighbor rebuilds are collective. No new collective is inserted into
+    // ordinary force calls; an unexpectedly new pair before the next rebuild
+    // can still use the existing generic radial evaluation path safely.
+    if(neighbor->ago==0)update_table_species();
     // No timer or extra collective is used unless profiling is explicitly enabled.
     double stamp=profile_every_?MPI_Wtime():0.;
     const auto stage=[&](int index) {

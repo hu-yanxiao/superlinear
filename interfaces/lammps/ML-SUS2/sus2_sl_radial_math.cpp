@@ -121,18 +121,22 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 	if (found == inference_tables_.end()) {
 		auto reject_capacity = [&]() {
 			HermiteTable rejected; rejected.memory_rejected = true;
-			inference_tables_.emplace(key, std::move(rejected));
+			try { inference_tables_.emplace(key, std::move(rejected)); }
+			catch (const std::bad_alloc&) { /* Direct fallback needs no cache entry. */ }
 			++inference_table_stats_.memory_fallbacks;
 			++inference_table_stats_.direct_fallbacks;
 		};
 		const double count = std::ceil((max_dist - lower) / inference_table_spacing_);
+		if (static_cast<std::size_t>(rb_size) > std::numeric_limits<std::size_t>::max() / 2) {
+			reject_capacity();
+			return false;
+		}
 		const std::size_t width = 2 * static_cast<std::size_t>(rb_size);
 		const std::size_t available = inference_table_max_bytes_ - inference_table_stats_.bytes;
 		// Check in floating point before converting or multiplying, including
 		// absurdly small requested spacing. There is no grid-size clamp.
 		if (!std::isfinite(count) || count < 1.0 ||
-			count >= static_cast<double>(std::numeric_limits<std::size_t>::max()) ||
-			count + 1.0 > static_cast<double>(available / sizeof(double) / width)) {
+			count >= static_cast<double>(std::numeric_limits<std::size_t>::max())) {
 			reject_capacity();
 			return false;
 		}
@@ -159,7 +163,8 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 		} guard(inference_table_building_);
 		try {
 			auto reject_table = [&]() {
-				inference_tables_.emplace(key, HermiteTable());
+				try { inference_tables_.emplace(key, HermiteTable()); }
+				catch (const std::bad_alloc&) { /* Direct fallback needs no cache entry. */ }
 				++inference_table_stats_.invalid_fallbacks;
 				++inference_table_stats_.direct_fallbacks;
 			};
@@ -201,6 +206,9 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 			}
 			found = inference_tables_.emplace(key, std::move(table)).first;
 		} catch (const std::bad_alloc&) {
+			reject_capacity();
+			return false;
+		} catch (const std::length_error&) {
 			reject_capacity();
 			return false;
 		}

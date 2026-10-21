@@ -66,8 +66,9 @@ void Radial::configure(RadialTableMode mode, double spacing, std::size_t max_byt
   bulk_=!bulk||std::strcmp(bulk,"1")==0;
   for(auto& f:frozen_){f.status=0;f.packed=false;f.intervals=0;std::vector<double>().swap(f.knots);}
   for(auto& t:frozen_tiles_){t.lanes=0;std::vector<double>().swap(t.knots);}
-  try {frozen_tiles_.resize((frozen_.size()+tile_width_-1)/tile_width_);}
+  try {frozen_tiles_.resize(frozen_.size()/tile_width_+(frozen_.size()%tile_width_!=0));}
   catch(const std::bad_alloc&){frozen_tiles_.clear();tiled_=false;}
+  catch(const std::length_error&){frozen_tiles_.clear();tiled_=false;}
 }
 void Radial::eval(double r,double slope,double shift,int k,
                   std::vector<double>& vals,std::vector<double>& ders,bool derivatives) {
@@ -106,34 +107,43 @@ void Radial::reset_generic_budget() {
  basis_->ConfigureInferenceRadialTable(mode_,spacing_,budget_-frozen_stats_.bytes);
 }
 void Radial::freeze(const Model& m) {
+ std::vector<int> species;
+ try {if(m.species_count>0){species.resize(m.species_count);for(int i=0;i<m.species_count;++i)species[i]=i;}}
+ catch(const std::bad_alloc&){species.clear();}
+ catch(const std::length_error&){species.clear();}
+ freeze(m,species);
+}
+void Radial::freeze(const Model& m,const std::vector<int>& used_species) {
  configure(mode_,spacing_,budget_);
- frozen_.clear();frozen_ids_.clear();frozen_tiles_.clear();frozen_pairs_=0;frozen_funcs_=0;
- if(m.species_count<=0||m.radial_funcs<=0||m.radial_size<=0||m.lmax<0)return;
- const std::size_t Csize=std::size_t(m.species_count),Fsize=std::size_t(m.radial_funcs),Rsize=std::size_t(m.radial_size);
- const std::size_t limit=std::numeric_limits<std::size_t>::max();
- if(Csize>limit/Csize)return;const std::size_t pairs=Csize*Csize;
- if(pairs>std::size_t(std::numeric_limits<int>::max())||pairs>limit/2/Fsize)return;
- const std::size_t requests=2*pairs*Fsize;
- // Separate 64 MiB metadata admission cap, conservatively allowing vector
- // growth, coefficient/key copies and map nodes for every distinct request.
- // Oversized valid models keep the generic evaluator rather than being rejected.
- const std::size_t metadata_cap=64*1024*1024;
- if(Rsize>(limit-512)/32)return;
- const std::size_t per_request=512+32*Rsize;
- if(requests>metadata_cap/per_request)return;
+ frozen_.clear();frozen_ids_.clear();frozen_tiles_.clear();frozen_species_slots_.clear();frozen_pairs_=0;frozen_model_pairs_=0;frozen_used_species_=0;frozen_model_species_=0;frozen_funcs_=0;
+ if(used_species.empty()||m.species_count<=0||m.radial_funcs<=0||m.radial_size<=0||m.lmax<0)return;
  try {
- frozen_pairs_=pairs;frozen_funcs_=m.radial_funcs;frozen_ids_.reserve(requests);
+ std::vector<int> species=used_species;
+ for(int t:species)if(t<0||t>=m.species_count)throw std::out_of_range("Frozen radial species index");
+ std::sort(species.begin(),species.end());species.erase(std::unique(species.begin(),species.end()),species.end());
+ const std::size_t Csize=std::size_t(m.species_count),Fsize=std::size_t(m.radial_funcs),used=species.size();
+ const std::size_t limit=std::numeric_limits<std::size_t>::max();
+ if(Csize>limit/Csize||used>limit/used)return;
+ const std::size_t model_pairs=Csize*Csize,pairs=used*used;
+ if(model_pairs>std::size_t(std::numeric_limits<int>::max())||pairs>limit/2/Fsize)return;
+ const std::size_t requests=2*pairs*Fsize;
+ if(requests>frozen_ids_.max_size())return;
+ frozen_pairs_=pairs;frozen_model_pairs_=model_pairs;frozen_funcs_=m.radial_funcs;frozen_ids_.reserve(requests);
+ frozen_model_species_=m.species_count;frozen_used_species_=used;
+ frozen_species_slots_.assign(Csize,-1);
+ for(std::size_t slot=0;slot<used;++slot)frozen_species_slots_[species[slot]]=int(slot);
  const auto scale=m.numbers("scal_coeffs"),gscale=m.numbers("two_layer_gate_scaling_coeffs");
  const auto gc=m.numbers("two_layer_gate_radial_coeffs");
  const std::string sm=m.text("scaling_map","LK");const int L=m.lmax+1,R=m.radial_size,C=m.species_count;
  // The immutable request index is the hot-path handle. Identical requests share
  // one table, including gate/outer coefficients and exact signed-zero warps.
  std::map<std::vector<std::uint64_t>,std::size_t> unique;
- for(int gate=0;gate<2;++gate)for(std::size_t pair=0;pair<frozen_pairs_;++pair)for(int mu=0;mu<frozen_funcs_;++mu){
+ for(int gate=0;gate<2;++gate)for(int ti:species)for(int tj:species)for(int mu=0;mu<frozen_funcs_;++mu){
+  const std::size_t pair=std::size_t(ti)*Csize+std::size_t(tj);
   Frozen f;f.channel=mu/L;const int l=mu%L;
   const int sb=sm=="K"?f.channel:(sm=="L"?l:(sm=="pair"?0:mu));
-  const auto& sc=gate&&!gscale.empty()?gscale:scale;const std::size_t off=2*std::size_t(sb)*frozen_pairs_+pair;
-  f.slope=number(sc,off,1);f.shift=number(sc,off+frozen_pairs_);
+  const auto& sc=gate&&!gscale.empty()?gscale:scale;const std::size_t off=2*std::size_t(sb)*model_pairs+pair;
+  f.slope=number(sc,off,1);f.shift=number(sc,off+model_pairs);
   const auto& co=gate&&!gc.empty()?gc:m.radial_coeffs;const int stride=gate&&!gc.empty()?R:R+C;
   f.coeff.resize(R);bool finite=std::isfinite(f.slope)&&std::isfinite(f.shift);
   for(int b=0;b<R;++b){f.coeff[b]=number(co,std::size_t(mu)*stride+b);finite=finite&&std::isfinite(f.coeff[b]);}
@@ -144,8 +154,9 @@ void Radial::freeze(const Model& m) {
   if(it!=unique.end())frozen_ids_.push_back(it->second);
   else {std::size_t id=frozen_.size();frozen_ids_.push_back(id);frozen_.push_back(std::move(f));if(finite)unique.emplace(std::move(key),id);}
  }
- frozen_tiles_.resize((frozen_.size()+tile_width_-1)/tile_width_);
- }catch(const std::bad_alloc&){std::vector<Frozen>().swap(frozen_);std::vector<std::size_t>().swap(frozen_ids_);std::vector<Tile>().swap(frozen_tiles_);frozen_pairs_=0;frozen_funcs_=0;}
+ frozen_tiles_.resize(frozen_.size()/tile_width_+(frozen_.size()%tile_width_!=0));
+ }catch(const std::bad_alloc&){std::vector<Frozen>().swap(frozen_);std::vector<std::size_t>().swap(frozen_ids_);std::vector<Tile>().swap(frozen_tiles_);frozen_species_slots_.clear();frozen_pairs_=0;frozen_model_pairs_=0;frozen_used_species_=0;frozen_model_species_=0;frozen_funcs_=0;}
+ catch(const std::length_error&){std::vector<Frozen>().swap(frozen_);std::vector<std::size_t>().swap(frozen_ids_);std::vector<Tile>().swap(frozen_tiles_);frozen_species_slots_.clear();frozen_pairs_=0;frozen_model_pairs_=0;frozen_used_species_=0;frozen_model_species_=0;frozen_funcs_=0;}
 }
 void Radial::pack_frozen(Frozen& f) {
  if(!tiled_)return;
@@ -171,9 +182,9 @@ void Radial::pack_frozen(Frozen& f) {
 void Radial::build_frozen(Frozen& f) {
  const double lo=std::max(0.0,basis_->min_dist),hi=basis_->max_dist;
  const double count=std::ceil((hi-lo)/spacing_);const std::size_t available=budget_-frozen_stats_.bytes;
- if(!std::isfinite(count)||count<1||count>=double(std::numeric_limits<std::size_t>::max())||
-    count+1>double(available/sizeof(double)/2)){f.status=3;return;}
- const std::size_t n=std::size_t(count);if(n>=available/sizeof(double)/2){f.status=3;return;}
+ if(!std::isfinite(count)||count<1||count>=double(std::numeric_limits<std::size_t>::max())){f.status=3;return;}
+ const std::size_t n=std::size_t(count);
+ if(n>=available/sizeof(double)/2||n>=f.knots.max_size()/2){f.status=3;return;}
  reset_generic_budget(); // Free generic knots before allocating contracted knots.
  f.step=(hi-lo)/double(n);const int R=basis_->rb_size;
  const bool active=basis_->SetInferenceRadialTableActive(false);
@@ -208,6 +219,7 @@ void Radial::build_frozen(Frozen& f) {
   frozen_stats_.bytes+=f.knots.size()*sizeof(double);++frozen_stats_.tables;
   pack_frozen(f);
  }catch(const std::bad_alloc&){f.status=3;}
+ catch(const std::length_error&){f.status=3;}
  // Generic tables and frozen tables share one knot-storage budget. Generic
  // counters survive eviction, and accepted frozen knots remain stable.
  if(f.status==1)reset_generic_budget();
@@ -215,14 +227,17 @@ void Radial::build_frozen(Frozen& f) {
 bool Radial::eval_frozen(double r,int pair,bool gate,std::vector<double>& vals,std::vector<double>& ders,
                          RadialInterpolation* interpolation,bool derivatives) {
  if(mode_==RadialTableMode::Direct||frozen_ids_.empty())return false;
- if(pair<0||std::size_t(pair)>=frozen_pairs_)throw std::out_of_range("Frozen radial pair index");
+ if(pair<0||std::size_t(pair)>=frozen_model_pairs_)throw std::out_of_range("Frozen radial pair index");
+ const int si=frozen_species_slots_[pair/frozen_model_species_],sj=frozen_species_slots_[pair%frozen_model_species_];
+ if(si<0||sj<0)return false;
+ const std::size_t pair_slot=std::size_t(si)*frozen_used_species_+std::size_t(sj);
  vals.resize(frozen_funcs_);if(derivatives)ders.resize(frozen_funcs_);
  const double lo=std::max(0.0,basis_->min_dist),hi=basis_->max_dist;
  const bool domain=std::isfinite(r)&&r>=lo&&r<=hi;
  bool have_direct=false;int direct_channel=0;
  RadialInterpolation local;RadialInterpolation& context=interpolation?*interpolation:local;
  double direct_slope=0,direct_shift=0;double* w=context.weights.data();
- const std::size_t* handles=frozen_ids_.data()+(std::size_t(gate)*frozen_pairs_+std::size_t(pair))*std::size_t(frozen_funcs_);
+ const std::size_t* handles=frozen_ids_.data()+(std::size_t(gate)*frozen_pairs_+pair_slot)*std::size_t(frozen_funcs_);
  for(int mu=0;mu<frozen_funcs_;++mu){Frozen& f=frozen_[handles[mu]];
   if(domain&&f.status==0){build_frozen(f);have_direct=false;}
   if(domain&&f.status==1){const std::size_t n=f.intervals;
