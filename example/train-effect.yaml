@@ -1,0 +1,33 @@
+# Carbon diamond: CFG type 0 = C. Paths are relative to this YAML file.
+schema_version: 1
+model:
+  kind: coordination-effect
+  elements: [C]
+  l_max: 3                        # L
+  radial_channels: 4              # K
+  neighbor_cutoff: 6.5             # Angstrom
+  radial:
+    basis: chebyshev-sss
+    basis_size: 10
+    warp_sharing: K               # L / K / LK / pair
+  coordination:
+    channels: 2                   # R
+    body_order: 4
+    channel_coupling: cross        # Inner graph
+  interaction:
+    channels: 2                   # O
+    body_order: 4
+    channel_coupling: diagonal     # Outer graph
+  readout:
+    element_mode: per-element
+training:
+  profile: native-effect-v1
+  optimizer: bfgs
+  iterations: 100                  # Maximum steps; may converge earlier
+loss:
+  energy_weight: 1
+  force_weight: 0.01
+  virial_weight: 0.001
+data:
+  train: train.cfg
+  valid: valid.cfg

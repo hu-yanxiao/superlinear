@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--mesh", nargs=3, type=int, default=[11, 11, 11])
     parser.add_argument("--temperatures", nargs="+", type=float, default=[300.])
     parser.add_argument("--lbte", action="store_true", help="direct LBTE instead of default RTA; can require large dense matrices")
+    parser.add_argument("--isotope", action="store_true", help="natural-isotope scattering; preserves input atomic masses")
     parser.add_argument("--primitive-matrix", choices=["P", "auto", "F", "I", "A", "C", "R"], default="P")
     parser.add_argument("--symmetrization", choices=["traditional", "symfc", "none"], default="traditional")
     parser.add_argument("--symprec", type=float, default=1e-5)
@@ -43,7 +44,7 @@ def main():
         parser.error("structure must contain exactly one unit cell")
     result = run_thermal_conductivity(frames[0], args.model, args.species, args.output,
         supercell=args.supercell, fc2_supercell=args.fc2_supercell, pair_cutoff=args.pair_cutoff,
-        displacement=args.displacement, mesh=args.mesh, temperatures=args.temperatures, lbte=args.lbte,
+        displacement=args.displacement, mesh=args.mesh, temperatures=args.temperatures, lbte=args.lbte, isotope=args.isotope,
         primitive_matrix=args.primitive_matrix, symmetrization=args.symmetrization, symprec=args.symprec,
         imaginary_tolerance=args.imaginary_tolerance, cutoff_frequency=args.cutoff_frequency,
         subtract_reference=not args.keep_reference_forces, remove_drift=not args.keep_force_drift,

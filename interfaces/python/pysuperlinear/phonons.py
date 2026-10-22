@@ -466,7 +466,7 @@ def run_band_structure(atoms, model, species, output, *, supercell=(3, 3, 3), di
 
 def run_thermal_conductivity(atoms, model, species, output, *, supercell=(3, 3, 3),
                              fc2_supercell=None, displacement=.01, pair_cutoff=None,
-                             mesh=(11, 11, 11), temperatures=(300.,), lbte=False,
+                             mesh=(11, 11, 11), temperatures=(300.,), lbte=False, isotope=False,
                              primitive_matrix="P", symprec=1e-5, symmetrization="traditional",
                              subtract_reference=True, remove_drift=True, imaginary_tolerance=.1,
                              cutoff_frequency=1e-4, workers=1, resume=False, dry_run=False,
@@ -475,8 +475,11 @@ def run_thermal_conductivity(atoms, model, species, output, *, supercell=(3, 3, 
 
     ``pair_cutoff`` is phono3py's displacement-pair distance in Angstrom, NOT
     the model cutoff nor a proof of FC3 range convergence. None includes all
-    pairs in the chosen supercell. No isotope/boundary/four-phonon scattering,
-    NAC or convergence extrapolation is supplied. Substantial imaginary modes
+    pairs in the chosen supercell. ``isotope=True`` adds natural-isotope
+    scattering using phono3py's isotope table in primitive-atom order; it does
+    not change the input atomic masses. The default remains isotope-free.
+    No boundary/four-phonon scattering, NAC or convergence extrapolation is
+    supplied. Substantial imaginary modes
     save diagnostics and raise before transport; no fake conductivity is saved.
     """
     from phono3py import Phono3py
@@ -489,6 +492,25 @@ def run_thermal_conductivity(atoms, model, species, output, *, supercell=(3, 3, 
         raise ValueError("supply at least one positive temperature")
     if pair_cutoff is not None:
         pair_cutoff = _positive(pair_cutoff, "pair_cutoff")
+    isotope = bool(isotope)
+    # Construct the actual primitive before fingerprinting so both the flag
+    # and the natural-isotope parameters are part of the resume contract.
+    ph3 = Phono3py(ase_to_phonopy(atoms), np.diag(supercell), primitive_matrix=primitive_matrix,
+                   phonon_supercell_matrix=np.diag(fc2_supercell) if fc2_supercell else None,
+                   symprec=symprec, calculator="vasp", cutoff_frequency=cutoff_frequency)
+    input_masses = atoms.get_masses().copy()
+    primitive_masses = np.asarray(ph3.primitive.masses).copy()
+    primitive_symbols = list(ph3.primitive.symbols)
+    mass_variances = None
+    if isotope:
+        from phono3py.other.isotope import get_mass_variances
+        mass_variances = _finite(get_mass_variances(primitive=ph3.primitive), (len(ph3.primitive),))
+        if np.any(mass_variances < 0):
+            raise ValueError("natural isotope mass variances must be nonnegative")
+    isotope_parameters = dict(primitive_symbols=primitive_symbols,
+        mass_variances=mass_variances.tolist() if isotope else None,
+        primitive_masses_u=primitive_masses.tolist(),
+        source="phono3py.other.isotope.get_mass_variances default natural isotope table" if isotope else None)
     protocol = dict(task="kappa", supercell=supercell, fc2_supercell=fc2_supercell,
                     displacement=_positive(displacement, "displacement"), pair_cutoff_A=pair_cutoff,
                     mesh=mesh, temperatures_K=temperatures, solver="LBTE" if lbte else "RTA",
@@ -496,11 +518,10 @@ def run_thermal_conductivity(atoms, model, species, output, *, supercell=(3, 3, 
                     symmetrization=symmetrization, subtract_reference=bool(subtract_reference),
                     remove_drift=bool(remove_drift), imaginary_tolerance=_positive(imaginary_tolerance, "imaginary_tolerance"),
                     cutoff_frequency_THz=_positive(cutoff_frequency, "cutoff_frequency"),
-                    integration="tetrahedron", isotope=False, boundary=False, nac=False)
+                    integration="tetrahedron", isotope=isotope, isotope_parameters=isotope_parameters,
+                    boundary=False, nac=False)
     with _run(atoms, model, species, output, protocol, resume, workers) as state:
-        ph3 = Phono3py(ase_to_phonopy(atoms), np.diag(supercell), primitive_matrix=primitive_matrix,
-                       phonon_supercell_matrix=np.diag(fc2_supercell) if fc2_supercell else None,
-                       symprec=symprec, calculator="vasp", cutoff_frequency=cutoff_frequency)
+        state["metadata"]["isotope_parameters"] = isotope_parameters
         ph3.generate_displacements(distance=displacement, cutoff_pair_distance=pair_cutoff, is_plusminus=True)
         cells = ph3.supercells_with_displacements
         fc2_cells = ph3.phonon_supercells_with_displacements if fc2_supercell else []
@@ -550,19 +571,39 @@ def run_thermal_conductivity(atoms, model, species, output, *, supercell=(3, 3, 
         if stability["substantial_imaginary_count"]:
             state["metadata"]["kappa_status"] = "not_computed_unstable"
             raise UnstablePhononsError("substantial imaginary phonons: inspect stability.hdf5/metadata.json; no meaningful kappa computed")
-        ph3.run_thermal_conductivity(is_LBTE=bool(lbte), temperatures=temperatures, write_kappa=False)
+        ph3.run_thermal_conductivity(is_LBTE=bool(lbte), temperatures=temperatures, write_kappa=False,
+                                     is_isotope=isotope, mass_variances=mass_variances)
         transport = ph3.thermal_conductivity
         if transport is None:
             raise RuntimeError("phono3py did not return a transport result")
+        np.testing.assert_array_equal(atoms.get_masses(), input_masses, err_msg="input ASE masses changed")
+        np.testing.assert_array_equal(ph3.primitive.masses, primitive_masses, err_msg="primitive masses changed")
+        gamma_isotope = None
+        if isotope:
+            if transport.gamma_isotope is None:
+                raise RuntimeError("phono3py did not return isotope scattering rates")
+            gamma_isotope = _finite(transport.gamma_isotope)
+            if not gamma_isotope.size or np.any(gamma_isotope < 0):
+                raise ValueError("isotope scattering rates must be nonempty and nonnegative")
+            # Monoisotopic elements legitimately have g=0 and gamma=0.
+            state["metadata"]["isotope_scattering"] = dict(
+                shape=list(gamma_isotope.shape), positive_count=int(np.count_nonzero(gamma_isotope > 0)),
+                min=float(gamma_isotope.min()), max=float(gamma_isotope.max()),
+                units="native phono3py gamma (THz)")
         kappa = _finite(transport.kappa)
         if kappa.ndim != 3 or kappa.shape != (1, len(temperatures), 6):
             raise RuntimeError(f"unexpected phono3py kappa shape {kappa.shape}; expected one tetrahedron integration")
         kappa = kappa[0]
         with h5py.File(state["out"] / "kappa.hdf5", "w") as handle:
-            handle.attrs.update(fingerprint=state["fingerprint"], unit="W/(m K)", solver=protocol["solver"], converged=False)
+            handle.attrs.update(fingerprint=state["fingerprint"], unit="W/(m K)", solver=protocol["solver"],
+                                isotope=isotope, converged=False)
             handle.create_dataset("kappa", data=kappa)
             handle.create_dataset("temperature", data=temperatures)
             handle.create_dataset("mesh", data=mesh)
+            if isotope:
+                handle.create_dataset("mass_variances", data=mass_variances)
+                handle.create_dataset("primitive_symbols", data=np.asarray(primitive_symbols, dtype="S"))
+                handle.create_dataset("gamma_isotope", data=gamma_isotope, compression="gzip")
         with (state["out"] / "kappa.csv").open("w", newline="") as stream:
             writer = csv.writer(stream)
             writer.writerow(["temperature_K", *["kappa_" + key + "_W_mK" for key in ("xx", "yy", "zz", "yz", "xz", "xy")]])

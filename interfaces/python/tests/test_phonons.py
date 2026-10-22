@@ -9,7 +9,9 @@ import inspect
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
+import runpy
+import sys
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -50,6 +52,7 @@ class Cell:
     def __init__(self, atoms):
         self.numbers, self.positions = atoms.numbers.copy(), atoms.positions.copy()
         self.cell, self.masses = atoms.cell.array.copy(), atoms.get_masses().copy()
+        self.symbols = atoms.get_chemical_symbols()
         self.p2s_map = np.arange(len(atoms))
 
     def __len__(self):
@@ -103,6 +106,7 @@ class ToyPhonopy:
 class ToyPhono3py:
     unstable = False
     transport_calls = 0
+    transport_options = []
     symmetrizations = []
 
     def __init__(self, unitcell, supercell_matrix, phonon_supercell_matrix, **kwargs):
@@ -149,10 +153,16 @@ class ToyPhono3py:
             values[1, 0] = -.8
         return values, None, np.asarray([[0, 0, 0], [1, 0, 0]])
 
-    def run_thermal_conductivity(self, is_LBTE, temperatures, write_kappa):
+    def run_thermal_conductivity(self, is_LBTE, temperatures, write_kappa, is_isotope=False, mass_variances=None):
         type(self).transport_calls += 1
+        self.transport_options.append(dict(is_LBTE=is_LBTE, is_isotope=is_isotope,
+                                          mass_variances=None if mass_variances is None else np.asarray(mass_variances).copy()))
         assert write_kappa is False
-        self.thermal_conductivity = SimpleNamespace(kappa=np.ones((1, len(temperatures), 6)))
+        gamma = None
+        if is_isotope:
+            assert np.asarray(mass_variances).shape == (len(self.primitive),)
+            gamma = np.repeat(np.asarray(mass_variances), 3).reshape(1, 1, -1)
+        self.thermal_conductivity = SimpleNamespace(kappa=np.ones((1, len(temperatures), 6)), gamma_isotope=gamma)
 
 
 @pytest.fixture
@@ -182,6 +192,7 @@ def toy(monkeypatch, tmp_path):
     ToyPhonopy.fits = 0
     ToyPhono3py.unstable = False
     ToyPhono3py.transport_calls = 0
+    ToyPhono3py.transport_options = []
     ToyPhono3py.symmetrizations = []
     monkeypatch.setattr(workflow, "_calculator", calculator)
     monkeypatch.setattr(phonopy, "Phonopy", ToyPhonopy)
@@ -212,6 +223,8 @@ def test_verified_dependency_api_signatures():
     assert "is_compact_fc" in inspect.signature(Phono3py.produce_fc3).parameters
     assert "use_symfc_projector" in inspect.signature(Phono3py.symmetrize_fc3).parameters
     assert "is_LBTE" in inspect.signature(Phono3py.run_thermal_conductivity).parameters
+    assert "is_isotope" in inspect.signature(Phono3py.run_thermal_conductivity).parameters
+    assert "mass_variances" in inspect.signature(Phono3py.run_thermal_conductivity).parameters
 
 
 def test_conversion_masses_and_input_guards():
@@ -288,6 +301,9 @@ def test_kappa_included_mask_symmetry_and_units(toy):
     result = kappa(toy, temperatures=(200., 300.), lbte=True)
     assert result["result"] == "transport_computed" and result["kappa_status"] == "computed_unconverged"
     assert result["identity"]["protocol"]["solver"] == "LBTE"
+    assert result["identity"]["protocol"]["isotope"] is False
+    assert ToyPhono3py.transport_options[0]["is_isotope"] is False
+    assert ToyPhono3py.transport_options[0]["mass_variances"] is None
     assert result["force_evaluations"]["fc3"]["excluded_pair_placeholders"] == 1
     assert ToyPhono3py.transport_calls == 1
     assert ToyPhono3py.symmetrizations == [(3, {"use_symfc_projector": False, "options": "level=3"}),
@@ -297,6 +313,83 @@ def test_kappa_included_mask_symmetry_and_units(toy):
     with h5py.File(toy.out / "kappa.hdf5") as handle:
         assert handle["kappa"].shape == (2, 6) and handle.attrs["unit"] == "W/(m K)"
         assert not handle.attrs["converged"]
+        assert not handle.attrs["isotope"] and "gamma_isotope" not in handle
+
+
+@pytest.mark.parametrize("lbte", [False, True])
+@pytest.mark.parametrize("isotope", [False, True])
+@pytest.mark.filterwarnings("ignore:.*undisplaced")
+def test_isotope_rta_lbte_and_mass_invariance(toy, lbte, isotope):
+    from phono3py.other.isotope import get_mass_variances
+    masses = toy.atoms.get_masses().copy()
+    expected_g = get_mass_variances(symbols=["C", "C"])
+    result = kappa(toy, isotope=isotope, lbte=lbte)
+    options = ToyPhono3py.transport_options[0]
+    assert options["is_LBTE"] is lbte and options["is_isotope"] is isotope
+    np.testing.assert_array_equal(toy.atoms.get_masses(), masses)
+    protocol = result["identity"]["protocol"]
+    assert protocol["isotope"] is isotope
+    assert protocol["isotope_parameters"]["primitive_symbols"] == ["C", "C"]
+    with h5py.File(toy.out / "kappa.hdf5") as handle:
+        assert bool(handle.attrs["isotope"]) is isotope
+        if isotope:
+            np.testing.assert_array_equal(options["mass_variances"], expected_g)
+            np.testing.assert_array_equal(result["isotope_parameters"]["mass_variances"], expected_g)
+            assert result["isotope_scattering"]["positive_count"] > 0
+            np.testing.assert_array_equal(handle["mass_variances"][:], expected_g)
+            assert handle["primitive_symbols"][:].tolist() == [b"C", b"C"]
+            assert np.isfinite(handle["gamma_isotope"][:]).all()
+        else:
+            assert options["mass_variances"] is None
+            assert result["isotope_parameters"]["mass_variances"] is None
+            assert "gamma_isotope" not in handle and "isotope_scattering" not in result
+
+
+@pytest.mark.parametrize("flags", [[], ["--isotope"], ["--isotope", "--lbte"]])
+def test_cli_isotope_forwarding(toy, monkeypatch, flags):
+    import ase.io
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(kwargs)
+        return dict(status="complete", result="TEST-ONLY", plan={}, convergence={"converged": False})
+
+    package = ModuleType("pysuperlinear")
+    package.__path__ = []
+    monkeypatch.setitem(sys.modules, "pysuperlinear", package)
+    monkeypatch.setitem(sys.modules, "pysuperlinear.phonons", SimpleNamespace(run_thermal_conductivity=run))
+    monkeypatch.setattr(ase.io, "read", lambda *args, **kwargs: [toy.atoms])
+    script = Path(__file__).parents[1] / "examples" / "lattice_kappa.py"
+    monkeypatch.setattr(sys, "argv", [str(script), "--model", "model.sus2", "--species", "C",
+        "--structure", "relaxed.json", "--output", "new-output", "--full-pairs", *flags])
+    runpy.run_path(str(script), run_name="__main__")
+    assert len(calls) == 1
+    assert calls[0]["isotope"] is ("--isotope" in flags)
+    assert calls[0]["lbte"] is ("--lbte" in flags)
+
+
+def test_isotope_dry_run_fingerprint_and_resume_rejection(toy):
+    result = kappa(toy, isotope=True, dry_run=True)
+    assert result["identity"]["protocol"]["isotope"] is True
+    assert result["isotope_parameters"]["primitive_symbols"] == ["C", "C"]
+    assert len(result["isotope_parameters"]["mass_variances"]) == 2
+    assert toy.calculators[0].calls == 0 and ToyPhono3py.transport_calls == 0
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        kappa(toy, isotope=False, dry_run=True, resume=True)
+    again = kappa(toy, isotope=True, dry_run=True, resume=True)
+    assert again["fingerprint"] == result["fingerprint"]
+
+
+@pytest.mark.filterwarnings("ignore:.*undisplaced")
+def test_zero_natural_mass_variance_is_allowed(toy, monkeypatch):
+    # Emulate a monoisotopic element's valid zero g; no positive-g assumption.
+    import phono3py.other.isotope
+    monkeypatch.setattr(phono3py.other.isotope, "get_mass_variances", lambda primitive: np.zeros(len(primitive)))
+    result = kappa(toy, isotope=True)
+    assert result["isotope_scattering"]["positive_count"] == 0
+    np.testing.assert_array_equal(result["isotope_parameters"]["mass_variances"], [0., 0.])
+    with h5py.File(toy.out / "kappa.hdf5") as handle:
+        np.testing.assert_array_equal(handle["gamma_isotope"][:], 0.)
 
 
 @pytest.mark.filterwarnings("ignore:.*undisplaced")
