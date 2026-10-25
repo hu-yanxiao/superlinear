@@ -11,6 +11,7 @@ PairStyle(sus2/embedded,PairSUS2Embedded);
 #include <string>
 #include <vector>
 namespace LAMMPS_NS {
+namespace SUS2SL { struct Model; }
 class PairSUS2Embedded : public Pair {
  public:
   explicit PairSUS2Embedded(class LAMMPS *);
@@ -25,7 +26,9 @@ class PairSUS2Embedded : public Pair {
   int pack_reverse_comm(int,int,double*) override;
   void unpack_reverse_comm(int,int*,double*) override;
   double memory_usage() override;
- private:
+ protected:
+  const SUS2SL::Model& model_data() const;
+  void validate_configuration();
   struct Embedded;
   std::unique_ptr<Embedded> embedded_;
   std::vector<int> type_map_;

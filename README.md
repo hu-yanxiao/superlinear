@@ -114,6 +114,13 @@ Direct for each model. Arbitrary type reordering uses explicit element mapping.
 Maintained phy-weigw CPU entry: `/work/phy-weigw/app/superlinear/lmp`.
 Source updates require reinstalling and rebuilding the interface.
 
+## LAMMPS Kokkos/GPU
+
+`sus2/embedded/kk` supports native Static, Effect, Pure-W and Adaptive models,
+with Direct and Hermite Table evaluation. Use its dedicated installer in a
+clean, isolated LAMMPS tree; the historical `sus2mtp/kk` binary is a different
+interface. See the [build, supported options and measured CPU120/GPU results](interfaces/lammps/README.superlinear-kokkos.md).
+
 ## Python: ASE, phonons and thermal conductivity
 
 **Python ≥3.9; Python 3.12 recommended.** Requires a C++17 compiler, BLAS and

@@ -22,6 +22,7 @@ class Kernel {
   // callers' historical all-model-species behavior.
   void configure_species(std::vector<int>);
   int species_count() const { return model_.species_count; }
+  const Model& model() const { return model_; }
   int communication_width() const;
   double cutoff() const { return model_.cutoff(); }
   RadialTableStats radial_stats() const { return radial_.stats(); }

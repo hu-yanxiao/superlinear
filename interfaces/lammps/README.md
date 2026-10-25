@@ -33,8 +33,19 @@ No external SUS2 inference archive or training/Python runtime is required.
 The maintained cluster entry is `/work/phy-weigw/app/superlinear/lmp`; see
 the [build and deployment notes](README.superlinear-embedded-cpu.md#maintained-cluster-installation).
 It does not replace the historical SUS2 LAMMPS executable.
+
+## Current superlinear models: Kokkos/GPU interface
+
+Use [`sus2/embedded/kk`](README.superlinear-kokkos.md) for native Static,
+Effect, Pure-W and Adaptive models, including Direct/Table paths and
+feature-forward/adjoint-reverse MPI communication. Install with
+`scripts/install_superlinear_embedded_kokkos.sh` into a clean, isolated
+LAMMPS tree. The linked guide gives the tested CUDA build, supported scope
+and CPU120/GPU results; this backend does not use the historical GPU binary
+listed below.
+
 The sections below describe the **historical SUS2-SH interfaces**, not the
-installation or model support of `sus2/embedded`.
+installation or model support of `sus2/embedded` or `sus2/embedded/kk`.
 
 ## Historical SUS2-SH interfaces
 

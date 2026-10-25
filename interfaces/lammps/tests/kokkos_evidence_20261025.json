@@ -1,0 +1,127 @@
+{
+  "schema": "sus2-kokkos-recorded-evidence-index-v2",
+  "status": "REQUESTED_RECORDED_SCOPE_PASS",
+  "date_utc": "2026-10-25",
+  "gpu_qualified": false,
+  "recorded_scope_accepted": true,
+  "scope": "Recorded model-option matrix plus separately accepted finite continuous Direct100 and matched throughput. Original conservative report flags are retained; this is not an all-input or high-order Table100 proof.",
+  "production_replaced": false,
+  "candidate_binary_sha256": "993ce7ff1d7a880c9a95e3715d8830b9d5a7da33c74d0694ae53917eae5902ea",
+  "installed_source_receipt_sha256": "5661ab038d565926c52c729d58eb0efd772b61fc48c025e4ddaef15609175623",
+  "device_sources": {
+    "ML-SUS2-KK/pair_sus2_embedded_kokkos.cpp": "96879b80ce622f18eef220f64c6da97641a4489c3d0d6299bf5954acd9007592",
+    "ML-SUS2-KK/sus2_sl_kokkos_kernel.h": "f6372d231c875e448be267bee2442a1a783f0d3d4d822ddb4e3c57a0296980eb",
+    "ML-SUS2-KK/sus2_sl_kokkos_radial.h": "b8e851cac20d6e51e42e432f74512d09dc3f805bb340b7772b324396e8252b7c"
+  },
+  "focused_role_cuda": {
+    "job_id": 4352649,
+    "status": "ROLE_FOCUSED_RAW_REPLAY_PASS",
+    "independent_raw_audit_sha256": "e6bf1cedcbabeb9ea69a846d26eb2e95e4a8cee2d9bc11ac22ee835a6bff5a37",
+    "qualification_report_sha256": "9d25b6856f16005135060751c4b3071406457f934d7e8bde1302a683d6768363",
+    "raw_archive_sha256": "e30dd0e61852675f8fdbe09733d9bffad362f0488af3adab148e0995cc991125",
+    "sealed_harness_archive_sha256": "5576902970dbcd645d308e79c1be655f738b441ce7d2f2e96068939bfc64f075",
+    "cuda_launches": 368,
+    "native_efs_snapshots": 608,
+    "settings": 8,
+    "mpi_ranks": [1, 2, 4],
+    "no_tools_controls": 112,
+    "scope": "Frozen role-focused cases only; not the full mode matrix or a throughput result"
+  },
+  "continuous_direct100": {
+    "job_id": 4352690,
+    "status": "FINITE_PRODUCTION_CONTINUOUS_DIRECT100_ACCEPTED",
+    "independent_raw_audit_sha256": "9a09f7c403325663e564266618ec268f600a85e58434b0ff784273f59261b987",
+    "qualification_report_sha256": "c7d16b841107d77c45c91d67fa5109eea317e3c7f79c6937e24ca60b1f2ce088",
+    "raw_archive_sha256": "6074e848f477829c61ccc2ade36b338ff7b1c0fcba7f5056d8f87d3b65ccb50b",
+    "accepted_cases": 100,
+    "original_cpu_strict": {"PASS": 73, "FAIL": 7, "UNSUPPORTED_REFERENCE": 20},
+    "fixed_high_precision": {"PASS": 40, "NOT_APPLICABLE": 60},
+    "requested_flags": {"generic": 0, "tile": 1, "reduce": 0, "role": 1},
+    "scope": "Frozen plain L1/K6/body-3 cases, MPI1, continuous Direct only; old strict results retained",
+    "table100_qualified": false,
+    "full_modes_qualified": false
+  },
+  "focused_performance_plan": {
+    "status": "FOCUSED_AB_COMPLETE_POLICY_SELECTION_NOT_FINAL_TIMING",
+    "completed_windows": 96,
+    "sealed_harness_archive_sha256": "d31b7a761048035992b565f2e3a660d5ab8e5086886f349ef5367a358ad7439e",
+    "runner_sha256": "bf78d13a4c0f44995f7e56c798d6e09becb3b0381d108536b3d67c9f4e993bd4",
+    "scope": "Separate focused A/B experiment, not the role-qualification archive or final all-scale timing matrix",
+    "legacy_campaign_script_guards_must_not_be_edited_to_reuse": true
+  },
+  "preimplementation_research": {
+    "recovered_original_history_index_sha256": "5e9c4e50d8906c579c85dc8f22bc15ad308d1b4430c1c379cf33660bbd8e72cb",
+    "original_report_utc": "2026-10-24T05:27:39.889Z",
+    "main_received_report_utc": "2026-10-24T05:27:45.675Z",
+    "first_new_cpp_header_utc": "2026-10-24T05:32:07.640Z",
+    "primary_sources": [
+      "https://github.com/mir-group/pair_nequip_allegro",
+      "https://github.com/MDIL-SNU/SevenNet/blob/main/sevenn/pair_e3gnn/pair_e3gnn_parallel.cpp",
+      "https://github.com/lammps/lammps/blob/develop/src/KOKKOS/pair_snap_kokkos_impl.h"
+    ],
+    "note": "Chronology recovered from original timestamped events, not inferred from a later README; private history files are not published."
+  },
+  "full_recorded_model_matrix": {
+    "job_id": 4352903,
+    "exit_code": 0,
+    "original_status": "MODEL_SCOPE_PASS_RADIAL_UNRESOLVED",
+    "full_report_sha256": "15f45b89f1fa6eea908fd47c914814cdfce95313cb178d02a89e5f3b8abf2332",
+    "postrun_raw_audit_sha256": "098fa5a8dcb5460fe51668bb59b537dcda1771d53c240845a3af1965a64727f2",
+    "sealed_harness_sha256": "26cc61d7e87b5be344382c8b07d25079cb85811e83874e23bf478e96d680c7dd",
+    "core_positive": 1963,
+    "extension_positive": 486,
+    "negative_controls": 6,
+    "smoke_positive_separate": 163,
+    "smoke_negative_separate": 6,
+    "mpi_ranks": [1, 2, 4],
+    "phase_reports": {
+      "smoke": "94aea173af891cd186b5656f1d42245076fc65b341900d971bccea2a41574217",
+      "core": "5e9f74d9f726c23daf79f8d636f0ea35914913bb622c6f19d46f59b262570a02",
+      "extension": "ca0d019ef5851e92a214b114cc9fb34126e781effa5bc32aa6884c37148943f4"
+    },
+    "raw_replay_scope": "Original sealed numerical, actual-flag, source, process and native-binding verifiers; original reports were not rewritten."
+  },
+  "selected_execution_policy": {
+    "policy_sha256": "a1eab8074e43fb98f459c8905b1401e59be323190ab052995297f916e610bc14",
+    "synthetic_policy_sha256": "39fd7355d14d4210f832dade9c33fca1b73c056c7e9eb426559ddc81ac08043f",
+    "flag_order": ["generic", "tile", "reduce", "role"],
+    "carbon_static_direct_and_table": [0, 1, 0, 1],
+    "carbon_effect_direct_and_table": [0, 1, 0, 1],
+    "fecn6_direct_and_table": [0, 0, 0, 1],
+    "compiled_defaults_unchanged": [0, 0, 0, 0],
+    "scope": "Selected from matched 100k-scale A/B medians, not universal per-model or per-size optima."
+  },
+  "final_matched_throughput": {
+    "status": "TIMING66_COMPLETE_NOT_FULL_GPU_QUALIFICATION",
+    "gpu": "One NVIDIA A100-SXM4-80GB per window, exclusive, no MPS",
+    "cpu": "120 physical cores on one 1t81c node",
+    "groups": 22,
+    "gpu_windows": 66,
+    "cpu_windows": 66,
+    "repeats": 3,
+    "summary_sha256": "f401e5c6c12e4be283e8209ef70acda1dcbc4a05a106e497ac88deb0ecfc85c6",
+    "summary_text_sha256": "e520f97fdba4e8f0c5f87d086f892c4b148f488459dc823911aada54ff5b7d08",
+    "independent_statistics_and_local_gpu_raw_audit_sha256": "a9324c78d6566148b49b6cb76bb7591a407092f0be3b5adfdd92523df8011361",
+    "independent_audit_original_summary_sha256": "21dc4249bd20ac0c643651cd36fa396fc6559be4071cc76c6f1f8be3cde9647a",
+    "final_summary_timing_rows_identical_to_independent_audit": true,
+    "cpu_raw_audit_sha256": "33f95d0468a0e2e19d92530a406f7218243b6b01c8f6e2e43a565c38de88ab80",
+    "secondary_pair_audit_sha256": "a03e8ea013a26e64690ce30e235d3b1a24209817ca96a16f206fc32c16d931ba",
+    "family_job_ids": {"static": 4352919, "effect": 4352920, "fecn6": 4352918},
+    "raw_archives": {
+      "static": "c084262fa74a72d9504759c24b76c215c0a413573e6abb2d1521a4e14382bfea",
+      "effect": "8bcd2a4303782a71b2cc92b958d2c385bf741bc7a26fa827d7480a878ada5f3a",
+      "fecn6": "e2470904067e3aa3a75246d20de1a59edd76e07ed34ea833ece9baed7e68ce2b"
+    },
+    "plot_pdf_sha256": "8971fa3088874cf50ed516b57fc7a2809668946e363e1663fba7fd327f7a0024",
+    "plot_png_sha256": "56353b65f30db80d2605728e9d7130efe3da1197b72e6e0b6d982c573deae479",
+    "scope": "All 66 GPU raw logs and receipts replayed; remote renderer also replayed CPU logs. Independent local cross-check uses immutable CPU raw-audit references because local CPU stdout copies are unavailable. Timing completion is not a numerical verdict."
+  },
+  "historical_strict_failures_reclassified": false,
+  "unclaimed_scope": [
+    "Universal correctness or exhaustive testing of every legal runtime dimension",
+    "High-order Table100 or equivalence to the historical native s_lmp linear-table contract",
+    "Long-time NVE conservation, untested memory capacities or arbitrary MPI layouts",
+    "Production executable replacement"
+  ],
+  "artifact_storage": "External campaign reports and raw archives; this index is not a bundled reproduction dataset or a new qualification verdict"
+}

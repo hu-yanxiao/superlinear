@@ -189,7 +189,11 @@ void PairSUS2Embedded::coeff(int narg,char** arg)
     for(int i=1;i<=atom->ntypes;++i) for(int j=1;j<=atom->ntypes;++j) setflag[i][j]=1;
   } catch(const std::exception& e) { error->one(FLERR,"Embedded SUS2 model: {}",e.what()); }
 }
-void PairSUS2Embedded::init_style()
+const SUS2SL::Model& PairSUS2Embedded::model_data() const
+{
+  return embedded_->kernel->model();
+}
+void PairSUS2Embedded::validate_configuration()
 {
   if(std::strcmp(update->unit_style,"metal")) error->all(FLERR,"sus2/embedded requires units metal");
   if(force->newton_pair!=1) error->all(FLERR,"sus2/embedded requires newton pair on");
@@ -200,6 +204,10 @@ void PairSUS2Embedded::init_style()
     error->all(FLERR,"sus2/embedded requires complete neighborhoods; neigh_modify include/exclude is not supported");
   if(atom->molecular) for(int k=1;k<=3;++k) if(force->special_lj[k]!=1.0)
     error->all(FLERR,"sus2/embedded requires special_bonds lj 1 1 1 for molecular atom styles");
+}
+void PairSUS2Embedded::init_style()
+{
+  validate_configuration();
   neighbor->add_request(this,NeighConst::REQ_FULL);
   try {update_table_species();}
   catch(const std::exception& e) {error->one(FLERR,"Embedded SUS2 species selection: {}",e.what());}
@@ -324,10 +332,17 @@ void PairSUS2Embedded::report_profile()
     stats.domain_fallbacks,stats.memory_fallbacks,stats.invalid_fallbacks}};
   std::array<unsigned long long,5> delta{},global{};
   for(int i=0;i<5;++i) delta[i]=counts[i]-profile_radial_previous_[i];
-  MPI_Reduce(delta.data(),global.data(),5,MPI_UNSIGNED_LONG_LONG,MPI_SUM,0,world);
   const unsigned long long bytes=stats.bytes;
   unsigned long long max_bytes=0;
+#ifdef MPI_STUBS
+  // LAMMPS' single-rank MPI stubs omit MPI_UNSIGNED_LONG_LONG. These
+  // reductions are identities in that build; keep real-MPI types unchanged.
+  global=delta;
+  max_bytes=bytes;
+#else
+  MPI_Reduce(delta.data(),global.data(),5,MPI_UNSIGNED_LONG_LONG,MPI_SUM,0,world);
   MPI_Reduce(&bytes,&max_bytes,1,MPI_UNSIGNED_LONG_LONG,MPI_MAX,0,world);
+#endif
   if(comm->me==0) {
     const char* names[]={"neighbors","inner_forward","feature_forward","outer",
       "feature_reverse","inner_reverse_finish","scatter"};
