@@ -242,8 +242,8 @@ legal limits include L=0..4, tensor order <=2 and <=L, and Shapeev B<=12;
 channel dimensions are runtime values, not a 2/4/8 whitelist.
 
 The accepted Table update (`87c5eee6…`) additionally passed 35 targeted actual
-CUDA lookup/kernel checks and 24 differential native E/F/virial checks in the
-paired timing campaign. These checks cover the frozen Static, Effect and
+CUDA lookup/kernel checks and 24 initial-geometry E/F/virial comparisons
+against the prior GPU binary in the paired timing campaign. These checks cover the frozen Static, Effect and
 FeCN6 models plus selected Legacy, Pure-W and Adaptive fixtures. The earlier
 full CUDA/MPI matrix belongs to `993ce7ff…`; it was not rerun in full for this
 Table update. The [Table evidence index](tests/kokkos_tableopt_evidence_20261025.json)
