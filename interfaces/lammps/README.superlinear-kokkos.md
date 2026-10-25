@@ -82,12 +82,29 @@ set before launching MPI. They change execution layout, not model parameters.
 | `SUS2_SL_KOKKOS_FORWARD_ROLE_SPECIALIZE` | Separate Gate, Message and OuterRaw forward kernels. |
 | `SUS2_SL_KOKKOS_REVERSE_CENTER_REDUCE` | Reduce reverse edge contributions within an owned center. |
 | `SUS2_SL_KOKKOS_GENERIC` | Use the generic device reference path; override the other three switches. |
+| `SUS2_SL_KOKKOS_TABLE_CONTEXT` | Reuse per-neighbor frozen-table routing and Hermite weights in the optimized raw forward/reverse paths. |
+| `SUS2_SL_KOKKOS_TABLE_PACKED` | Pack immutable frozen knots in unpadded tiles of up to four channels. |
 
 Startup prints the four effective `SUS2_KOKKOS_*` values. Role specialization
 coexists with atom-by-product-row graph scheduling and does not whitelist
 historical channel dimensions. Choose variants from matched measurements:
 a faster Carbon setting is not automatically a faster FeCN6 setting. No
 universal fastest combination is selected automatically.
+
+The two Table switches also default to `0`; neither changes Direct evaluation.
+Startup prints their requested values; `SUS2_KOKKOS_TABLE_ACTIVE` reports actual
+activation after table setup. Context reuse selects separate Gate/OuterRaw
+forward kernels even if the role switch is `0`. Generic reference scheduling
+does not use contexts, but can read packed tables. Compare context variants
+with role specialization enabled in both arms to isolate lookup reuse.
+Packing preserves table admission, knot precision/count, deduplication and the
+configured byte cap. Contexts are bounded per-neighbor tiles or thread-local
+state, never an all-edges radial cache. Dynamic source coefficients are not
+frozen, and generic basis-vector lookup is unchanged.
+Forward contexts use typed structure-of-arrays shared storage with neighbors
+contiguous. Packed frozen radial producers assign adjacent lanes to adjacent
+channels; message/basis producers retain their original scheduling. Neighbor
+accumulation and the force chain retain their original order.
 
 ## Radial paths and memory
 

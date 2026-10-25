@@ -13,22 +13,25 @@ int main(int argc,char**argv) {
   try {
     Model m;m.load(argv[1]);
     const char* names[]={"SUS2_SL_KOKKOS_GENERIC","SUS2_SL_KOKKOS_FORWARD_RADIAL_TILE",
-                         "SUS2_SL_KOKKOS_REVERSE_CENTER_REDUCE","SUS2_SL_KOKKOS_FORWARD_ROLE_SPECIALIZE"};
+                         "SUS2_SL_KOKKOS_REVERSE_CENTER_REDUCE","SUS2_SL_KOKKOS_FORWARD_ROLE_SPECIALIZE",
+                         "SUS2_SL_KOKKOS_TABLE_CONTEXT","SUS2_SL_KOKKOS_TABLE_PACKED"};
     for(const char* name:names)unsetenv(name);
     {
       Engine engine(m);
-      if(engine.uses_generic_reference()||engine.uses_forward_radial_tile()||engine.uses_reverse_center_reduce()||engine.uses_forward_role_specialize())
+      if(engine.uses_generic_reference()||engine.uses_forward_radial_tile()||engine.uses_reverse_center_reduce()||engine.uses_forward_role_specialize()||engine.uses_table_context()||engine.uses_table_packed())
         throw std::runtime_error("Performance switches must default to disabled");
     }
     int combinations=0;
-    for(int generic=0;generic<2;++generic)for(int forward=0;forward<2;++forward)for(int reverse=0;reverse<2;++reverse)for(int role=0;role<2;++role){
+    for(int generic=0;generic<2;++generic)for(int forward=0;forward<2;++forward)for(int reverse=0;reverse<2;++reverse)for(int role=0;role<2;++role)for(int context=0;context<2;++context)for(int packed=0;packed<2;++packed){
       setenv(names[0],generic?"1":"0",1);setenv(names[1],forward?"1":"0",1);setenv(names[2],reverse?"1":"0",1);
       setenv(names[3],role?"1":"0",1);
+      setenv(names[4],context?"1":"0",1);setenv(names[5],packed?"1":"0",1);
       Engine engine(m);
       if(engine.uses_generic_reference()!=bool(generic)||
          engine.uses_forward_radial_tile()!=bool(!generic&&forward)||
          engine.uses_reverse_center_reduce()!=bool(!generic&&reverse)||
-         engine.uses_forward_role_specialize()!=bool(!generic&&role))
+         engine.uses_forward_role_specialize()!=bool(!generic&&role)||
+         engine.uses_table_context()!=bool(context)||engine.uses_table_packed()!=bool(packed))
         throw std::runtime_error("Effective performance switch state is incorrect");
       ++combinations;
     }

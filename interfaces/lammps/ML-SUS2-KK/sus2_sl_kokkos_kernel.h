@@ -29,6 +29,42 @@ template<class DeviceType> class KokkosKernel {
   using TeamMember=typename TeamPolicy::member_type;
   using Scratch=Kokkos::View<double**,Kokkos::LayoutRight,
       typename TeamMember::scratch_memory_space,Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+  using FrozenContext=typename DeviceRadial<DeviceType>::FrozenContext;
+  // Neighbor is the contiguous dimension: concurrent edge lanes access
+  // consecutive fields instead of the same bank in 128-byte AoS records.
+  struct ContextScratch {
+    using Space=typename TeamMember::scratch_memory_space;
+    using Traits=Kokkos::MemoryTraits<Kokkos::Unmanaged>;
+    using Real=Kokkos::View<double**,Kokkos::LayoutLeft,Space,Traits>;
+    using Generation=Kokkos::View<std::uint64_t*,Space,Traits>;
+    using Index=Kokkos::View<std::size_t**,Kokkos::LayoutLeft,Space,Traits>;
+    using Integer=Kokkos::View<int**,Kokkos::LayoutLeft,Space,Traits>;
+    Real real;
+    Generation generation;
+    Index index;
+    Integer integer;
+    KOKKOS_INLINE_FUNCTION ContextScratch()=default;
+    KOKKOS_INLINE_FUNCTION ContextScratch(const Space& space,int count)
+      :real(space,count,10),generation(space,count),index(space,count,2),integer(space,count,5) {}
+    static std::size_t shmem_size(int count) {
+      return Real::shmem_size(count,10)+Generation::shmem_size(count)
+        +Index::shmem_size(count,2)+Integer::shmem_size(count,5);
+    }
+    KOKKOS_INLINE_FUNCTION void store(int t,const FrozenContext& c) const {
+      generation(t)=c.generation;index(t,0)=c.cell;index(t,1)=c.intervals;
+      real(t,0)=c.radius;real(t,1)=c.step;
+      for(int q=0;q<4;++q){real(t,2+q)=c.value_weight[q];real(t,6+q)=c.deriv_weight[q];}
+      integer(t,0)=c.ti;integer(t,1)=c.tj;integer(t,2)=c.a;integer(t,3)=c.b;integer(t,4)=c.valid;
+    }
+    KOKKOS_INLINE_FUNCTION FrozenContext load(int t) const {
+      FrozenContext c;
+      c.generation=generation(t);c.cell=index(t,0);c.intervals=index(t,1);
+      c.radius=real(t,0);c.step=real(t,1);
+      for(int q=0;q<4;++q){c.value_weight[q]=real(t,2+q);c.deriv_weight[q]=real(t,6+q);}
+      c.ti=integer(t,0);c.tj=integer(t,1);c.a=integer(t,2);c.b=integer(t,3);c.valid=integer(t,4)!=0;
+      return c;
+    }
+  };
   // Public because NVCC names this type in specialized launch signatures.
   enum class ForwardRole { OuterRaw,GateRaw,Message };
   PublicMatrix positions,signal,signal_adjoint,force,virial;
@@ -106,6 +142,7 @@ template<class DeviceType> class KokkosKernel {
   bool generic_reference_=false;
   bool forward_radial_tile_=false,reverse_center_reduce_=false;
   bool forward_role_specialize_=false;
+  bool table_context_=false,table_packed_=false;
 
   static bool environment_switch(const char* name) {
     const char* value=std::getenv(name);
@@ -232,6 +269,7 @@ template<class DeviceType> class KokkosKernel {
     // Mixer factors depend on k. Keep each angular component's original k
     // contraction, then reduce neighbor contributions; do not freeze sources.
     const bool mixer=message&&d.mode!=3;
+    const bool packed=!message&&d.radial.uses_packed();
     const int stride=mixer?9:2,columns=4+d.H+row_tile*stride;
     auto policy=TeamPolicy(owned_,Kokkos::AUTO,1).set_scratch_size(0,
         Kokkos::PerTeam(Scratch::shmem_size(tile,columns)));
@@ -249,7 +287,7 @@ template<class DeviceType> class KokkosKernel {
         team.team_barrier();
         for(int first=0;first<rows;first+=row_tile){const int nr=rows-first<row_tile?rows-first:row_tile;
           Kokkos::parallel_for(Kokkos::TeamThreadRange(team,count*nr),[&](const int idx){
-            const int local=idx/count,t=idx%count,row=first+local;
+            const int local=packed?idx%nr:idx/count,t=packed?idx/nr:idx%count,row=first+local;
             const int l=message?row/d.O:row%d.L,channel=message?row%d.O:row/d.L;
             const int slot=4+d.H+local*stride;const double r=shared(t,3);
             if(!(r>0.))return;const int j=d.nbr(begin+t),tj=d.type(j);
@@ -298,14 +336,17 @@ template<class DeviceType> class KokkosKernel {
   template<ForwardRole Role> void launch_forward_role(bool tiled) {
     if(tiled)forward_radial_tile_role<Role>();else forward_team_role<Role>();
   }
-  template<ForwardRole Role> void forward_team_role() {
+  template<ForwardRole Role,bool Context=false> void forward_team_role() {
     constexpr bool gate=Role==ForwardRole::GateRaw,message=Role==ForwardRole::Message;
     if(!owned_)return;const auto d=d_;const Matrix values=gate?d.gv:d.ov;
     const I basic=gate?d.inner_basic:d.outer_basic;const int rows=message?d.L*d.O:d.F,tile=16;
-    auto policy=TeamPolicy(owned_,Kokkos::AUTO).set_scratch_size(0,Kokkos::PerTeam(Scratch::shmem_size(tile,4+d.H)));
+    auto policy=TeamPolicy(owned_,Kokkos::AUTO).set_scratch_size(0,Kokkos::PerTeam(
+        Scratch::shmem_size(tile,4+d.H)+(Context?ContextScratch::shmem_size(tile):0)));
     Kokkos::parallel_for(message?"sus2_message_forward_role_team":gate?"sus2_gate_forward_role_team":"sus2_static_effect_forward_role_team",policy,KOKKOS_LAMBDA(const TeamMember&team){
       const int i=team.league_rank(),ti=d.type(i);int lo,hi;if(!d.edge_range(i,lo,hi))return;
       Scratch shared(team.team_scratch(0),tile,4+d.H);
+      ContextScratch contexts;
+      if(Context)contexts=ContextScratch(team.team_scratch(0),tile);
       for(int begin=lo;begin<hi;begin+=tile){const int count=hi-begin<tile?hi-begin:tile;
         Kokkos::parallel_for(Kokkos::TeamThreadRange(team,count),[&](const int t){
           const int j=d.nbr(begin+t);double delta[3],r;
@@ -313,12 +354,15 @@ template<class DeviceType> class KokkosKernel {
           for(int q=0;q<3;++q)shared(t,q)=delta[q];shared(t,3)=r;
           double y[25],unused[75];kokkos_detail::harmonics<false>(delta[0],delta[1],delta[2],d.L-1,d.norm,y,unused);
           for(int h=0;h<d.H;++h)shared(t,4+h)=y[h];
+          if(Context)contexts.store(t,d.radial.prepare_context(r,ti,d.type(j)));
         });
         team.team_barrier();
         Kokkos::parallel_for(Kokkos::TeamThreadRange(team,rows),[&](const int row){
           const int l=(Role==ForwardRole::Message)?row/d.O:row%d.L,channel=(Role==ForwardRole::Message)?row%d.O:row/d.L;double accum[9]={};
           for(int t=0;t<count;++t){const double r=shared(t,3);if(!(r>0.))continue;const int j=d.nbr(begin+t),tj=d.type(j);
-            if(Role!=ForwardRole::Message){double rv,rd;d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,rv,rd);
+            if(Role!=ForwardRole::Message){double rv,rd;
+              if(Context)d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,contexts.load(t),rv,rd);
+              else d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,rv,rd);
               const double factor=(Role==ForwardRole::GateRaw)?d.gate_species(ti*d.F+row)*d.gate_species(tj*d.F+row):d.outer_species(ti*d.F+row)*(d.outer_species(tj*d.F+row)+(d.gated?d.additive(tj*d.F+row)*d.s(j,row):0.));
               for(int c=0;c<2*l+1;++c)accum[c]+=factor*rv*shared(t,4+l*l+c);
             }else if(d.mode==3){const int mu=channel*d.L+l,cr=row*d.B;double slope,shift;d.warp(ti,tj,channel,l,slope,shift);double rv=0.;
@@ -337,7 +381,7 @@ template<class DeviceType> class KokkosKernel {
       }
     });
   }
-  template<ForwardRole Role> void forward_radial_tile_role() {
+  template<ForwardRole Role,bool Context=false> void forward_radial_tile_role() {
     constexpr bool gate=Role==ForwardRole::GateRaw,message=Role==ForwardRole::Message;
     if(!owned_)return;const auto d=d_;const Matrix values=gate?d.gv:d.ov;
     const I basic=gate?d.inner_basic:d.outer_basic;
@@ -345,12 +389,15 @@ template<class DeviceType> class KokkosKernel {
     // Mixer factors depend on k. Keep each angular component's original k
     // contraction, then reduce neighbor contributions; do not freeze sources.
     const bool mixer=message&&d.mode!=3;
+    const bool packed=!message&&d.radial.uses_packed();
     const int stride=mixer?9:2,columns=4+d.H+row_tile*stride;
     auto policy=TeamPolicy(owned_,Kokkos::AUTO,1).set_scratch_size(0,
-        Kokkos::PerTeam(Scratch::shmem_size(tile,columns)));
+        Kokkos::PerTeam(Scratch::shmem_size(tile,columns)+(Context?ContextScratch::shmem_size(tile):0)));
     Kokkos::parallel_for(message?"sus2_message_forward_role_radial_tile":gate?"sus2_gate_forward_role_radial_tile":"sus2_static_effect_forward_role_radial_tile",policy,KOKKOS_LAMBDA(const TeamMember&team){
       const int i=team.league_rank(),ti=d.type(i);int lo,hi;if(!d.edge_range(i,lo,hi))return;
       Scratch shared(team.team_scratch(0),tile,columns);
+      ContextScratch contexts;
+      if(Context)contexts=ContextScratch(team.team_scratch(0),tile);
       for(int begin=lo;begin<hi;begin+=tile){const int count=hi-begin<tile?hi-begin:tile;
         Kokkos::parallel_for(Kokkos::TeamThreadRange(team,count),[&](const int t){
           const int j=d.nbr(begin+t);double delta[3],r;
@@ -358,15 +405,18 @@ template<class DeviceType> class KokkosKernel {
           for(int q=0;q<3;++q)shared(t,q)=delta[q];shared(t,3)=r;
           double y[25],unused[75];kokkos_detail::harmonics<false>(delta[0],delta[1],delta[2],d.L-1,d.norm,y,unused);
           for(int h=0;h<d.H;++h)shared(t,4+h)=y[h];
+          if(Context)contexts.store(t,d.radial.prepare_context(r,ti,d.type(j)));
         });
         team.team_barrier();
         for(int first=0;first<rows;first+=row_tile){const int nr=rows-first<row_tile?rows-first:row_tile;
           Kokkos::parallel_for(Kokkos::TeamThreadRange(team,count*nr),[&](const int idx){
-            const int local=idx/count,t=idx%count,row=first+local;
+            const int local=packed?idx%nr:idx/count,t=packed?idx/nr:idx%count,row=first+local;
             const int l=(Role==ForwardRole::Message)?row/d.O:row%d.L,channel=(Role==ForwardRole::Message)?row%d.O:row/d.L;
             const int slot=4+d.H+local*((Role==ForwardRole::Message)?stride:2);const double r=shared(t,3);
             if(!(r>0.))return;const int j=d.nbr(begin+t),tj=d.type(j);
-            if(Role!=ForwardRole::Message){double rv,rd;d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,rv,rd);
+            if(Role!=ForwardRole::Message){double rv,rd;
+              if(Context)d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,contexts.load(t),rv,rd);
+              else d.radial.contract(r,ti,tj,channel,l,Role==ForwardRole::GateRaw,rv,rd);
               shared(t,slot)=rv;
               shared(t,slot+1)=(Role==ForwardRole::GateRaw)?d.gate_species(ti*d.F+row)*d.gate_species(tj*d.F+row):d.outer_species(ti*d.F+row)*(d.outer_species(tj*d.F+row)+(d.gated?d.additive(tj*d.F+row)*d.s(j,row):0.));
             }else if(d.mode==3){const int mu=channel*d.L+l,cr=row*d.B;double slope,shift;d.warp(ti,tj,channel,l,slope,shift);double rv=0.;
@@ -402,7 +452,18 @@ template<class DeviceType> class KokkosKernel {
       }
     });
   }
-  void raw_forward(bool gate){if(generic_reference_)raw_forward_generic(gate);else forward_team(gate,false);}
+  template<ForwardRole Role> void frozen_forward() {
+    // Only the fixed radial path uses this bounded per-edge context. Dynamic
+    // source coefficients and generic reference scheduling remain unchanged.
+    if(forward_radial_tile_)forward_radial_tile_role<Role,true>();
+    else forward_team_role<Role,true>();
+  }
+  void raw_forward(bool gate){
+    if(generic_reference_)raw_forward_generic(gate);
+    else if(d_.radial.uses_context()){
+      if(gate)frozen_forward<ForwardRole::GateRaw>();else frozen_forward<ForwardRole::OuterRaw>();
+    }else forward_team(gate,false);
+  }
   void raw_forward_generic(bool gate) {
     const auto d=d_;const Matrix values=gate?d.gv:d.ov;const I basic=gate?d.inner_basic:d.outer_basic;
     Kokkos::parallel_for(gate?"sus2_gate_radial":"sus2_legacy_radial",Range(0,static_cast<std::size_t>(owned_)*d.F),KOKKOS_LAMBDA(std::size_t idx){
@@ -419,9 +480,13 @@ template<class DeviceType> class KokkosKernel {
     });
   }
   void raw_reverse_team(bool gate) {
-    if(reverse_center_reduce_)raw_reverse_team_impl<true>(gate);else raw_reverse_team_impl<false>(gate);
+    if(d_.radial.uses_context()){
+      if(reverse_center_reduce_)raw_reverse_team_impl<true,true>(gate);else raw_reverse_team_impl<false,true>(gate);
+    }else{
+      if(reverse_center_reduce_)raw_reverse_team_impl<true>(gate);else raw_reverse_team_impl<false>(gate);
+    }
   }
-  template<bool Reduce> void raw_reverse_team_impl(bool gate) {
+  template<bool Reduce,bool Context=false> void raw_reverse_team_impl(bool gate) {
     if(!owned_)return;const auto d=d_;const Matrix adj=gate?d.ga:d.oa;const I basic=gate?d.inner_basic:d.outer_basic;
     auto policy=TeamPolicy(owned_,Kokkos::AUTO,1);
     if(Reduce)policy.set_scratch_size(0,Kokkos::PerThread(Scratch::shmem_size(1,9)));
@@ -431,7 +496,11 @@ template<class DeviceType> class KokkosKernel {
       Kokkos::parallel_for(Kokkos::TeamThreadRange(team,lo,hi),[&](const int e){
         const int j=d.nbr(e);double delta[3],r;if(!d.geometry(i,j,delta,r)||r>=d.cutoff)return;const int tj=d.type(j);
         double y[25],dy[75],g[3]={};kokkos_detail::harmonics<true>(delta[0],delta[1],delta[2],d.L-1,d.norm,y,dy);
-        for(int mu=0;mu<d.F;++mu){const int k=mu/d.L,l=mu%d.L;double rv,rd;d.radial.contract(r,ti,tj,k,l,gate,rv,rd);
+        FrozenContext context;
+        if(Context)context=d.radial.prepare_context(r,ti,tj);
+        for(int mu=0;mu<d.F;++mu){const int k=mu/d.L,l=mu%d.L;double rv,rd;
+          if(Context)d.radial.contract(r,ti,tj,k,l,gate,context,rv,rd);
+          else d.radial.contract(r,ti,tj,k,l,gate,rv,rd);
           const double center=gate?d.gate_species(ti*d.F+mu):d.outer_species(ti*d.F+mu);
           const double source=gate?d.gate_species(tj*d.F+mu):d.outer_species(tj*d.F+mu)+(d.gated?d.additive(tj*d.F+mu)*d.s(j,mu):0.);double sa=0.;
           for(int c=0;c<2*l+1;++c){const int node=basic(mu*9+c);if(node<0)continue;const double a=adj(i,node),aa=a*center*source;
@@ -613,6 +682,9 @@ template<class DeviceType> class KokkosKernel {
     forward_radial_tile_=!generic_reference_&&forward_tile;
     reverse_center_reduce_=!generic_reference_&&reverse_reduce;
     forward_role_specialize_=!generic_reference_&&forward_role;
+    table_context_=environment_switch("SUS2_SL_KOKKOS_TABLE_CONTEXT");
+    table_packed_=environment_switch("SUS2_SL_KOKKOS_TABLE_PACKED");
+    d_.radial.configure_lookup(table_context_,table_packed_);
     d_.G=m.integer("two_layer_gate_k_rank");d_.O=m.boolean("outer_k_rank1_enabled")?m.integer("outer_k_rank",1):0;
     d_.gated=m.boolean("two_layer_gate_enabled");const auto mode=m.text("outer_radial_mode","legacy-plus-mixer");d_.mode=mode=="adaptive-coefficients"?3:mode=="pure-matrix"?2:d_.gated?1:0;
     d_.mixing=m.text("two_layer_gate_radial_mixing")=="full";d_.cutoff=m.max_dist;d_.species_readout=m.text("readout_mode")=="species";
@@ -666,6 +738,10 @@ template<class DeviceType> class KokkosKernel {
   int communication_width()const{return d_.W;}
   bool uses_generic_reference()const{return generic_reference_;}
   bool uses_forward_radial_tile()const{return forward_radial_tile_;}
+  bool uses_table_context()const{return table_context_;}
+  bool uses_table_packed()const{return table_packed_;}
+  bool table_context_active()const{return !generic_reference_&&d_.radial.uses_context();}
+  bool table_packed_active()const{return d_.radial.uses_packed();}
   bool uses_reverse_center_reduce()const{return reverse_center_reduce_;}
   bool uses_forward_role_specialize()const{return forward_role_specialize_;}
   void configure_radial_counting(bool enabled){d_.radial.set_counting(enabled);}

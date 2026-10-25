@@ -26,7 +26,7 @@ template<class DeviceType> class DeviceRadial {
     ChebTanhExp,ChebTanhExpW,ChebRepuls,Taylor };
   struct Table {
     std::uint64_t slope_bits=0,shift_bits=0;
-    std::size_t offset=0,intervals=0;
+    std::size_t offset=0,intervals=0,knot_stride=0;
     double slope=1,shift=0,step=0;
     int channel=0,width=0,status=0; // 1 resident, 2 invalid, 3 capacity
   };
@@ -34,10 +34,23 @@ template<class DeviceType> class DeviceRadial {
   using IntView=Kokkos::View<int*,DeviceType>;
   using TableView=Kokkos::View<Table*,DeviceType>;
   using CountView=Kokkos::View<std::uint64_t*,DeviceType>;
+  // Ephemeral per-neighbor state only. A context is usable for frozen tables
+  // on this grid; generic basis tables retain their independent lookup path.
+  struct FrozenContext {
+    std::uint64_t generation=0;
+    std::size_t cell=0,intervals=0;
+    double radius=0,step=0,value_weight[4]={},deriv_weight[4]={};
+    int ti=-1,tj=-1,a=-1,b=-1;
+    bool valid=false;
+  };
   DeviceRadial()=default;
   explicit DeviceRadial(const Model& m);
   void configure(RadialTableMode mode,double spacing,std::size_t max_bytes,
                  const std::vector<int>& active_species);
+  // Set before configure(), which constructs the requested immutable layout.
+  void configure_lookup(bool context,bool packed) {context_enabled_=context;packed_enabled_=packed;}
+  bool uses_context() const {return context_enabled_&&table_mode_&&frozen_intervals_!=0;}
+  bool uses_packed() const {return packed_active_;}
   // Host launch control: copies captured by already-launched kernels retain
   // their own flag. Sampled counters describe enabled force calls only.
   void set_counting(bool enabled) {count_enabled_=enabled;}
@@ -47,12 +60,20 @@ template<class DeviceType> class DeviceRadial {
                                     int n,double& value,double& deriv) const;
   KOKKOS_INLINE_FUNCTION void contract(double r,int ti,int tj,int k,int l,
                                      bool gate,double& value,double& deriv) const;
+  KOKKOS_INLINE_FUNCTION FrozenContext prepare_context(double r,int ti,int tj) const;
+  KOKKOS_INLINE_FUNCTION void contract(double r,int ti,int tj,int k,int l,
+                                     bool gate,const FrozenContext& context,
+                                     double& value,double& deriv) const;
   // Exposed for device qualification without table interception.
   KOKKOS_INLINE_FUNCTION void direct_basis(double r,double slope,double shift,
                                           int k,int n,double& v,double& d) const;
  private:
   int kind_=ChebSSS,B_=0,C_=0,F_=0,L_=0,K_=0,O_=0,sm_=3,p_=5,basis_channels_=0;
   bool polynomial_=false,frozen_outer_=true,needs_basis_=false,count_enabled_=true;
+  bool context_enabled_=false,packed_enabled_=false,packed_active_=false;
+  std::uint64_t generation_=0;
+  std::size_t frozen_intervals_=0;
+  double frozen_step_=0;
   double lo_=0,hi_=0,scaling_=1,lower_=0;
   int table_mode_=0,active_count_=0;
   RealView scale_,gate_scale_,coeff_,gate_coeff_,shape_,knots_;
@@ -97,8 +118,9 @@ template<class DeviceType> class DeviceRadial {
     std::size_t cell=std::size_t((r-lower_)/t.step);
     if(cell>=t.intervals)cell=t.intervals-1;
     const double x=r==hi_?1.0:(r-(lower_+cell*t.step))/t.step,x2=x*x,x3=x2*x;
-    const std::size_t a=t.offset+cell*std::size_t(t.width)*2+std::size_t(n)*2;
-    const std::size_t b=a+std::size_t(t.width)*2;
+    const std::size_t stride=t.knot_stride?t.knot_stride:std::size_t(t.width)*2;
+    const std::size_t a=t.offset+cell*stride+std::size_t(n)*2;
+    const std::size_t b=a+stride;
     v=(2*x3-3*x2+1)*knots_(a)+(x3-2*x2+x)*t.step*knots_(a+1)
       +(-2*x3+3*x2)*knots_(b)+(x3-x2)*t.step*knots_(b+1);
     d=(6*x2-6*x)/t.step*knots_(a)+(3*x2-4*x+1)*knots_(a+1)
@@ -292,6 +314,52 @@ template<class D> KOKKOS_INLINE_FUNCTION void DeviceRadial<D>::basis(
   count(false,4,n==0);direct_basis(r,slope,shift,k,n,v,d);
 }
 
+template<class D> KOKKOS_INLINE_FUNCTION typename DeviceRadial<D>::FrozenContext
+DeviceRadial<D>::prepare_context(double r,int ti,int tj) const {
+  FrozenContext c;
+  if(!context_enabled_||!table_mode_||!frozen_intervals_||!finite(r)||r<lower_||r>hi_
+      ||ti<0||tj<0||ti>=C_||tj>=C_||!species_slots_.extent(0))return c;
+  c.a=species_slots_(ti);c.b=species_slots_(tj);
+  if(c.a<0||c.b<0||!frozen_handles_.extent(0))return c;
+  c.generation=generation_;c.radius=r;c.ti=ti;c.tj=tj;c.intervals=frozen_intervals_;c.step=frozen_step_;
+  c.cell=std::size_t((r-lower_)/c.step);
+  if(c.cell>=c.intervals)c.cell=c.intervals-1;
+  const double x=r==hi_?1.0:(r-(lower_+c.cell*c.step))/c.step,x2=x*x,x3=x2*x;
+  c.value_weight[0]=2*x3-3*x2+1;
+  c.value_weight[1]=(x3-2*x2+x)*c.step;
+  c.value_weight[2]=-2*x3+3*x2;
+  c.value_weight[3]=(x3-x2)*c.step;
+  c.deriv_weight[0]=(6*x2-6*x)/c.step;
+  c.deriv_weight[1]=3*x2-4*x+1;
+  c.deriv_weight[2]=(-6*x2+6*x)/c.step;
+  c.deriv_weight[3]=3*x2-2*x;
+  c.valid=true;return c;
+}
+
+template<class D> KOKKOS_INLINE_FUNCTION void DeviceRadial<D>::contract(
+    double r,int ti,int tj,int k,int l,bool gate,const FrozenContext& c,double& v,double& d) const {
+  // Invalid/out-of-domain contexts take precisely the original scalar path,
+  // including its counters and direct/basis fallback decisions.
+  const int mu=k*L_+l;
+  if(context_enabled_&&table_mode_&&c.valid&&c.generation==generation_&&c.radius==r&&c.ti==ti&&c.tj==tj
+      &&c.a>=0&&c.a<active_count_&&c.b>=0&&c.b<active_count_&&c.cell<c.intervals&&mu>=0&&mu<F_){
+    const std::size_t at=((std::size_t(gate)*active_count_+c.a)*active_count_+c.b)*F_+mu;
+    const int handle=frozen_handles_(at);
+    if(handle>=0){const Table t=frozen_tables_(handle);
+      if(t.status==1&&t.step==c.step&&t.intervals==c.intervals){
+        const std::size_t stride=t.knot_stride?t.knot_stride:std::size_t(t.width)*2;
+        const std::size_t a=t.offset+c.cell*stride,b=a+stride;
+        v=c.value_weight[0]*knots_(a)+c.value_weight[1]*knots_(a+1)
+          +c.value_weight[2]*knots_(b)+c.value_weight[3]*knots_(b+1);
+        d=c.deriv_weight[0]*knots_(a)+c.deriv_weight[1]*knots_(a+1)
+          +c.deriv_weight[2]*knots_(b)+c.deriv_weight[3]*knots_(b+1);
+        count(true,0);return;
+      }
+    }
+  }
+  contract(r,ti,tj,k,l,gate,v,d);
+}
+
 template<class D> KOKKOS_INLINE_FUNCTION void DeviceRadial<D>::contract(
     double r,int ti,int tj,int k,int l,bool gate,double& v,double& d) const {
   v=d=0;const int mu=k*L_+l;if(ti<0||tj<0||ti>=C_||tj>=C_||mu<0||mu>=F_)return;
@@ -326,7 +394,9 @@ template<class D> void DeviceRadial<D>::configure(RadialTableMode mode,double sp
   // Configuration runs only after outstanding kernels have completed. Clearing
   // the handles first releases old knot storage before building the new cache.
   Kokkos::fence();knots_=RealView();basis_tables_=TableView();frozen_tables_=TableView();
+  if(++generation_==0)++generation_;
   frozen_handles_=IntView();species_slots_=IntView();table_bytes_=table_count_=0;
+  frozen_intervals_=0;frozen_step_=0;packed_active_=false;
   table_mode_=mode==RadialTableMode::Direct?0:1;active_count_=0;
   if(counters_.extent(0))Kokkos::deep_copy(counters_,std::uint64_t(0));
   if(!table_mode_)return;
@@ -424,6 +494,44 @@ template<class D> void DeviceRadial<D>::configure(RadialTableMode mode,double sp
   if(needs_basis_)for(int ti:used)for(int tj:used)for(int k=0;k<basis_channels_;++k)for(int l=0;l<L_;++l)
     request(false,ti,tj,k,l,false);
   for(auto& item:basis_requests){build(item.second,nullptr);generic.push_back(item.second);}
+  // Only resident frozen contractions are packed. Tiles contain at most four
+  // channels, with no padding or extra device knot storage. Handle IDs and
+  // deduplication remain unchanged; descriptors map each channel into its tile.
+  for(const auto& t:frozen)if(t.status==1){frozen_intervals_=t.intervals;frozen_step_=t.step;break;}
+  if(packed_enabled_&&frozen_intervals_)try {
+    std::vector<double> packed;packed.reserve(storage.size());
+    auto packed_frozen=frozen,packed_generic=generic;
+    std::vector<std::size_t> resident;
+    for(std::size_t i=0;i<frozen.size();++i)if(frozen[i].status==1)resident.push_back(i);
+    for(std::size_t first=0;first<resident.size();){
+      const Table& lead=frozen[resident[first]];
+      std::size_t lanes=1;
+      while(lanes<4&&first+lanes<resident.size()){
+        const Table& next=frozen[resident[first+lanes]];
+        if(next.intervals!=lead.intervals||next.step!=lead.step)break;
+        ++lanes;
+      }
+      const std::size_t offset=packed.size(),stride=2*lanes;
+      for(std::size_t cell=0;cell<=lead.intervals;++cell)
+        for(std::size_t lane=0;lane<lanes;++lane){
+          const Table& t=frozen[resident[first+lane]];
+          packed.push_back(storage[t.offset+2*cell]);packed.push_back(storage[t.offset+2*cell+1]);
+        }
+      for(std::size_t lane=0;lane<lanes;++lane){Table& t=packed_frozen[resident[first+lane]];t.offset=offset+2*lane;t.knot_stride=stride;}
+      first+=lanes;
+    }
+    for(auto& t:packed_generic)if(t.status==1){
+      const std::size_t offset=packed.size(),length=(t.intervals+1)*std::size_t(t.width)*2;
+      packed.insert(packed.end(),storage.begin()+t.offset,storage.begin()+t.offset+length);t.offset=offset;
+    }
+    if(packed.size()!=storage.size())throw std::logic_error("Frozen radial packing changed knot storage size");
+    storage.swap(packed);frozen.swap(packed_frozen);generic.swap(packed_generic);packed_active_=true;
+  }catch(const std::bad_alloc&){
+    // Packing is optional. A transient host allocation failure retains the
+    // admitted scalar tables, their exact knots and their original byte cap.
+  }catch(const std::length_error&){
+    // Likewise retain the original layout if the host container cannot grow.
+  }
   table_bytes_=storage.size()*sizeof(double);
   frozen_tables_=upload("SUS2 frozen radial handles",frozen);
   basis_tables_=upload("SUS2 radial basis handles",generic);

@@ -105,11 +105,15 @@ void PairSUS2EmbeddedKokkos<DeviceType>::init_style()
     "SUS2_KOKKOS_GENERIC_REFERENCE {}\n"
     "SUS2_KOKKOS_FORWARD_RADIAL_TILE {}\n"
     "SUS2_KOKKOS_REVERSE_CENTER_REDUCE {}\n"
-    "SUS2_KOKKOS_FORWARD_ROLE_SPECIALIZE {}\n",
+    "SUS2_KOKKOS_FORWARD_ROLE_SPECIALIZE {}\n"
+    "SUS2_KOKKOS_TABLE_CONTEXT {}\n"
+    "SUS2_KOKKOS_TABLE_PACKED {}\n",
     int(device_->kernel->uses_generic_reference()),
     int(device_->kernel->uses_forward_radial_tile()),
     int(device_->kernel->uses_reverse_center_reduce()),
-    int(device_->kernel->uses_forward_role_specialize()));
+    int(device_->kernel->uses_forward_role_specialize()),
+    int(device_->kernel->uses_table_context()),
+    int(device_->kernel->uses_table_packed()));
 #ifdef KOKKOS_ENABLE_CUDA
   if constexpr(std::is_same_v<Exec,Kokkos::Cuda>) {
     int selected=-1,visible=0;
@@ -293,6 +297,8 @@ void PairSUS2EmbeddedKokkos<DeviceType>::report_device(bool force_report)
       "SUS2_KOKKOS_RADIAL tables={} bytes={} hits={} direct={} domain={} capacity={} invalid={} memory_bytes={} counted_force_calls={} counting=sampled\n",
       stats.tables,stats.bytes,stats.hits,stats.direct_fallbacks,stats.domain_fallbacks,
       stats.memory_fallbacks,stats.invalid_fallbacks,static_cast<unsigned long long>(d.kernel->memory_usage()),d.counted_calls);
+    if(comm->me==0)utils::logmesg(lmp,"SUS2_KOKKOS_TABLE_ACTIVE context={} packed={}\n",
+      int(d.kernel->table_context_active()),int(d.kernel->table_packed_active()));
     d.reported=true;
   }
   if(!d.comm_reported&&d.signal_reverse&&d.force_exports) {

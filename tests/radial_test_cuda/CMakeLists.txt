@@ -19,4 +19,15 @@ add_executable(radial_test_device
   "${cpu}/sus2_sl_model.cpp" "${cpu}/sus2_sl_radial.cpp" "${cpu}/sus2_sl_radial_math.cpp")
 target_include_directories(radial_test_device PRIVATE "${cpu}" "${SUS2_RADIAL_SOURCE}/interfaces/lammps/ML-SUS2-KK")
 target_link_libraries(radial_test_device PRIVATE Kokkos::kokkos)
+add_executable(kokkos_table_lookup_test
+  "${SUS2_RADIAL_SOURCE}/interfaces/lammps/tests/kokkos_table_lookup_test.cpp"
+  "${cpu}/sus2_sl_model.cpp" "${cpu}/sus2_sl_radial.cpp" "${cpu}/sus2_sl_radial_math.cpp")
+target_include_directories(kokkos_table_lookup_test PRIVATE "${cpu}" "${SUS2_RADIAL_SOURCE}/interfaces/lammps/ML-SUS2-KK")
+target_link_libraries(kokkos_table_lookup_test PRIVATE Kokkos::kokkos)
+add_executable(kokkos_kernel_parity
+  "${SUS2_RADIAL_SOURCE}/interfaces/lammps/tests/kokkos_kernel_parity.cpp"
+  "${cpu}/sus2_sl_model.cpp" "${cpu}/sus2_sl_radial.cpp" "${cpu}/sus2_sl_radial_math.cpp"
+  "${cpu}/sus2_sl_kernel.cpp" "${cpu}/sus2_sl_adaptive.cpp" "${cpu}/sus2_sl_joint.cpp")
+target_include_directories(kokkos_kernel_parity PRIVATE "${cpu}" "${SUS2_RADIAL_SOURCE}/interfaces/lammps/ML-SUS2-KK")
+target_link_libraries(kokkos_kernel_parity PRIVATE Kokkos::kokkos)
 message(STATUS "Qualification reuses Kokkos ${Kokkos_VERSION} devices=${Kokkos_DEVICES} package=${Kokkos_DIR}")
