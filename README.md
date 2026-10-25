@@ -121,6 +121,11 @@ with Direct and Hermite Table evaluation. Use its dedicated installer in a
 clean, isolated LAMMPS tree; the historical `sus2mtp/kk` binary is a different
 interface. See the [build, supported options and measured CPU120/GPU results](interfaces/lammps/README.superlinear-kokkos.md).
 
+Maintained phy-weigw GPU entry: `/work/phy-weigw/app/superlinear/lmp-kokkos`.
+Its launcher enables the accepted frozen-table lookup and packing optimizations.
+Use `SUS2_SL_KOKKOS_FORWARD_RADIAL_TILE=1` for the measured Carbon configuration;
+the measured FeCN6 configuration uses `0`.
+
 ## Python: ASE, phonons and thermal conductivity
 
 **Python ≥3.9; Python 3.12 recommended.** Requires a C++17 compiler, BLAS and

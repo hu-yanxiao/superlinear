@@ -71,10 +71,38 @@ communication; the framework's staged communication path is also implemented
 for feature/adjoint payloads. Executed multi-rank coverage is listed below;
 it is not a claim for arbitrary MPI configurations.
 
+## Official GPU entry (2026-10-25)
+
+The maintained cluster entry is `/work/phy-weigw/app/superlinear/lmp-kokkos`.
+It uses the accepted A100 executable with SHA256
+`87c5eee68d0ae2fabdc7add0bc6c8f99a782e7ba3d054da0df71b0614e2f47e1`,
+built from implementation commit `1f8ed740b6d941cc902d1779370e7a963813e236`.
+The CPU entry remains `/work/phy-weigw/app/superlinear/lmp`.
+
+```bash
+source /work/phy-weigw/app/superlinear/env-kokkos.sh
+mpirun -n 1 /work/phy-weigw/app/superlinear/lmp-kokkos -k on g 1 -sf kk \
+  -pk kokkos neigh half newton on comm device -in in.superlinear
+```
+
+The [launcher](scripts/run_superlinear_kokkos.sh) defaults to
+`TABLE_CONTEXT=1`, `TABLE_PACKED=1`, `FORWARD_ROLE_SPECIALIZE=1`,
+`FORWARD_RADIAL_TILE=0`, `REVERSE_CENTER_REDUCE=0`, `GENERIC=0`.
+Each variable has the `SUS2_SL_KOKKOS_` prefix and accepts an explicit override.
+Carbon's measured configuration uses `FORWARD_RADIAL_TILE=1`; FeCN6 uses `0`.
+The input still selects `radial_mode direct` or `radial_mode table`.
+
+For a separate build, set `SUS2_LAMMPS_KOKKOS_BINARY=/path/to/build/lmp`
+and invoke the launcher with the usual LAMMPS arguments. An optional adjacent
+`env-kokkos.sh` can supply cluster runtime library paths. The installed
+`lmp-kokkos.bin` is the unchanged tested binary; its compiled switches still
+default to zero. The official launcher supplies the accepted execution policy.
+
 ## Optional execution variants
 
-These environment switches accept only `0` or `1`, default to `0`, and must be
-set before launching MPI. They change execution layout, not model parameters.
+These environment switches accept only `0` or `1` and must be set before
+launching MPI. Raw executables default to `0`; the official launcher defaults
+are listed above. They change execution layout, not model parameters.
 
 | Switch | Effect when `1` |
 | --- | --- |
@@ -91,7 +119,7 @@ historical channel dimensions. Choose variants from matched measurements:
 a faster Carbon setting is not automatically a faster FeCN6 setting. No
 universal fastest combination is selected automatically.
 
-The two Table switches also default to `0`; neither changes Direct evaluation.
+The two Table switches do not change Direct evaluation.
 Startup prints their requested values; `SUS2_KOKKOS_TABLE_ACTIVE` reports actual
 activation after table setup. Context reuse selects separate Gate/OuterRaw
 forward kernels even if the role switch is `0`. Generic reference scheduling
@@ -188,7 +216,7 @@ The [kernel comparison](tests/kokkos_kernel_parity.cpp),
 [CPU/GPU benchmark harness](tests/kokkos_benchmark.py) are separate controls,
 not the evidence of a completed campaign by themselves.
 
-The current isolated A100 binary (`993ce7ff…`) passed a 368-run role-focused
+The earlier isolated A100 binary (`993ce7ff…`) passed a 368-run role-focused
 CUDA/MPI raw replay, including MPI 1/2/4 and all eight role/tile/reverse
 combinations. Its 100-case continuous Direct check also passed the declared
 finite acceptance policy. That check uses plain L1/K6/body-3 fixtures, not
@@ -211,8 +239,15 @@ Direct100 contract is recorded separately, not used to relabel old strict
 failures. These finite checks do not prove arbitrary inputs, high-order
 Table100, long-time NVE conservation or untested memory capacities. The native
 legal limits include L=0..4, tensor order <=2 and <=L, and Shapeev B<=12;
-channel dimensions are runtime values, not a 2/4/8 whitelist. No production
-executable has been replaced.
+channel dimensions are runtime values, not a 2/4/8 whitelist.
+
+The accepted Table update (`87c5eee6…`) additionally passed 35 targeted actual
+CUDA lookup/kernel checks and 24 differential native E/F/virial checks in the
+paired timing campaign. These checks cover the frozen Static, Effect and
+FeCN6 models plus selected Legacy, Pure-W and Adaptive fixtures. The earlier
+full CUDA/MPI matrix belongs to `993ce7ff…`; it was not rerun in full for this
+Table update. The [Table evidence index](tests/kokkos_tableopt_evidence_20261025.json)
+retains `gpu_qualified=false` and the original finite acceptance scope.
 
 Campaign-specific role/AB scripts retain their original binary/hash guards;
 they are not interchangeable reproduction commands for this candidate. Use
@@ -221,6 +256,27 @@ guards in an older script. The index does not reclassify other historical
 strict-radial failures.
 
 ## Measured throughput
+
+The accepted Table update was measured on one A100-SXM4-80GB, using three
+paired repeats against the earlier Table binary. Values are whole-loop
+**atom·step/s**, with warmup excluded; `tabstep=0.001` Å is unchanged.
+
+| Model | Atoms | Earlier GPU Table | Accepted GPU Table | Increase |
+| --- | ---: | ---: | ---: | ---: |
+| Carbon Static | 101,568 | 298,838 | 327,011 | 9.4% |
+| Carbon Effect | 101,568 | 147,671 | 160,730 | 8.8% |
+| FeCN6 | 13,888 | 118,085 | 135,133 | 14.4% |
+| FeCN6 | 111,104 | 118,625 | 135,847 | 14.5% |
+
+Both Table switches were enabled. Carbon used radial tile `1`; FeCN6 used `0`.
+Carbon Static Direct measured 284,292 atom·step/s with the same 20-step warmup
+and 100-step timing window: the accepted Table path was 15.0% faster.
+FeCN6 Direct measured 123,935 atom·step/s in a shorter 20/100 window versus
+Table's 50/500 window; its approximately 9.0% Table advantage is indicative,
+not a matched-duration comparison. No new Effect or 111,104-atom FeCN6 Direct
+timing is claimed. These are finite frozen-model results, not universal optima.
+
+### Earlier CPU120/GPU comparison
 
 One A100-SXM4-80GB versus 120 physical CPU cores on one `1t81c` node. Both
 backends use the same frozen models, geometry, NVE input and radial mode;
@@ -243,11 +299,12 @@ every model with the same family name.
 | FeCN6 | 13,888 | 1.173 | 1.029 |
 | FeCN6 | 111,104 | 1.002 | 0.736 |
 
-All 66 GPU windows completed and their original logs were replayed. The
+These earlier results use the pre-update `993ce7ff…` binary. All 66 GPU windows
+completed and their original logs were replayed. The
 independent cross-check reproduced all 22 groups' medians and ratios. Direct
 is near CPU120 throughput at the larger sizes; Carbon's CPU Table path remains
-faster. Table is not an automatic GPU speedup, and FeCN6's GPU Direct path is
-faster than GPU Table at the larger tested sizes.
+faster. That earlier Table/Direct ranking does not describe the accepted Table
+update above.
 
 The measured Carbon settings are `GENERIC=0`, `FORWARD_RADIAL_TILE=1`,
 `REVERSE_CENTER_REDUCE=0`, `FORWARD_ROLE_SPECIALIZE=1`; FeCN6 uses the same

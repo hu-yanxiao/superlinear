@@ -1,0 +1,223 @@
+{
+  "schema": "sus2-kokkos-tableopt-evidence-v1",
+  "date_utc": "2026-10-25",
+  "status": "TARGETED_TABLE_OPTIMIZATION_ACCEPTED",
+  "gpu_qualified": false,
+  "deployment_scope": "Evidence receipt only; deployment state is recorded separately.",
+  "implementation_commit": "1f8ed740b6d941cc902d1779370e7a963813e236",
+  "candidate_binary_sha256": "87c5eee68d0ae2fabdc7add0bc6c8f99a782e7ba3d054da0df71b0614e2f47e1",
+  "baseline_binary_sha256": "993ce7ff1d7a880c9a95e3715d8830b9d5a7da33c74d0694ae53917eae5902ea",
+  "source_archive_sha256": "f65344a9a3b5475ac0261a3c5b794950e860af321312fae69c721c5493449081",
+  "installed_source_receipt_sha256": "d7af301898672a71feb0bdc37089ae22a211a4d363979d185b99df59737f750e",
+  "source_match_file_count": 20,
+  "job_id": "4353347",
+  "hardware": "One NVIDIA A100-SXM4-80GB, CUDA, MPI1",
+  "reports": {
+    "qualification": {
+      "path": "/work/phy-weigw/20260321_Test/superlinear-kokkos-tableopt-20261025/qualification17-results/report.json",
+      "sha256": "4e97dae58741efc6fb0c55f1b3c82647153be7067f53e3bd1f3f3c09510262a4"
+    },
+    "explore": {
+      "path": "/work/phy-weigw/20260321_Test/superlinear-kokkos-tableopt-20261025/explore17-4353347/report.json",
+      "sha256": "bd20806a3a44a7599c79e180ba9787b944dae04884cc40a03bd4303e18bde593"
+    },
+    "paired": {
+      "path": "/work/phy-weigw/20260321_Test/superlinear-kokkos-tableopt-20261025/paired17-4353347/report.json",
+      "sha256": "67f1b378d6bdeefb0facb8740379230c6b75f7814add2065e4a76fc9f36aeff6"
+    }
+  },
+  "workflow_receipt_sha256": "c265c8d105a60cdfb19bc321abf852e81f4abfca95f15f5d53e1589329fa03f3",
+  "targeted_qualification": {
+    "original_status": "TARGETED_LOOKUP_KERNEL_PARITY_PASS",
+    "expected_launches": 35,
+    "recorded_launches": 35,
+    "pass_launches": 35,
+    "scope": "One lookup test; 24 CPU/CUDA E/F/virial comparisons across three frozen models, two radial modes and four Table switch combinations; 10 Table00/11 comparisons on five frozen Legacy/PureW/Adaptive full/shared-n/joint-readout fixtures. Actual CUDA execution and effective-switch evidence retained in report.",
+    "not_a_complete_native_oracle_or_mpi_matrix": true
+  },
+  "selected_table_policy": {
+    "SUS2_SL_KOKKOS_TABLE_CONTEXT": 1,
+    "SUS2_SL_KOKKOS_TABLE_PACKED": 1,
+    "families": [
+      "static",
+      "effect",
+      "fecn6"
+    ],
+    "generic": 0,
+    "forward_role_specialize": 1,
+    "reverse_center_reduce": 0,
+    "forward_radial_tile": {
+      "carbon": 1,
+      "fecn6": 0
+    }
+  },
+  "numerics": {
+    "precision": "FP64",
+    "tabstep_A": 0.001,
+    "interpolation": "Unchanged cubic Hermite; derivative of same interpolant",
+    "initial_geometry_differential_bounds": {
+      "force_max_eV_A": 1e-08,
+      "energy_per_atom_eV": 1e-10,
+      "pressure_tensor_max_bar": 1e-05
+    }
+  },
+  "performance": {
+    "metric": "LAMMPS rank-mean Pair wall seconds; paired ratios compare candidate15 Table to candidate17 Table11. Absolute throughput below uses Loop wall seconds. Neither is a CUDA kernel-stage timer.",
+    "repeats": 3,
+    "table_rows": [
+      {
+        "case": "carbon-static-101568",
+        "median_pair_speedup_vs_candidate15": 1.0942771132825704,
+        "paired_speedups": [
+          1.0942665438927488,
+          1.0943704824610827,
+          1.0932085787052093
+        ],
+        "baseline-table": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 33.9877,
+          "median_pair_seconds": 33.955,
+          "median_atom_steps_per_second": 298837.52063246415
+        },
+        "candidate-final": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 31.0595,
+          "median_pair_seconds": 31.028,
+          "median_atom_steps_per_second": 327011.05941821344
+        }
+      },
+      {
+        "case": "carbon-effect-101568",
+        "median_pair_speedup_vs_candidate15": 1.0884342222700485,
+        "paired_speedups": [
+          1.0883136651761274,
+          1.0878154465548946,
+          1.0892492040081276
+        ],
+        "baseline-table": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 68.7799,
+          "median_pair_seconds": 68.747,
+          "median_atom_steps_per_second": 147671.04924549177
+        },
+        "candidate-final": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 63.1916,
+          "median_pair_seconds": 63.153,
+          "median_atom_steps_per_second": 160730.22363731888
+        }
+      },
+      {
+        "case": "fecn6-13888",
+        "median_pair_speedup_vs_candidate15": 1.1443692190330887,
+        "paired_speedups": [
+          1.145328598530914,
+          1.1440792584794002,
+          1.1460419049994834
+        ],
+        "baseline-table": {
+          "warmup_steps": 50,
+          "timed_steps": 500,
+          "median_loop_seconds": 58.8049,
+          "median_pair_seconds": 58.61,
+          "median_atom_steps_per_second": 118085.3976454343
+        },
+        "candidate-final": {
+          "warmup_steps": 50,
+          "timed_steps": 500,
+          "median_loop_seconds": 51.3863,
+          "median_pair_seconds": 51.191,
+          "median_atom_steps_per_second": 135133.29428271737
+        }
+      },
+      {
+        "case": "fecn6-111104",
+        "median_pair_speedup_vs_candidate15": 1.1451787039606973,
+        "paired_speedups": [
+          1.1451787039606973,
+          1.144810720038719,
+          1.1443975242784343
+        ],
+        "baseline-table": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 93.6597,
+          "median_pair_seconds": 93.532,
+          "median_atom_steps_per_second": 118625.19311934589
+        },
+        "candidate-final": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 81.7861,
+          "median_pair_seconds": 81.676,
+          "median_atom_steps_per_second": 135847.04491349997
+        }
+      }
+    ],
+    "direct_controls": [
+      {
+        "case": "carbon-static-101568",
+        "median_pair_speedup_vs_candidate15": 0.9973661155382387,
+        "paired_speedups": [
+          0.9963500485261746,
+          0.9973661155382387,
+          0.9978278577246811
+        ],
+        "baseline-direct": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 35.6326,
+          "median_pair_seconds": 35.601,
+          "median_atom_steps_per_second": 285042.34886031336
+        },
+        "candidate-direct11": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 35.7267,
+          "median_pair_seconds": 35.693,
+          "median_atom_steps_per_second": 284291.58024670626
+        }
+      },
+      {
+        "case": "fecn6-13888",
+        "median_pair_speedup_vs_candidate15": 0.9986346478194522,
+        "paired_speedups": [
+          0.9972889820305881,
+          1.0008928730870195,
+          0.9986346478194522
+        ],
+        "baseline-direct": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 11.1906,
+          "median_pair_seconds": 11.151,
+          "median_atom_steps_per_second": 124104.15884760424
+        },
+        "candidate-direct11": {
+          "warmup_steps": 20,
+          "timed_steps": 100,
+          "median_loop_seconds": 11.2059,
+          "median_pair_seconds": 11.167,
+          "median_atom_steps_per_second": 123934.71296370662
+        }
+      }
+    ],
+    "direct_caveat": "Direct controls use 20 warmup/100 timed steps. FeCN13888 Table uses 50/500, so its Direct and Table absolute rates have unmatched durations and do not establish a matched radial-mode speedup. Direct options remain inactive.",
+    "scope": "Four frozen Table cases only; no CPU comparison or universal model-family performance claim."
+  },
+  "inherited_evidence": {
+    "index": "kokkos_evidence_20261025.json",
+    "binary_sha256": "993ce7ff1d7a880c9a95e3715d8830b9d5a7da33c74d0694ae53917eae5902ea",
+    "scope": "Prior candidate15 role/native/MPI/model-matrix and finite Direct100 evidence remains attached to candidate15. Candidate17 has the targeted regression evidence above; prior full qualification was not rerun for this binary.",
+    "gpu_qualified": false
+  },
+  "limits": [
+    "No complete candidate17 native/MPI qualification.",
+    "No arbitrary-input, high-order Table100, long-time NVE conservation or untested capacity guarantee.",
+    "Initial-geometry differential checks do not cover displaced geometries or atom migration."
+  ]
+}
