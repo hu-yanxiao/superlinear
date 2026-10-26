@@ -169,8 +169,7 @@ case "${compiler}" in
         linklib="-lifcore"
         ;;
     gnu )
-        #"FFLAGS += -fbounds-check"
-        echo "\$FORTRAN_DIR = ${path_to_fortran}" >> ${MKFILE}
+        # FORTRAN_DIR is already set from --prefix_fortran above.
         linklib="-L\$(FORTRAN_DIR) -lgfortran"
 esac
 case "${blas}" in
@@ -183,7 +182,16 @@ case "${blas}" in
         echo "LDFLAGS += -L${MKLROOT}/lib/${mkllib} -lmkl_rt ${linklib}" >> ${MKFILE}
         echo "CPPFLAGS += -I${MKLROOT}/include" >> ${MKFILE}
         echo "CXXFLAGS += -DMLIP_INTEL_MKL " >> ${MKFILE}
-		echo "CXXFLAGS += -O3 -xHost -ipo -no-prec-div -fp-model fast=2 -qoverride-limits -qopt-zmm-usage=high  -qopt-mem-layout-trans=3  -qopt-streaming-stores=auto -fimf-use-svml=true -std=c++11 -qopt-report=5" >> ${MKFILE}
+        case "${compiler}" in
+            intel )
+                echo "CXXFLAGS += -O3 -xHost -ipo -no-prec-div -fp-model fast=2 -qoverride-limits -qopt-zmm-usage=high  -qopt-mem-layout-trans=3  -qopt-streaming-stores=auto -fimf-use-svml=true -std=c++11 -qopt-report=5" >> ${MKFILE}
+                ;;
+            gnu )
+                # Match the native/fast optimization policy using GCC flags;
+                # MKL selection must not select Intel's compiler options.
+                echo "CXXFLAGS += -O3 -march=native -ffast-math -std=c++11" >> ${MKFILE}
+                ;;
+        esac
         ;;
     openblas )
         echo "LDFLAGS += -L${blasroot}/lib -l:libopenblas.a ${linklib}" >> ${MKFILE}

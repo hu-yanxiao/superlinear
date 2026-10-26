@@ -4,15 +4,19 @@
 
 ## Installation
 
-Load Intel classic C++ and MKL, then:
+Load GCC (C++ and Fortran), MPI and MKL (`MKLROOT` must be set), then:
 
 ```bash
 git clone https://github.com/hu-yanxiao/superlinear.git
 cd superlinear
-./configure --compiler=intel --blas=mkl
+./configure --compiler=gnu --blas=mkl
 make -j4 mlp
 ./bin/mlp-sus2 help
 ```
+
+Build on the target compute node; use a fresh build when changing compilers.
+Intel classic is also supported with `--compiler=intel`. With Intel MPI and GCC,
+set `I_MPI_CC=gcc I_MPI_CXX=g++ I_MPI_F90=gfortran` before building.
 
 ## Training with YAML
 
@@ -39,9 +43,10 @@ without training or creating output files.
 
 ### Training acceleration
 
-Exact channelwise parameter-gradient contractions are automatic on supported
-`coordination-effect` paths. These additional switches are optional and off by
-default; export them before training or `mpirun`:
+Exact parameter-gradient contractions and per-atom reuse during linear
+initialization are automatic on supported `coordination-effect` paths.
+These additional switches are optional and off by default; export them before
+training or `mpirun`:
 
 ```bash
 export SUS2_SH_SITE_DER_CACHE=1
@@ -52,7 +57,8 @@ export SUS2_SH_PRODUCT_HVT_REVERSE=1
 They change execution, not the model or loss; speedup depends on the model path.
 The two-layer edge cache takes precedence over `SITE_DER_CACHE`.
 Leave `MLIP_CACHE_NEIGHBORHOODS` unset for memory-aware automatic caching.
-Use `SUS2_SH_EFFECT_PARAM_FAST=0` only to compare against the reference implementation.
+For reference comparisons, set `SUS2_SH_EFFECT_PARAM_FAST=0`,
+`SUS2_SH_LINEAR_GATE_ADJOINT_FAST=0` and `SUS2_SH_LINEAR_FLAT_DERS=0`.
 
 ## Outputs and evaluation
 

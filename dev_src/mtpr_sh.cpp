@@ -5143,16 +5143,34 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 	if (use_product_rows) {
 		ApplySHProductRowsDers(nbh);
 	} else {
+		const char* flat_ders_env = std::getenv("SUS2_SH_LINEAR_FLAT_DERS");
+		const bool use_flat_ders = flat_ders_env == nullptr
+			|| EnvFlagEnabled("SUS2_SH_LINEAR_FLAT_DERS");
+		const size_t derivative_width = static_cast<size_t>(nbh.count) * 3;
 		for (size_t p = static_cast<size_t>(OuterKRank1ProductStart());
 		     p < sh_products_.size(); ++p) {
 			const SHProduct& product = sh_products_[p];
 			const double left_value = moment_vals[product.left];
 			const double right_value = moment_vals[product.right];
 			moment_vals[product.target] += product.coeff * left_value * right_value;
-			for (int j = 0; j < nbh.count; ++j)
-				for (int a = 0; a < 3; ++a)
-					moment_ders(product.target, j, a) += product.coeff * (
-						moment_ders(product.left, j, a) * right_value + left_value * moment_ders(product.right, j, a));
+			if (use_flat_ders) {
+				// Array3D stores each moment's [neighbor,axis] row contiguously.
+				// Do not form a row pointer for a zero-neighbor environment.
+				if (derivative_width != 0) {
+					double* target_ders = &moment_ders(product.target, 0, 0);
+					const double* left_ders = &moment_ders(product.left, 0, 0);
+					const double* right_ders = &moment_ders(product.right, 0, 0);
+					for (size_t coordinate = 0; coordinate < derivative_width; ++coordinate)
+						target_ders[coordinate] += product.coeff * (
+							left_ders[coordinate] * right_value
+							+ left_value * right_ders[coordinate]);
+				}
+			} else {
+				for (int j = 0; j < nbh.count; ++j)
+					for (int a = 0; a < 3; ++a)
+						moment_ders(product.target, j, a) += product.coeff * (
+							moment_ders(product.left, j, a) * right_value + left_value * moment_ders(product.right, j, a));
+			}
 		}
 	}
 
@@ -9742,6 +9760,44 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	const int center_type_coeff_offset = RadialCoeffOffset();
 	const int center_type_coeff_stride = RadialCoeffBlockSize();
 
+	// CalcSHBasisFuncsDers has just evaluated this center's outer moments.
+	// Cache d B_q / d M_basic once: the reference below otherwise evaluates
+	// the identical outer product DAG for every (neighbor, raw-mu) tangent.
+	// This local scratch cannot survive a center/model change, so it needs no
+	// persistent cache key and does not alter the model or object layout.
+	const char* linear_gate_fast_env = std::getenv("SUS2_SH_LINEAR_GATE_ADJOINT_FAST");
+	// Bound extra scratch per center; oversized valid models use the reference.
+	constexpr size_t kLinearGateJacobianMaxBytes = 64 * 1024 * 1024;
+	const bool linear_gate_scratch_fits = alpha_index_basic_count > 0
+		&& static_cast<size_t>(alpha_scalar_moments)
+			<= kLinearGateJacobianMaxBytes / sizeof(double)
+				/ static_cast<size_t>(alpha_index_basic_count);
+	const bool use_linear_gate_fast =
+		(linear_gate_fast_env == nullptr || EnvFlagEnabled("SUS2_SH_LINEAR_GATE_ADJOINT_FAST"))
+		&& !pure_matrix && !use_product_rows && !has_edge_l1
+		&& !MultiLayerGateEnabled() && nbh.count > 0 && linear_gate_scratch_fits;
+	std::vector<double> scalar_basic_jacobian;
+	if (use_linear_gate_fast) {
+		scalar_basic_jacobian.resize(
+			static_cast<size_t>(alpha_scalar_moments) * alpha_index_basic_count);
+		for (int scalar = 0; scalar < alpha_scalar_moments; ++scalar) {
+			std::fill(sh_gate_moment_ders_.begin(), sh_gate_moment_ders_.end(), 0.0);
+			sh_gate_moment_ders_[alpha_moment_mapping[scalar]] = 1.0;
+			for (size_t p = sh_products_.size();
+			     p > static_cast<size_t>(OuterKRank1ProductStart());) {
+				const SHProduct& product = sh_products_[--p];
+				const double adjoint = product.coeff * sh_gate_moment_ders_[product.target];
+				sh_gate_moment_ders_[product.left] += adjoint * moment_vals[product.right];
+				sh_gate_moment_ders_[product.right] += adjoint * moment_vals[product.left];
+			}
+			BackpropOuterKRank1Adjoints(sh_gate_moment_ders_);
+			std::copy(sh_gate_moment_ders_.begin(),
+			          sh_gate_moment_ders_.begin() + alpha_index_basic_count,
+			          scalar_basic_jacobian.begin()
+			              + static_cast<size_t>(scalar) * alpha_index_basic_count);
+		}
+	}
+
 	for (int j = 0; j < nbh.count; ++j) {
 		const int atom_index = nbh.inds[j];
 		if (atom_index < 0
@@ -9899,10 +9955,12 @@ void MLMTPR::AccumulateSHBasisGateDers(
 					if (basic_mu_cache_[basic_index] == mu)
 						set_basic_tangent(basic_index);
 			}
-			if (!pure_matrix)
+			if (!pure_matrix && !use_linear_gate_fast)
 				ContractOuterKRank1Values(sh_gate_moment_ders_.data());
 
-			if (use_product_rows) {
+			if (use_linear_gate_fast) {
+				// The raw-basic tangent is contracted with the cached Jacobian below.
+			} else if (use_product_rows) {
 				for (const SHProductRow& row : sh_product_rows_) {
 					double value = 0.0;
 					const int end = row.term_begin + row.term_count;
@@ -9925,8 +9983,22 @@ void MLMTPR::AccumulateSHBasisGateDers(
 			}
 
 			for (int i = 0; i < alpha_scalar_moments; ++i) {
-				const double gate_adjoint =
-					sh_gate_moment_ders_[alpha_moment_mapping[i]];
+				double gate_adjoint = sh_gate_moment_ders_[alpha_moment_mapping[i]];
+				if (use_linear_gate_fast) {
+					gate_adjoint = 0.0;
+					const double* jacobian = scalar_basic_jacobian.data()
+						+ static_cast<size_t>(i) * alpha_index_basic_count;
+					if (use_basic_mu_groups) {
+						for (int cursor = basic_mu_offsets_[mu]; cursor < basic_mu_offsets_[mu + 1]; ++cursor) {
+							const int basic = basic_indices_by_mu_[cursor];
+							gate_adjoint += jacobian[basic] * sh_gate_moment_ders_[basic];
+						}
+					} else {
+						for (int basic = 0; basic < alpha_index_basic_count; ++basic)
+							if (basic_mu_cache_[basic] == mu)
+								gate_adjoint += jacobian[basic] * sh_gate_moment_ders_[basic];
+					}
+				}
 				const int column = UsesSpeciesReadout() ? type_central * alpha_scalar_moments + i : i;
 				gate_adjoints[static_cast<size_t>(column) * radial_func_count + mu] +=
 					gate_adjoint;

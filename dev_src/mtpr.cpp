@@ -11315,8 +11315,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 		active_two_layer_gate_adjoints_ = nullptr;
 		active_two_layer_edge_cache_atom_index_ = -1;
 	}
-	const bool profile_two_layer =
-		use_two_layer_gate && TwoLayerProfileEnabledOnRank0();
+	const bool profile_two_layer = TwoLayerProfileEnabledOnRank0();
 	const double profile_start = profile_two_layer ? TwoLayerProfileNow() : 0.0;
 	if (use_two_layer_gate) {
 		BuildTwoLayerEdgePrimitiveCache(neighborhoods, true, false);
@@ -11452,8 +11451,10 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 				throw MlipException("Too few species count in the MTP potential!");
 
 			energy_cmpnts[nbh.my_type] += basis_vals[0];
+			const int scalar_column_begin = species_count
+				+ (UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments : 0);
 			for (int q = 0; q < alpha_scalar_moments; q++) {
-				const int k = species_count + (UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments : 0) + q;
+				const int k = scalar_column_begin + q;
 				const int i = q + 1;
 				energy_cmpnts[k] += basis_vals[i];
 				if (need_forces)
