@@ -1587,12 +1587,17 @@ void MLMTPR::ContractOuterKRank1Values(double* values) const
 		}
 		return;
 	}
+	const double* const rank_weights = OuterKRank1WeightData();
+	if (rank_weights == nullptr)
+		ERROR("SUS2-SH outer K-rank weight storage is unavailable");
 	for (int channel = 0; channel < outer_k_rank_; ++channel) {
 		for (int l = sh_l_max_; l >= 0; --l) {
+			const double* const weight_row = rank_weights
+				+ (l * outer_k_rank_ + channel) * sh_k_max_;
 			for (int m = -l; m <= l; ++m) {
 			double contracted = 0.0;
 			for (int k = 0; k < sh_k_max_; ++k)
-				contracted += OuterKRank1Weight(channel, l, k)
+				contracted += weight_row[k]
 					* values[OuterKRank1RawBasicIndex(l, m, k)];
 			values[OuterKRank1OuterBasicIndex(channel, l, m)] = contracted;
 			}
@@ -1630,15 +1635,20 @@ void MLMTPR::ContractOuterKRank1MomentDers(const Neighborhood& nbh)
 		}
 		return;
 	}
+	const double* const rank_weights = OuterKRank1WeightData();
+	if (rank_weights == nullptr)
+		ERROR("SUS2-SH outer K-rank weight storage is unavailable");
 	for (int channel = 0; channel < outer_k_rank_; ++channel) {
 		for (int l = sh_l_max_; l >= 0; --l) {
+			const double* const weight_row = rank_weights
+				+ (l * outer_k_rank_ + channel) * sh_k_max_;
 			for (int m = -l; m <= l; ++m) {
 			const int outer = OuterKRank1OuterBasicIndex(channel, l, m);
 			for (int j = 0; j < nbh.count; ++j) {
 				for (int a = 0; a < 3; ++a) {
 					double contracted = 0.0;
 					for (int k = 0; k < sh_k_max_; ++k)
-						contracted += OuterKRank1Weight(channel, l, k)
+						contracted += weight_row[k]
 							* moment_ders(
 								OuterKRank1RawBasicIndex(l, m, k), j, a);
 					moment_ders(outer, j, a) = contracted;
@@ -1672,8 +1682,13 @@ void MLMTPR::BackpropOuterKRank1Adjoints(
 		}
 		return;
 	}
+	const double* const rank_weights = OuterKRank1WeightData();
+	if (rank_weights == nullptr)
+		ERROR("SUS2-SH outer K-rank weight storage is unavailable");
 	for (int channel = 0; channel < outer_k_rank_; ++channel) {
 		for (int l = sh_l_max_; l >= 0; --l) {
+			const double* const weight_row = rank_weights
+				+ (l * outer_k_rank_ + channel) * sh_k_max_;
 			for (int m = -l; m <= l; ++m) {
 			const double outer_adjoint =
 				adjoints[OuterKRank1OuterBasicIndex(channel, l, m)];
@@ -1681,7 +1696,7 @@ void MLMTPR::BackpropOuterKRank1Adjoints(
 				continue;
 			for (int k = 0; k < sh_k_max_; ++k)
 				adjoints[OuterKRank1RawBasicIndex(l, m, k)] +=
-					OuterKRank1Weight(channel, l, k) * outer_adjoint;
+					weight_row[k] * outer_adjoint;
 			}
 		}
 	}
@@ -12343,6 +12358,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 	}
 	if (OuterKRankEnabled()) {
 		if (OuterKRankHasTrainableWeights()) {
+			const int weight_offset = OuterKRank1WeightOffset();
 			for (int channel = 0; channel < outer_k_rank_; ++channel) {
 				for (int l = sh_l_max_; l >= 0; --l) {
 					for (int m = -l; m <= l; ++m) {
@@ -12354,7 +12370,7 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 						for (int k = 0; k < sh_k_max_; ++k) {
 							const int raw = OuterKRank1RawBasicIndex(l, m, k);
 							out_grad_accumulator[
-								OuterKRank1WeightIndex(channel, l, k)] +=
+								weight_offset + (l * outer_k_rank_ + channel) * sh_k_max_ + k] +=
 								center_linear * (
 									hvt_outer_adjoint * moment_vals[raw]
 									+ energy_outer_adjoint
@@ -13477,6 +13493,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 			}
 		if (OuterKRankEnabled()) {
 			if (OuterKRankHasTrainableWeights()) {
+				const int weight_offset = OuterKRank1WeightOffset();
 				for (int channel = 0; channel < outer_k_rank_; ++channel) {
 					for (int l = sh_l_max_; l >= 0; --l) {
 						for (int m = -l; m <= l; ++m) {
@@ -13493,7 +13510,7 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 									weight_grad += energy_outer_adjoint
 										* grad_dloss_dsenders_[raw];
 								grad_out[
-									OuterKRank1WeightIndex(channel, l, k)] +=
+									weight_offset + (l * outer_k_rank_ + channel) * sh_k_max_ + k] +=
 									center_linear * weight_grad;
 							}
 						}

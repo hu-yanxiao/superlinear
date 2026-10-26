@@ -56,6 +56,10 @@ export SUS2_SH_PRODUCT_HVT_REVERSE=1
 
 They change execution, not the model or loss; speedup depends on the model path.
 The two-layer edge cache takes precedence over `SITE_DER_CACHE`.
+Outer rank contractions also reuse validated weight rows and coefficient offsets
+within each call, including formal loss/gradient evaluation. Arithmetic and
+parameter updates are unchanged; direct-radial and pure-matrix branches retain
+their existing paths.
 Leave `MLIP_CACHE_NEIGHBORHOODS` unset for memory-aware automatic caching.
 For reference comparisons, set `SUS2_SH_EFFECT_PARAM_FAST=0`,
 `SUS2_SH_LINEAR_GATE_ADJOINT_FAST=0` and `SUS2_SH_LINEAR_FLAT_DERS=0`.
