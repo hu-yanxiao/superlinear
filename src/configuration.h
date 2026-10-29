@@ -298,6 +298,7 @@ inline const double& Configuration::force(int i, int a) const {
 }
 inline Matrix3 Configuration::virial() const {
 	double vol = fabs(lattice.det());
+	if (vol == 0.0) ERROR("Volume-normalized stress requires a nonzero cell volume");
 	return stresses * (1/vol);
 }
 

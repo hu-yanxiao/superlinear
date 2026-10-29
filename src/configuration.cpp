@@ -488,10 +488,27 @@ bool Configuration::Load(std::ifstream& ifs)
 			resize(_size);
 		}
 		else if (tmp_str == "Supercell" || tmp_str == "SuperCell") {
-			ifs >> lattice[0][0] >> lattice[0][1] >> lattice[0][2]
-				>> lattice[1][0] >> lattice[1][1] >> lattice[1][2]
-				>> lattice[2][0] >> lattice[2][1] >> lattice[2][2];
-			ifs.clear();
+			// Zero rows encode non-periodic directions. Save may emit only one
+			// or two rows, but a present row must contain three valid numbers.
+			int rows = 0;
+			for (; rows < 3; ++rows) {
+				ifs >> std::ws;
+				const int ch = ifs.peek();
+				if (ch == 'A' || ch == 'E' || ch == 'F' || ch == 'P' || ch == 'S' || ch == 'V')
+					break;
+				std::string row;
+				std::getline(ifs, row);
+				std::istringstream components(row);
+				if (!(components >> lattice[rows][0] >> lattice[rows][1] >> lattice[rows][2]))
+					ERROR("Unable to read Supercell: expected three numeric components per row");
+				std::string extra;
+				if (components >> extra)
+					ERROR("Unable to read Supercell: extra component in lattice row");
+				for (int a = 0; a < 3; ++a)
+					if (!std::isfinite(lattice[rows][a]))
+						ERROR("Unable to read Supercell: non-finite component");
+			}
+			if (rows == 0) ERROR("Unable to read Supercell: no lattice vectors");
 		} else if (tmp_str == "AtomData:" || tmp_str == "Atomic_data:") {
 			if (_size == 0)
 				Warning("Configuration with no atoms has been read");
@@ -730,8 +747,11 @@ bool Configuration::Load(std::ifstream& ifs)
 			ERROR("Configuration reading error. Unknown field \"" + tmp_str + "\"");
 	}
 
-	if (is_stress_virial)
+	if (is_stress_virial) {
+		if (lattice.det() == 0.0)
+			ERROR("Virial: requires a nonzero cell volume; use PlusStress: for the energy-valued tensor of a molecule");
 		stresses *= 1.0 / fabs(lattice.det());
+	}
 	if (is_stress_negative)
 		stresses *= -1;
 	if (frac_pos)

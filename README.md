@@ -41,6 +41,10 @@ alternatively, `species_count` specifies only the number of types.
 Do not specify both with conflicting counts. `--check-config` validates settings
 without training or creating output files.
 
+For nonperiodic molecules, use Cartesian coordinates and omit `Supercell` from
+the CFG frame. No vacuum box is needed; periodic and molecular frames can be
+mixed in the training file. See the [molecular CFG example](docs/boxless-cfg.md).
+
 ### Training acceleration
 
 Exact parameter-gradient contractions and per-atom reuse during linear
