@@ -551,6 +551,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 							"two-layer-gate-radial-mixing",
 							"two-layer-gate-edge-l1",
 							"two-layer-gate-readout",
+                            "inner-readout",
 							"outer-k-rank",
 							"outer-k-rank1",
 							"superlinear-mode",
@@ -1896,7 +1897,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (explicit_trainable_groups && trainable_groups.empty())
 		ERROR("--trainable-groups must be a nonempty comma-separated allowlist");
 	const bool two_layer_gate_readout_linear_init =
-		opts["two-layer-gate-readout-linear-init"] != "";
+		opts["two-layer-gate-readout-linear-init"] != ""
+		|| (opts["inner-readout-linear-init"] != "" && opts["inner-readout-linear-init"] != "false");
 	int do_lin_step_limit = 1000;
 	if (opts["do-lin-steps"] != "")
 		do_lin_step_limit = stoi(opts["do-lin-steps"]);
@@ -2435,8 +2437,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--scaling-map must match the loaded model; changing K/L/LK/pair topology requires a new init-sh model");
 	}
 	const bool requested_multi_layer_gate = opts["multi-layer-gate"] != "";
+	const bool requested_inner_readout = opts["inner-readout"] != "" && opts["inner-readout"] != "false";
 	const bool requested_two_layer_gate_readout =
-		opts["two-layer-gate-readout"] != "";
+		opts["two-layer-gate-readout"] != "" || requested_inner_readout;
 	const bool requested_two_layer_gate_radial_mixing =
 		two_layer_gate_radial_mixing == "full";
 	const bool requested_two_layer_gate =
@@ -2544,12 +2547,12 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	    && requested_two_layer_gate_k_rank != mtpr.TwoLayerGateKRank())
 		ERROR("--two-layer-gate-k-rank must match the loaded model; changing rank requires init-sh/inline initialization");
 	if (mtpr.OuterKRankEnabled()
-	    && (requested_two_layer_gate_readout
+	    && ((requested_two_layer_gate_readout && !requested_inner_readout)
 	        || requested_multi_layer_gate
 	        || requested_two_layer_residual))
 		ERROR("--outer-k-rank is not compatible with readout, multi-layer gate, or residual options");
 	if (mtpr.TwoLayerGateKRankEnabled()
-	    && (requested_two_layer_gate_readout
+	    && ((requested_two_layer_gate_readout && !requested_inner_readout)
 	        || requested_multi_layer_gate
 	        || requested_two_layer_residual))
 		ERROR("--two-layer-gate-k-rank is not compatible with readout, multi-layer gate, or residual options");
@@ -2655,7 +2658,10 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			ERROR("--two-layer-gate-readout first version supports one gate only");
 		if (mtpr.TwoLayerGateEdgeL1Enabled())
 			ERROR("--two-layer-gate-readout first version does not include edge-L1");
-		if (!mtpr.TwoLayerGateReadoutEnabled()) {
+		if (requested_inner_readout) {
+			mtpr.EnableInnerReadout();
+			gate_readout_upgrade = true;
+		} else if (!mtpr.TwoLayerGateReadoutEnabled()) {
 			mtpr.EnableTwoLayerGateReadout();
 			gate_readout_upgrade = true;
 		}

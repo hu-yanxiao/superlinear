@@ -721,7 +721,10 @@ void MTPR_trainer::PrepareLinearSolveColumns(bool readout_residual_only)
 	for (int column = 0; column < full_n; ++column) {
 		if (readout_residual_only
 		    && (column < readout_begin
-		        || column >= readout_begin + readout_count))
+		        || column >= readout_begin + readout_count)
+		    && !(p_mlmtpr->TwoLayerGateReadoutIncludesConstant()
+		         && column >= p_mlmtpr->species_count
+		         && column < p_mlmtpr->species_count + p_mlmtpr->ScalarReadoutCoeffCount()))
 			continue;
 		if (!LinearColumnActiveForStage(column))
 			continue;
@@ -908,7 +911,10 @@ void MTPR_trainer::BuildReadoutResidualRow(
 	const int active_n = LinearSolveColumnCount();
 	for (int active_index = 0; active_index < active_n; ++active_index) {
 		const int column = linear_solve_columns_[active_index];
-		if (column < readout_begin || column >= readout_end)
+		if ((column < readout_begin || column >= readout_end)
+		    && !(p_mlmtpr->TwoLayerGateReadoutIncludesConstant()
+		         && column >= p_mlmtpr->species_count
+		         && column < p_mlmtpr->species_count + p_mlmtpr->ScalarReadoutCoeffCount()))
 			ERROR("Readout residual row contains a non-readout active column");
 		const double value = full_row[column * full_stride];
 		active_row[active_index] = value;
@@ -1458,6 +1464,9 @@ void MTPR_trainer::TrainLinear(int prank,
 								   const std::string& context,
 								   bool readout_residual_only)
 {
+	// Both energy heads are linear only with the center species amplitude fixed.
+	if (p_mlmtpr != nullptr && p_mlmtpr->TwoLayerGateReadoutIncludesConstant())
+		readout_residual_only = true;
 #ifdef MLIP_MPI
 	if (!train_rank_active_)
 		return;
@@ -1569,7 +1578,8 @@ void MTPR_trainer::TrainLinear(int prank,
 	ClearSLAE(readout_residual_only);
 	int n = LinearSolveColumnCount();		// Active matrix size
 	if (readout_residual_only
-	    && n != p_mlmtpr->TwoLayerGateReadoutCoeffCount())
+	    && n != p_mlmtpr->TwoLayerGateReadoutCoeffCount()
+	           + (p_mlmtpr->TwoLayerGateReadoutIncludesConstant() ? p_mlmtpr->ScalarReadoutCoeffCount() : 0))
 		ERROR(prefix + " did not select exactly the readout coefficient block");
 
 	double build_start = 0.0;
@@ -1874,7 +1884,10 @@ void MTPR_trainer::TrainLinear(int prank,
 		if (coeffs_before.size() != p_mlmtpr->regression_coeffs.size())
 			ERROR(prefix + " changed the coefficient layout");
 		for (int i = 0; i < p_mlmtpr->CoeffCount(); ++i) {
-			if (i >= readout_begin && i < readout_end)
+			if ((i >= readout_begin && i < readout_end)
+			    || (p_mlmtpr->TwoLayerGateReadoutIncludesConstant()
+			        && i >= p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count
+			        && i < p_mlmtpr->LinearCoeffOffset() + p_mlmtpr->species_count + p_mlmtpr->ScalarReadoutCoeffCount()))
 				continue;
 			if (std::memcmp(&coeffs_before[i],
 			                &p_mlmtpr->regression_coeffs[i],

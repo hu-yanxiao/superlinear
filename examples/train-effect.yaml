@@ -19,6 +19,7 @@ model:
     body_order: 4
     channel_coupling: diagonal     # cross / diagonal; outer graph
   readout:
+    inner: false # Optional constant + inner scalar energy head
     element_mode: per-element     # shared / per-element
 training:
   profile: native-effect-v1

@@ -47,6 +47,7 @@ const Rule rules[] = {
     {"model.response.activation", "adaptive-radial-activation", "linear=none|tanh=tanh"},
     {"model.response.element_mode", "adaptive-radial-amplitude-mode", "shared=shared|source-element=species"},
     {"model.readout.element_mode", "readout-mode", "shared=shared|per-element=species"},
+    {"model.readout.inner", "inner-readout", "bool"},
     {"model.readout.joint", "joint-readout", "bool"},
     {"initialization.parameters", "init-params", "same=same|random=random"},
     {"initialization.seed", "init-random-seed", "seed"},

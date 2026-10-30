@@ -69,6 +69,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 						"two-layer-gate-radial-mixing",
 						"two-layer-gate-edge-l1",
 						"two-layer-gate-readout",
+                        "inner-readout",
 						"outer-k-rank",
 						"outer-k-rank1",
 						"superlinear-mode",
@@ -681,6 +682,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 		"        retain supplied model parameters, not equal parameters across species/channels.\n"
 		"        random explicitly randomizes nonlinear coefficients of incomplete models.\n"
 		"    --do-lin: enable linear pre-fitting path inside nonlinear training.\n"
+		"    --inner-readout-linear-init: solve both energy heads with center species amplitudes and other parameters fixed.\n"
 		"    --two-layer-gate-readout-linear-init: before BFGS, freeze the trained model\n"
 		"        and solve only the gate-readout coefficients against the E/F/stress residual.\n"
 		"        Uses the same scalar-head L2; default=off. With --max-iter=0, saves the\n"
@@ -725,6 +727,7 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --two-layer-gate-shared-radial: keep the default independent gate radial contraction coefficients.\n"
 					"    --two-layer-gate-radial-mixing=full: per-l distance matrix directly from K gate-scalar channels to O outer channels. Legacy default=off\n"
 					"    --two-layer-gate-edge-l1: add first-version neighbor edge-projected raw l=1 gate channels.\n"
+					"    --inner-readout: add constant + inner scalar linear energy readout. Default=off\n"
 					"    --two-layer-gate-readout: add a linear energy readout from the gate scalar basis. Default=off\n"
 					"    --outer-k-rank=<R>: use a q-total K=R outer graph; R=1 contracts directly into the radial rows, R>=2 learns R independent K contractions per l, and 0/default disables it.\n"
 					"    --outer-k-rank1: compatibility alias for --outer-k-rank=1.\n"

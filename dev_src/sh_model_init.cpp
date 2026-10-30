@@ -1272,7 +1272,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			(pure_w_channelwise || radial_coefficient_gate) ? kmax : 0);
 	const bool two_layer_gate_k_rank_enabled = two_layer_gate_k_rank > 0;
 	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
-	const bool two_layer_gate_readout = HasOpt(opts, "two-layer-gate-readout");
+	const bool inner_readout = BoolOpt(opts, "inner-readout", false);
+	const bool two_layer_gate_readout = HasOpt(opts, "two-layer-gate-readout") || inner_readout;
 	const std::string two_layer_gate_radial_mixing =
 		StringOpt(opts, "two-layer-gate-radial-mixing", pure_w_channelwise ? "full" : "none");
 	const bool two_layer_gate_radial_mixing_full =
@@ -1454,14 +1455,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	    && (two_layer_gate_readout || two_layer_residual
 	        || multi_layer_gate || two_layer_gate_edge_l1))
 		ERROR("--superlinear-mode=radial-coefficient-gate does not support readout, residual, multi-layer, or edge-L1.");
-	if (outer_k_rank_enabled && two_layer_gate_readout)
+	if (outer_k_rank_enabled && two_layer_gate_readout && !inner_readout)
 		ERROR("--outer-k-rank is not compatible with --two-layer-gate-readout.");
 	if (outer_k_rank_enabled && two_layer_residual)
 		ERROR("--outer-k-rank is not compatible with --two-layer-residual.");
 	if (outer_k_rank_enabled && multi_layer_gate)
 		ERROR("--outer-k-rank currently supports one gate only.");
 	if (two_layer_gate_k_rank_enabled
-	    && (two_layer_gate_readout || two_layer_residual
+	    && ((two_layer_gate_readout && !inner_readout) || two_layer_residual
 	        || multi_layer_gate))
 		ERROR("--two-layer-gate-k-rank is not compatible with readout, residual, or multi-layer gate.");
 	if (!IsSupportedSHRadialBasis(rbasis))
@@ -2038,8 +2039,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		}
 		if (two_layer_gate_readout) {
 				const int readout_count =
-					static_cast<int>(gate_scalar_indices.size());
+					static_cast<int>(gate_scalar_indices.size()) + (inner_readout ? 1 : 0);
 				ofs << "two_layer_gate_readout_enabled = true\n";
+				if (inner_readout) ofs << "two_layer_gate_readout_include_constant = true\n";
 				ofs << "two_layer_gate_readout_coeff_count = "
 				    << readout_count << "\n";
 				ofs << "two_layer_gate_readout_coeffs = {";
