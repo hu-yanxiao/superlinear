@@ -1262,7 +1262,8 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 	int max_atoms,
 	int coeff_begin,
 	int coeff_end,
-	bool fixed_center_readout_columns)
+	bool fixed_center_readout_columns,
+	bool check_stress)
 {
 	DevLinearComponentsFDResult result;
 	const int coeff_count = mtpr.LinearEquationCount();
@@ -1274,8 +1275,12 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 	for (int cfg_index = 0; cfg_index < static_cast<int>(configs.size()); ++cfg_index) {
 		Configuration base = configs[cfg_index];
 		Neighborhoods base_neighborhoods(base, mtpr.CutOff());
-		mtpr.CalcEFSComponents(base, base_neighborhoods, true, false,
+		mtpr.CalcEFSComponents(base, base_neighborhoods, true, check_stress,
 		                      fixed_center_readout_columns);
+		std::vector<Matrix3> base_dedl;
+		if (check_stress)
+			for (int k = 0; k < coeff_count; ++k)
+				base_dedl.push_back(-base.lattice.inverse().transpose() * mtpr.stress_cmpnts[k]);
 
 		const int atom_limit = max_atoms <= 0
 			? base.size()
@@ -1324,6 +1329,35 @@ DevLinearComponentsFDResult CheckLinearComponentsFiniteDifference(
 				}
 			}
 		}
+		if (check_stress) {
+			for (int a = 0; a < 3; ++a) for (int b = 0; b < 3; ++b) {
+				Configuration plus = configs[cfg_index], minus = configs[cfg_index];
+				Matrix3 deform = base.lattice;
+				deform[a][b] += displacement;
+				plus.Deform(plus.lattice.inverse() * deform);
+				deform[a][b] -= 2.0 * displacement;
+				minus.Deform(minus.lattice.inverse() * deform);
+				Neighborhoods plus_nb(plus, mtpr.CutOff()), minus_nb(minus, mtpr.CutOff());
+				mtpr.CalcEFSComponents(plus, plus_nb, false, false, fixed_center_readout_columns);
+				std::vector<double> plus_energy(mtpr.energy_cmpnts, mtpr.energy_cmpnts + coeff_count);
+				mtpr.CalcEFSComponents(minus, minus_nb, false, false, fixed_center_readout_columns);
+				const double denom = plus.lattice[a][b] - minus.lattice[a][b];
+				for (int k = coeff_begin; k < coeff_end; ++k) {
+					const double fd = (plus_energy[k] - mtpr.energy_cmpnts[k]) / denom;
+					const double old_abs = result.worst_abs_err;
+					UpdateWorst(base_dedl[k][a][b], fd, result.worst_abs_err,
+					            result.worst_rel_err, result.worst_analytic, result.worst_fd);
+					if (result.worst_abs_err > old_abs) {
+						result.worst_config = cfg_index;
+						result.worst_atom = -1; // Lattice derivative, component=3*a+b.
+						result.worst_component = 3 * a + b;
+						result.worst_coeff = k;
+					}
+					++result.checked_components;
+				}
+			}
+		}
+
 	}
 	return result;
 }
@@ -2162,7 +2196,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 	BEGIN_COMMAND("check-linear-components-fd-dev",
 		"checks linear-regression force components against energy-component finite differences",
-		"mlp-sus2 check-linear-components-fd-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4 [--fixed-center-readout-columns]\n"
+		"mlp-sus2 check-linear-components-fd-dev model.sus2 cfg --max-configs=1 --max-atoms=1 --coeff-start=0 --coeff-end=0 --displacement=1e-5 --abs-tolerance=1e-5 --rel-tolerance=1e-4 [--fixed-center-readout-columns] [--check-stress]\n"
 	) {
 		if (args.size() != 2) {
 			std::cout << "mlp-sus2 check-linear-components-fd-dev: model and cfg arguments are required\n";
@@ -2195,7 +2229,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		const DevLinearComponentsFDResult result =
 			CheckLinearComponentsFiniteDifference(mtpr, configs, displacement,
 			                                      max_atoms, coeff_start, coeff_end,
-			                                      opts["fixed-center-readout-columns"] != "");
+			                                      opts["fixed-center-readout-columns"] != "",
+			                                      opts["check-stress"] != "");
 		if (mpi_rank == 0) {
 			std::cout << std::setprecision(12)
 			          << "checked_components=" << result.checked_components
@@ -2583,7 +2618,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"           outer pruning=same-k; input k (or lk) scaling is shared over all output o;\n"
 				"           deterministic nonzero W initialization; train defaults to --init-params=same (retain parameters).\n"
 				"           radial-coefficient-gate: adaptive c_l,o,n + a_l,o,n*w_j,l,o,n coefficients,\n"
-					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer/readout;\n"
+					"           requires O<=raw K, ranked neighbor gate, and no legacy mixer;\n"
 						"           outer pruning defaults to same-k, or use q-total to allow cross-o outer products.\n"
 						"         --readout-mode=shared|species (adaptive radial coefficient gate only; default=shared),\n"
 						"         --joint-readout (independent l>=1 K=2 joint gate/outer invariant head; default=off),\n"
@@ -2602,7 +2637,8 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 						"         --two-layer-gate-decoupled-scaling|--two-layer-gate-full-decoupled (one-layer gate only),\n"
 						"         --two-layer-gate-radial-mixing=full (per-l full scalar distance kernel; one-layer gate only),\n"
 						"         --two-layer-gate-edge-l1 (neighbor-only full edge-projected L=1 gate),\n"
-					"         --two-layer-gate-readout (linear energy readout from gate scalars; default=off),\n"
+					"         --inner-readout (constant + physical inner scalars, shared Legacy/Adaptive energy head; default=off),\n"
+					"         --two-layer-gate-readout (legacy Q-only linear energy readout; default=off),\n"
 					"         --outer-k-rank=<R> (per-l K contraction to a q-total K=R outer graph; R=1 uses direct radial sums with no trainable W, R>=2 uses learned W; 0/default=off),\n"
 					"         --outer-k-rank1 (compatibility alias for --outer-k-rank=1),\n"
 					"         --two-layer-gate-k-rank=<R> (independent K-to-R contraction before q-total gate products/scalars; requires outer rank; 0/default=off),\n"

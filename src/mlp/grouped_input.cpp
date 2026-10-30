@@ -49,6 +49,7 @@ const Rule rules[] = {
     {"model.readout.element_mode", "readout-mode", "shared=shared|per-element=species"},
     {"model.readout.inner", "inner-readout", "bool"},
     {"model.readout.joint", "joint-readout", "bool"},
+    {"initialization.inner_readout_linear", "inner-readout-linear-init", "bool"},
     {"initialization.parameters", "init-params", "same=same|random=random"},
     {"initialization.seed", "init-random-seed", "seed"},
     {"initialization.warp_slope_endpoints", "scal-range", "pair"},

@@ -2332,7 +2332,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		    || !std::isfinite(weight_stdd) || weight_stdd < 0.0)
 			ERROR("--std-weight and --stdd-weight must be finite and non-negative");
 		if (do_lin || do_lin_rescale || fine_tune || two_layer_residual_staged
-		    || two_layer_gate_readout_linear_init || mindist_update
+		    || mindist_update
 		    || !fixed_atomic_energies.empty() || guard_compression_options.enabled)
 			ERROR("Adaptive PyTorch profile does not use legacy linear warmup/refits, sign repair, "
 			      "fixed atomic-energy penalties, or compression penalties");
@@ -2749,6 +2749,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	    && guard_compression_options.block_monotonic_weight > 0.0)
 		ERROR("--guard-compression-block-monotonic-weight is not compatible with gate readout; set it to 0 or disable gate readout");
 	if (two_layer_gate_readout_linear_init) {
+		if (adaptive_pytorch_profile && !mtpr.TwoLayerGateReadoutIncludesConstant())
+			ERROR("Adaptive linear initialization requires --inner-readout and its constant-plus-scalar head");
 		if (!loaded_complete_parameters)
 			ERROR("--two-layer-gate-readout-linear-init requires a complete trained checkpoint");
 		if (!mtpr.TwoLayerGateReadoutEnabled())
