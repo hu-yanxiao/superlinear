@@ -1385,7 +1385,7 @@ DevLinearReadoutResult CheckLinearReadout(
 		// Adaptive shared heads use h_Z * d_q. Hold the center prefactors
 		// fixed in the component chart; raw TrainLinear columns intentionally
 		// omit h_Z and cannot reconstruct a checkpoint with unequal centers.
-		const bool fixed_center=mtpr.OuterUsesAdaptiveRadialCoefficients()
+		const bool fixed_center=(mtpr.OuterUsesAdaptiveRadialCoefficients() || mtpr.TwoLayerGateReadoutIncludesConstant())
 			&& !mtpr.UsesSpeciesReadout();
 		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, check_stress,
 		                      fixed_center);

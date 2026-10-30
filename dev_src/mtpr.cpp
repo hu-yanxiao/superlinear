@@ -6470,6 +6470,15 @@ void MLMTPR::Load(const string& filename)
 			}
 
 		}
+    if (two_layer_gate_readout_include_constant_ && !two_layer_gate_readout_enabled_)
+        ERROR("Inner readout constant metadata requires an enabled readout");
+    {
+        std::string trailing_line;
+        while (std::getline(ifs, trailing_line)) {
+            if (trailing_line.find("two_layer_gate_readout_") != std::string::npos)
+                ERROR("Readout metadata must precede species_coeffs and moment_coeffs");
+        }
+    }
 	if (UsesPrecomputedLmpTable(rbasis_type))
 	{
 		radial_list.resize(species_count * species_count, 200002, radial_func_count);
