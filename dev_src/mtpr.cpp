@@ -1316,6 +1316,17 @@ void MLMTPR::EnableTwoLayerGateReadout()
 	ResizeLinearComponentStorage();
 }
 
+void MLMTPR::EnableInnerReadout()
+{
+ if (UsesSpeciesReadout()) ERROR("inner readout currently requires shared outer readout");
+ if (two_layer_gate_readout_include_constant_) return;
+ EnableTwoLayerGateReadout();
+ two_layer_gate_readout_include_constant_ = true;
+ two_layer_gate_readout_coeffs_.insert(two_layer_gate_readout_coeffs_.begin(), 0.0);
+ DistributeCoeffs();
+ ResizeLinearComponentStorage();
+}
+
 void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
 	int second_gate_body_order,
 	const std::string& second_gate_mode,
@@ -2112,7 +2123,7 @@ int MLMTPR::TwoLayerResidualE0CoeffOffset() const
 
 int MLMTPR::TwoLayerGateReadoutCoeffCount() const
 {
-	return TwoLayerGateReadoutEnabled() ? TwoLayerGateScalarCount() : 0;
+	return TwoLayerGateReadoutEnabled() ? TwoLayerGateScalarCount() + InnerReadoutScalarOffset() : 0;
 }
 
 int MLMTPR::TwoLayerGateReadoutCoeffOffset() const
@@ -4716,6 +4727,7 @@ void MLMTPR::Load(const string& filename)
 						two_layer_gate_radial_mixing_coeffs_.clear();
 						two_layer_gate_radial_mixing_active_eval_ = false;
 						two_layer_gate_readout_enabled_ = false;
+ two_layer_gate_readout_include_constant_ = false;
 					two_layer_gate_readout_coeffs_.clear();
 				multi_layer_gate_enabled_ = false;
 				second_layer_gate_shared_radial_ = false;
@@ -6043,12 +6055,18 @@ void MLMTPR::Load(const string& filename)
 					ERROR("SUS2-SH gate readout is not compatible with residual mode");
 
 				ifs >> tmpstr;
+                if (tmpstr == "two_layer_gate_readout_include_constant") {
+                    ifs.ignore(2);
+                    ifs >> bool_token;
+                    two_layer_gate_readout_include_constant_ = ReadBoolToken(bool_token);
+                    ifs >> tmpstr;
+                }
 				if (tmpstr != "two_layer_gate_readout_coeff_count")
 					ERROR("SUS2-SH gate readout is missing coefficient count metadata");
 				ifs.ignore(2);
 				int readout_count = 0;
 				ifs >> readout_count;
-				if (readout_count != TwoLayerGateScalarCount())
+				if (readout_count != TwoLayerGateReadoutCoeffCount())
 					ERROR("SUS2-SH gate readout coefficient count should match gate scalar count");
 
 				ifs >> tmpstr;
@@ -6611,7 +6629,7 @@ void MLMTPR::CalcDescriptors(Configuration& cfg, ofstream& ofs)
 			ofs << '\t' << basis_vals[1 + i] ;
 		}
 		if (TwoLayerGateReadoutEnabled()) {
-			const int gate_count = TwoLayerGateReadoutCoeffCount();
+			const int gate_count = TwoLayerGateScalarCount();
 			const size_t value_offset = static_cast<size_t>(ind) * gate_count;
 			if (value_offset + gate_count
 			    > two_layer_gate_scalar_values_cache_.size())
@@ -6676,7 +6694,7 @@ void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 			ofs << '\t' << linear_coeffs[species_count + i]*basis_vals[1 + i]*linear_coeffs[nbh.my_type] ;
 		}
 		if (TwoLayerGateReadoutEnabled()) {
-			const int gate_count = TwoLayerGateReadoutCoeffCount();
+			const int gate_count = TwoLayerGateScalarCount();
 			const size_t value_offset = static_cast<size_t>(ind) * gate_count;
 			if (value_offset + gate_count
 			    > two_layer_gate_scalar_values_cache_.size())
@@ -6685,7 +6703,7 @@ void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 			for (int q = 0; q < gate_count; ++q)
 				ofs << '\t'
 				    << center_linear
-				       * TwoLayerGateReadoutCoeff(q)
+				       * TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset())
 				       * two_layer_gate_scalar_values_cache_[value_offset + q];
 		}
 //		ofs << '\t' << nbh.count;
@@ -6710,6 +6728,7 @@ void MLMTPR::CalcpartialE(Configuration& cfg, ofstream& ofs)
 
 void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 {
+ if (TwoLayerGateReadoutIncludesConstant()) ERROR("calc-eij is not qualified for inner readout with a constant; use calc-efs");
 	if (UsesSpeciesReadout())
 		ERROR("calc-eij is not qualified for species readout; use calc-efs for total predictions");
 	if (!is_sh_potential_)
@@ -6786,13 +6805,13 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 		}
 
 		if (TwoLayerGateReadoutEnabled()) {
-			const int gate_count = TwoLayerGateReadoutCoeffCount();
+			const int gate_count = TwoLayerGateScalarCount();
 			readout_scalar_coeffs.resize(gate_count);
 			const double center_linear = linear_coeffs[nbh.my_type];
 			bool has_nonzero_readout = false;
 			for (int q = 0; q < gate_count; ++q) {
 				readout_scalar_coeffs[q] =
-					center_linear * TwoLayerGateReadoutCoeff(q);
+					center_linear * TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset());
 				has_nonzero_readout = has_nonzero_readout
 					|| readout_scalar_coeffs[q] != 0.0;
 			}
@@ -7377,9 +7396,8 @@ void MLMTPR::Save(const string& filename)
 					}
 				if (TwoLayerGateReadoutEnabled()) {
 				const int readout_count = TwoLayerGateReadoutCoeffCount();
-			if (readout_count != TwoLayerGateScalarCount())
-				ERROR("SUS2-SH gate readout coefficient count is inconsistent");
-			ofs << "two_layer_gate_readout_enabled = true\n";
+ofs << "two_layer_gate_readout_enabled = true\n";
+ if (TwoLayerGateReadoutIncludesConstant()) ofs << "two_layer_gate_readout_include_constant = true\n";
 			ofs << "two_layer_gate_readout_coeff_count = "
 			    << readout_count << '\n';
 			ofs << "two_layer_gate_readout_coeffs = {";
@@ -8515,8 +8533,8 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 {
 	bool has_readout_seed = false;
 	if (TwoLayerGateReadoutEnabled())
-		for (int q = 0; q < TwoLayerGateReadoutCoeffCount(); ++q)
-			if (TwoLayerGateReadoutCoeff(q) != 0.0) {
+		for (int q = 0; q < TwoLayerGateScalarCount(); ++q)
+			if (TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset()) != 0.0) {
 				has_readout_seed = true;
 				break;
 			}
@@ -8636,7 +8654,7 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 			const double center_linear = linear_coeffs[neighborhoods[ind].my_type];
 			for (int q = 0; q < gate_count; ++q)
 				scalar_seed_values[q] +=
-					center_linear * TwoLayerGateReadoutCoeff(q);
+					center_linear * TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset());
 			has_adjoint = true;
 		}
 		if (!has_adjoint)
@@ -9023,7 +9041,7 @@ double MLMTPR::CalcSiteEnergyValue(const Neighborhood& nbh,
 		                                  * scalar_value));
 	}
 	if (TwoLayerGateReadoutEnabled()) {
-		const int gate_count = TwoLayerGateReadoutCoeffCount();
+		const int gate_count = TwoLayerGateScalarCount();
 		const int cache_atom_index = active_two_layer_edge_cache_atom_index_;
 		const size_t cache_offset =
 			cache_atom_index >= 0
@@ -9038,9 +9056,9 @@ double MLMTPR::CalcSiteEnergyValue(const Neighborhood& nbh,
 				nbh, sh_gate_scalar_values_, cache_atom_index);
 			gate_scalars = sh_gate_scalar_values_.data();
 		}
-		double readout_value = 0.0;
+		double readout_value = TwoLayerGateReadoutIncludesConstant() ? TwoLayerGateReadoutCoeff(0) : 0.0;
 		for (int q = 0; q < gate_count; ++q)
-			readout_value += TwoLayerGateReadoutCoeff(q) * gate_scalars[q];
+			readout_value += TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset()) * gate_scalars[q];
 		const double term = center_linear * readout_value;
 		site_energy += term;
 		site_energy0 += term;
@@ -11484,12 +11502,13 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 						TwoLayerProfileNow() - profile_gate_adjoints_start;
 			}
 			if (TwoLayerGateReadoutEnabled()) {
-				const int gate_count = TwoLayerGateReadoutCoeffCount();
+				const int gate_count = TwoLayerGateScalarCount();
 				const int column_offset = TwoLayerGateReadoutLinearColumnOffset();
 				const double readout_column_scale =
 					fixed_center_readout_columns
 						? linear_coeffs[nbh.my_type]
 						: 1.0;
+				if (TwoLayerGateReadoutIncludesConstant()) energy_cmpnts[column_offset] += readout_column_scale;
 				const size_t value_offset = static_cast<size_t>(ind) * gate_count;
 				if (value_offset + gate_count
 				    > two_layer_gate_scalar_values_cache_.size())
@@ -11497,7 +11516,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 				const double* gate_scalars =
 					two_layer_gate_scalar_values_cache_.data() + value_offset;
 				for (int q = 0; q < gate_count; ++q)
-					energy_cmpnts[column_offset + q] +=
+					energy_cmpnts[column_offset + InnerReadoutScalarOffset() + q] +=
 						readout_column_scale * gate_scalars[q];
 				if (need_forces || need_stress) {
 					CalcTwoLayerGateScalarDers(nbh, sh_gate_scalar_ders_);
@@ -11506,7 +11525,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					    != static_cast<size_t>(gate_count) * coord_count)
 						ERROR("SUS2-SH gate readout derivative buffer has inconsistent size");
 					for (int q = 0; q < gate_count; ++q) {
-						const int col = column_offset + q;
+						const int col = column_offset + InnerReadoutScalarOffset() + q;
 						const double* scalar_ders =
 							sh_gate_scalar_ders_.data()
 							+ static_cast<size_t>(q) * coord_count;
@@ -11638,18 +11657,19 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 			energy_cmpnts[k] += basis_vals[i];
 		}
 		if (TwoLayerGateReadoutEnabled()) {
-			const int gate_count = TwoLayerGateReadoutCoeffCount();
+			const int gate_count = TwoLayerGateScalarCount();
 			const int column_offset = TwoLayerGateReadoutLinearColumnOffset();
 			const double readout_column_scale =
 				fixed_center_readout_columns
 					? linear_coeffs[nbh.my_type]
 					: 1.0;
+			if (TwoLayerGateReadoutIncludesConstant()) energy_cmpnts[column_offset] += readout_column_scale;
 			const size_t value_offset = static_cast<size_t>(ind) * gate_count;
 			if (value_offset + gate_count
 			    > two_layer_gate_scalar_values_cache_.size())
 				ERROR("SUS2-SH gate readout scalar cache has inconsistent size");
 			for (int q = 0; q < gate_count; ++q)
-				energy_cmpnts[column_offset + q] +=
+				energy_cmpnts[column_offset + InnerReadoutScalarOffset() + q] +=
 					readout_column_scale
 					* two_layer_gate_scalar_values_cache_[value_offset + q];
 		}

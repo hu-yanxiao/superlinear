@@ -665,6 +665,7 @@ public:
 					std::string two_layer_gate_radial_mixing_ = "none";
 					std::vector<double> two_layer_gate_radial_mixing_coeffs_;
 					bool two_layer_gate_readout_enabled_ = false;
+ bool two_layer_gate_readout_include_constant_ = false;
 				std::vector<double> two_layer_gate_readout_coeffs_;
 				bool multi_layer_gate_enabled_ = false;
 				bool second_layer_gate_shared_radial_ = false;
@@ -1107,6 +1108,9 @@ public:
 								void EnableTwoLayerGateRadialMixingFull();
 								void UpgradeTwoLayerGateToEdgeL1();
 							void EnableTwoLayerGateReadout();
+ void EnableInnerReadout();
+ bool TwoLayerGateReadoutIncludesConstant() const { return two_layer_gate_readout_include_constant_; }
+ int InnerReadoutScalarOffset() const { return two_layer_gate_readout_include_constant_ ? 1 : 0; }
 							bool TwoLayerGateReadoutEnabled() const {
 								return two_layer_gate_readout_enabled_;
 							}

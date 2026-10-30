@@ -11736,7 +11736,7 @@ void MLMTPR::AddTwoLayerGateReadoutSiteEnergyDers(const Neighborhood& nbh)
 {
 	if (!TwoLayerGateReadoutEnabled())
 		return;
-	const int gate_count = TwoLayerGateReadoutCoeffCount();
+	const int gate_count = TwoLayerGateScalarCount();
 	if (gate_count <= 0 || gate_count != TwoLayerGateScalarCount())
 		ERROR("SUS2-SH gate readout has inconsistent scalar dimensions");
 
@@ -11759,9 +11759,9 @@ void MLMTPR::AddTwoLayerGateReadoutSiteEnergyDers(const Neighborhood& nbh)
 		gate_scalars = sh_gate_scalar_values_.data();
 	}
 
-	double readout_value = 0.0;
+	double readout_value = TwoLayerGateReadoutIncludesConstant() ? TwoLayerGateReadoutCoeff(0) : 0.0;
 	for (int q = 0; q < gate_count; ++q)
-		readout_value += TwoLayerGateReadoutCoeff(q) * gate_scalars[q];
+		readout_value += TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset()) * gate_scalars[q];
 	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
 	buff_site_energy_ += center_linear * readout_value;
 	buff_site_energy_0 += center_linear * readout_value;
@@ -11775,7 +11775,7 @@ void MLMTPR::AccumulateTwoLayerGateReadoutCombinationGrad(
 {
 	if (!TwoLayerGateReadoutEnabled())
 		return;
-	const int gate_count = TwoLayerGateReadoutCoeffCount();
+	const int gate_count = TwoLayerGateScalarCount();
 	if (gate_count <= 0 || gate_count != TwoLayerGateScalarCount())
 		ERROR("SUS2-SH gate readout has inconsistent scalar dimensions");
 	out_grad_accumulator.resize(CoeffCount());
@@ -11820,19 +11820,21 @@ void MLMTPR::AccumulateTwoLayerGateReadoutCombinationGrad(
 	}
 
 	const double center_linear = UsesSpeciesReadout() ? 1.0 : linear_coeffs[nbh.my_type];
-	double readout_value = 0.0;
+	double readout_value = TwoLayerGateReadoutIncludesConstant() ? TwoLayerGateReadoutCoeff(0) : 0.0;
 	double readout_tangent = 0.0;
 	std::vector<double>& gate_scalar_seeds =
 		two_layer_gate_readout_value_seed_scratch_;
 	std::vector<double>& energy_scalar_seeds =
 		two_layer_gate_readout_energy_seed_scratch_;
+	if (TwoLayerGateReadoutIncludesConstant())
+ out_grad_accumulator[TwoLayerGateReadoutCoeffOffset()] += center_linear * se_weight;
 	gate_scalar_seeds.assign(gate_count, 0.0);
 	energy_scalar_seeds.assign(gate_count, 0.0);
 	for (int q = 0; q < gate_count; ++q) {
-		const double phi = TwoLayerGateReadoutCoeff(q);
+		const double phi = TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset());
 		readout_value += phi * gate_scalars[q];
 		readout_tangent += phi * gate_tangents[q];
-		out_grad_accumulator[TwoLayerGateReadoutCoeffOffset() + q] +=
+		out_grad_accumulator[TwoLayerGateReadoutCoeffOffset() + InnerReadoutScalarOffset() + q] +=
 			center_linear
 			* (se_weight * gate_scalars[q] + gate_tangents[q]);
 		gate_scalar_seeds[q] = center_linear * se_weight * phi;
@@ -11861,7 +11863,7 @@ void MLMTPR::AccumulateTwoLayerGateReadoutDirectionalGrad(
 {
 	if (!TwoLayerGateReadoutEnabled())
 		return;
-	const int gate_count = TwoLayerGateReadoutCoeffCount();
+	const int gate_count = TwoLayerGateScalarCount();
 	if (gate_count <= 0 || gate_count != TwoLayerGateScalarCount())
 		ERROR("SUS2-SH gate readout has inconsistent scalar dimensions");
 	if (se_ders_weights == nullptr
@@ -11879,10 +11881,10 @@ void MLMTPR::AccumulateTwoLayerGateReadoutDirectionalGrad(
 	gate_scalar_seeds.assign(gate_count, 0.0);
 	energy_scalar_seeds.assign(gate_count, 0.0);
 	for (int q = 0; q < gate_count; ++q) {
-		const double phi = TwoLayerGateReadoutCoeff(q);
+		const double phi = TwoLayerGateReadoutCoeff(q + InnerReadoutScalarOffset());
 		const double tangent = gate_scalar_tangents[q];
 		readout_tangent += phi * tangent;
-		out_grad_accumulator[TwoLayerGateReadoutCoeffOffset() + q] +=
+		out_grad_accumulator[TwoLayerGateReadoutCoeffOffset() + InnerReadoutScalarOffset() + q] +=
 			center_linear * tangent;
 		energy_scalar_seeds[q] = center_linear * phi;
 	}
