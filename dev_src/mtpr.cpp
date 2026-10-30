@@ -1295,7 +1295,7 @@ void MLMTPR::EnableTwoLayerGateReadout()
 {
 	if (!is_sh_potential_)
 		ERROR("--two-layer-gate-readout can only be used with a SUS2-SH model");
-	if (outer_k_rank1_enabled_)
+	if (outer_k_rank1_enabled_ && !two_layer_gate_readout_include_constant_)
 		ERROR("--two-layer-gate-readout is not compatible with --outer-k-rank1");
 	if (!two_layer_gate_enabled_)
 		ERROR("--two-layer-gate-readout requires a two-layer gate model or --two-layer-gate");
@@ -1311,7 +1311,7 @@ void MLMTPR::EnableTwoLayerGateReadout()
 		ERROR("--two-layer-gate-readout found no gate scalar basis functions");
 
 	two_layer_gate_readout_enabled_ = true;
-	two_layer_gate_readout_coeffs_.assign(TwoLayerGateScalarCount(), 0.0);
+	two_layer_gate_readout_coeffs_.assign(TwoLayerGateReadoutCoeffCount(), 0.0);
 	DistributeCoeffs();
 	ResizeLinearComponentStorage();
 }
@@ -1320,9 +1320,10 @@ void MLMTPR::EnableInnerReadout()
 {
  if (UsesSpeciesReadout()) ERROR("inner readout currently requires shared outer readout");
  if (two_layer_gate_readout_include_constant_) return;
- EnableTwoLayerGateReadout();
+ const bool was_enabled = two_layer_gate_readout_enabled_;
  two_layer_gate_readout_include_constant_ = true;
- two_layer_gate_readout_coeffs_.insert(two_layer_gate_readout_coeffs_.begin(), 0.0);
+ EnableTwoLayerGateReadout();
+ if (was_enabled) two_layer_gate_readout_coeffs_.insert(two_layer_gate_readout_coeffs_.begin(), 0.0);
  DistributeCoeffs();
  ResizeLinearComponentStorage();
 }
@@ -6184,7 +6185,7 @@ void MLMTPR::Load(const string& filename)
 					ERROR("SUS2-SH mu-body-order gate body order is out of range");
 				BuildTwoLayerGateBodyOrderBuckets();
 			if (outer_k_rank1_enabled_) {
-				if (two_layer_gate_readout_enabled_)
+				if (two_layer_gate_readout_enabled_ && !two_layer_gate_readout_include_constant_)
 					ERROR("SUS2-SH outer K-rank1 does not support gate readout");
 				if (tmpstr == "multi_layer_gate_enabled")
 					ERROR("SUS2-SH outer K-rank1 first version supports one gate only");
