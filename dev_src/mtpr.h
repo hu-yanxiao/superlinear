@@ -454,7 +454,7 @@ protected:
 		bool need_forces,
 		bool need_stress,
 		std::vector<double>& gate_linear_adjoints,
-		std::vector<double>& edge_l1_projection_linear_adjoints);
+		std::vector<double>& edge_l1_projection_linear_adjoints, double center_scale = 1.0);
 	void ApplySHGateLinearComponentChain(
 		Configuration& cfg,
 		const Neighborhoods& neighborhoods,

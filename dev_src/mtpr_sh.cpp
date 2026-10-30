@@ -9719,7 +9719,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 	bool need_forces,
 	bool need_stress,
 	std::vector<double>& gate_linear_adjoints,
-	std::vector<double>& edge_l1_projection_linear_adjoints)
+	std::vector<double>& edge_l1_projection_linear_adjoints, double center_scale)
 {
 	const bool use_lmp_table = SHUsesPrecomputedLmpTable(p_RadialBasis);
 	const bool pure_matrix = OuterUsesPureRadialMatrix();
@@ -10014,6 +10014,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 								gate_adjoint += jacobian[basic] * sh_gate_moment_ders_[basic];
 					}
 				}
+				gate_adjoint *= center_scale;
 				const int column = UsesSpeciesReadout() ? type_central * alpha_scalar_moments + i : i;
 				gate_adjoints[static_cast<size_t>(column) * radial_func_count + mu] +=
 					gate_adjoint;
