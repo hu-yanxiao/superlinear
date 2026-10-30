@@ -1319,6 +1319,8 @@ void MLMTPR::EnableTwoLayerGateReadout()
 void MLMTPR::EnableInnerReadout()
 {
  if (UsesSpeciesReadout()) ERROR("inner readout currently requires shared outer readout");
+ if (OuterUsesAdaptiveRadialCoefficients() || OuterUsesPureRadialMatrix())
+     ERROR("inner readout currently supports shared Scalar Legacy/Effect models only");
  if (two_layer_gate_readout_include_constant_) return;
  const bool was_enabled = two_layer_gate_readout_enabled_;
  two_layer_gate_readout_include_constant_ = true;
