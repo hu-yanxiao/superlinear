@@ -6045,7 +6045,13 @@ void MLMTPR::Load(const string& filename)
 						} else if (OuterUsesAdaptiveRadialCoefficients()) {
 							ERROR("SUS2-SH adaptive radial coefficient model is missing adaptive radial arrays");
 						}
-				if (tmpstr == "two_layer_gate_readout_enabled") {
+				if (tmpstr == "two_layer_gate_readout_include_constant") {
+                    ifs.ignore(2);
+                    ifs >> bool_token;
+                    two_layer_gate_readout_include_constant_ = ReadBoolToken(bool_token);
+                    ifs >> tmpstr;
+                }
+                if (tmpstr == "two_layer_gate_readout_enabled") {
 				ifs.ignore(2);
 				ifs >> bool_token;
 				two_layer_gate_readout_enabled_ = ReadBoolToken(bool_token);
