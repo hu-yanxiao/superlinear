@@ -1318,16 +1318,23 @@ void MLMTPR::EnableTwoLayerGateReadout()
 
 void MLMTPR::EnableInnerReadout()
 {
- if (UsesSpeciesReadout()) ERROR("inner readout currently requires shared outer readout");
- if (OuterUsesAdaptiveRadialCoefficients() || OuterUsesPureRadialMatrix())
-     ERROR("inner readout currently supports shared Scalar Legacy/Effect models only");
- if (two_layer_gate_readout_include_constant_) return;
- const bool was_enabled = two_layer_gate_readout_enabled_;
- two_layer_gate_readout_include_constant_ = true;
- EnableTwoLayerGateReadout();
- if (was_enabled) two_layer_gate_readout_coeffs_.insert(two_layer_gate_readout_coeffs_.begin(), 0.0);
- DistributeCoeffs();
- ResizeLinearComponentStorage();
+    if (UsesSpeciesReadout()) ERROR("inner readout currently requires shared outer readout");
+    if (OuterUsesPureRadialMatrix()) ERROR("inner readout does not support pure-matrix models");
+    if (two_layer_gate_readout_include_constant_) return;
+    // Insert in the physical packed vector before changing the layout. This
+    // preserves trained gate-rank, outer, tensor and joint blocks exactly.
+    DistributeCoeffs();
+    const bool was_enabled=two_layer_gate_readout_enabled_;
+    const int offset=TwoLayerGateReadoutCoeffOffset();
+    const int inserted=was_enabled ? 1 : TwoLayerGateScalarCount()+1;
+    regression_coeffs.insert(regression_coeffs.begin()+offset,inserted,0.0);
+    two_layer_gate_readout_include_constant_=true;
+    if (was_enabled)
+        two_layer_gate_readout_coeffs_.insert(two_layer_gate_readout_coeffs_.begin(),0.0);
+    else
+        EnableTwoLayerGateReadout();
+    DistributeCoeffs();
+    ResizeLinearComponentStorage();
 }
 
 void MLMTPR::UpgradeTwoLayerGateToMultiLayerGate(
@@ -2393,7 +2400,8 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH direct-radial outer requires an independent shared-radial gate block");
 	if (outer_k_rank1_direct_radial_ || TwoLayerGateUsesDirectScale()
 	    || multi_layer_gate_enabled_ || two_layer_gate_edge_l1_enabled_
-	    || two_layer_residual_enabled_ || two_layer_gate_readout_enabled_)
+	    || two_layer_residual_enabled_
+	    || (two_layer_gate_readout_enabled_ && !(adaptive && TwoLayerGateReadoutIncludesConstant())))
 		ERROR("SUS2-SH direct-radial outer is incompatible with direct shortcuts, multi-layer, edge-L1, residual, or readout modes");
 	if (!outer_k_rank1_weights_.empty() || OuterKRank1WeightCount() != 0)
 		ERROR("SUS2-SH direct-radial outer must not contain a factorized outer weight block");
@@ -6473,6 +6481,8 @@ void MLMTPR::Load(const string& filename)
 			}
 
 		}
+    if (two_layer_gate_readout_include_constant_ && UsesSpeciesReadout())
+        ERROR("Inner readout requires shared outer readout");
     if (two_layer_gate_readout_include_constant_ && !two_layer_gate_readout_enabled_)
         ERROR("Inner readout constant metadata requires an enabled readout");
     {

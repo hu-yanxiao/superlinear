@@ -1274,6 +1274,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
 	const bool inner_readout = BoolOpt(opts, "inner-readout", false);
 	const bool two_layer_gate_readout = HasOpt(opts, "two-layer-gate-readout") || inner_readout;
+	if (inner_readout && readout_mode != "shared")
+		ERROR("--inner-readout requires --readout-mode=shared");
 	const std::string two_layer_gate_radial_mixing =
 		StringOpt(opts, "two-layer-gate-radial-mixing", pure_w_channelwise ? "full" : "none");
 	const bool two_layer_gate_radial_mixing_full =
@@ -1452,7 +1454,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_readout && two_layer_residual)
 		ERROR("--two-layer-gate-readout is not compatible with --two-layer-residual.");
 	if (radial_coefficient_gate
-	    && (two_layer_gate_readout || two_layer_residual
+	    && ((two_layer_gate_readout && !inner_readout) || two_layer_residual
 	        || multi_layer_gate || two_layer_gate_edge_l1))
 		ERROR("--superlinear-mode=radial-coefficient-gate does not support readout, residual, multi-layer, or edge-L1.");
 	if (outer_k_rank_enabled && two_layer_gate_readout && !inner_readout)

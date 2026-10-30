@@ -288,7 +288,8 @@ protected:
 	void FinishAdaptiveRadialGateComponents(Configuration& cfg,
 	                                        const Neighborhoods& neighborhoods,
 	                                        bool need_forces,
-	                                        bool need_stress);
+	                                        bool need_stress,
+	                                        bool include_center, bool inner_only);
 			std::vector<double> two_layer_gate_tanh_mu_cache_;
 			std::vector<char> two_layer_gate_tanh_mu_cache_valid_;
 			int two_layer_gate_tanh_mu_cache_atom_count_ = 0;

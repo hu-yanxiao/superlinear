@@ -640,6 +640,12 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
                         }
                     }
         }
+        // Merge the physical inner readout into the existing scalar reverse
+        // pass; component columns supply their own seeds separately.
+        if (component<0 && TwoLayerGateReadoutEnabled())
+            for (int q=0;q<Q;++q)
+                ex.scalar_adjoints[static_cast<size_t>(i)*Q+q]+=
+                    linear_coeffs[nbh.my_type]*TwoLayerGateReadoutCoeff(q+InnerReadoutScalarOffset());
         CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
             nbh,derivatives,i,
             ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q,
@@ -694,6 +700,13 @@ void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neigh
                 scalar_energy+=weight*ex.joint_values[node];
                 if(need_derivatives) ex.joint_adjoints[node]+=weight;
             }
+        }
+        if (TwoLayerGateReadoutEnabled()) {
+            double inner=TwoLayerGateReadoutIncludesConstant() ? TwoLayerGateReadoutCoeff(0) : 0.0;
+            const double* physical=two_layer_gate_scalar_values_cache_.data()+static_cast<size_t>(i)*ex.scalars;
+            for (int q=0;q<ex.scalars;++q)
+                inner+=TwoLayerGateReadoutCoeff(q+InnerReadoutScalarOffset())*physical[q];
+            scalar_energy+=center*inner;
         }
         cfg.cal_se0[i]=scalar_energy;
         cfg.cal_se[i]=regression_coeffs[type]+center+scalar_energy;
@@ -763,6 +776,16 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
             energy_cmpnts[column]+=center*ex.joint_values[joint_readout_graph_.scalar_mapping[q]];
         }
     }
+    if (TwoLayerGateReadoutEnabled()) {
+        const int Q=ex.scalars, offset=TwoLayerGateReadoutLinearColumnOffset(), first=InnerReadoutScalarOffset();
+        for (int i=0;i<cfg.size();++i) {
+            const Neighborhood& nbh=neighborhoods[i];
+            const double center=include_center ? linear_coeffs[nbh.my_type] : 1.0;
+            if (first) energy_cmpnts[offset]+=center;
+            const double* physical=two_layer_gate_scalar_values_cache_.data()+static_cast<size_t>(i)*Q;
+            for (int q=0;q<Q;++q) energy_cmpnts[offset+first+q]+=center*physical[q];
+        }
+    }
     if (!derivatives) return;
     const bool reference=ReferenceComponents();
     const int D=ex.rows,P=alpha_scalar_moments;
@@ -810,7 +833,8 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
                               +(static_cast<size_t>(i)*readout_count+head)*TC);
         }
     }
-    if (!reference) FinishAdaptiveRadialGateComponents(cfg,neighborhoods,need_forces,need_stress);
+    if (!reference || TwoLayerGateReadoutEnabled())
+        FinishAdaptiveRadialGateComponents(cfg,neighborhoods,need_forces,need_stress,include_center,reference);
     // Auxiliary columns share the cached physical edge contractions. Their
     // direct gate-primitive seed is kept independent of the main scalar GEMM.
     const int JP=JointReadoutScalarCount(),JN=joint_readout_graph_.moments_count;
@@ -838,9 +862,12 @@ void MLMTPR::CalcAdaptiveRadialComponents(Configuration& cfg,const Neighborhoods
 }
 
 void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighborhoods& neighborhoods,
-                                                bool need_forces,bool need_stress) {
+                                                bool need_forces,bool need_stress,
+                                                bool include_center,bool inner_only) {
     AdaptiveRadialExecution& ex=adaptive_radial_execution_;
-    const int P=ScalarReadoutCoeffCount(),D=ex.rows,Q=ex.scalars,H=ex.harmonics;
+    const int outer_heads=inner_only ? 0 : ScalarReadoutCoeffCount();
+    const int D=ex.rows,Q=ex.scalars,H=ex.harmonics;
+    const int P=outer_heads+(TwoLayerGateReadoutEnabled() ? Q : 0);
     const int projection_rows=ex.projection_rows,R=p_RadialBasis->rb_size,T=AdaptiveRadialLatentCount();
     const int TC=TensorMessageEnabled() ? TensorMessageComponentCount() : 0;
     const int G=two_layer_gate_k_rank_;
@@ -850,6 +877,7 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
     const int cached_moments=static_cast<int>(two_layer_gate_required_moment_indices_.size());
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     std::vector<double> scalar_seeds(static_cast<size_t>(P)*Q);
+    std::vector<double> padded_seeds(TwoLayerGateReadoutEnabled() ? static_cast<size_t>(P)*D : 0);
     const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialTanh();
     std::vector<double> compact_seeds(direct_linear ? 0 : static_cast<size_t>(P)*projection_rows);
     std::vector<double> adj(static_cast<size_t>(alpha_moments_count)*P);
@@ -859,7 +887,13 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
         const Neighborhood& nbh=neighborhoods[atom];
         const int coords=3*nbh.count;
         if (coords==0) continue;
-        double* seeds=ex.component_coefficient_adjoints.data()+static_cast<size_t>(atom)*P*D;
+        double* seeds=outer_heads ? ex.component_coefficient_adjoints.data()
+            +static_cast<size_t>(atom)*outer_heads*D : nullptr;
+        if (TwoLayerGateReadoutEnabled()) {
+            std::fill(padded_seeds.begin(),padded_seeds.end(),0.0);
+            if (outer_heads) std::copy_n(seeds,static_cast<size_t>(outer_heads)*D,padded_seeds.data());
+            seeds=padded_seeds.data();
+        }
         if (direct_linear) {
             for (int p=0;p<P;++p) for (int row=0;row<D;++row)
                 seeds[p*D+row]*=amplitude[ex.amplitude_offsets[atom]+row];
@@ -880,15 +914,18 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
         const double* projected=direct_linear ? seeds : compact_seeds.data();
         cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasNoTrans,P,Q,projection_rows,1.0,projected,projection_rows,
                     regression_coeffs.data()+AdaptiveRadialWeightOffset(),Q,0.0,scalar_seeds.data(),Q);
+        if (TwoLayerGateReadoutEnabled())
+            for (int q=0;q<Q;++q)
+                scalar_seeds[(static_cast<size_t>(outer_heads)+q)*Q+q]+=include_center ? linear_coeffs[nbh.my_type] : 1.0;
         std::fill(adj.begin(),adj.end(),0.0);
         for (int q=0;q<Q;++q) {
             double* target=adj.data()+static_cast<size_t>(TwoLayerGateScalarMomentIndexUnchecked(q))*P;
             for (int p=0;p<P;++p) target[p]+=scalar_seeds[p*Q+q];
         }
-        if (TensorMessageEnabled()) {
+        if (TensorMessageEnabled() && outer_heads) {
             const double* Bmsg=regression_coeffs.data()+TensorMessageCoeffOffset();
             const double* heads=ex.component_tensor_message_adjoints.data()
-                + static_cast<size_t>(atom)*P*TC;
+                + static_cast<size_t>(atom)*outer_heads*TC;
             for (int L=1; L<=Lmsg; ++L)
                 for (int o=0; o<outer_k_rank_; ++o)
                     for (int m=-L; m<=L; ++m) {
@@ -902,7 +939,7 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
                                 ((static_cast<size_t>(L-1)*outer_k_rank_+o)*G)+g;
                             const double coeff=Bmsg[b];
                             if (coeff==0.0) continue;
-                            for (int p=0; p<P; ++p)
+                            for (int p=0; p<outer_heads; ++p)
                                 target[p]+=coeff*heads[p*TC+tc];
                         }
                     }
@@ -957,12 +994,14 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
                     basic_seeds.data(),basic_count,jacobian.data(),coords,0.0,derivatives.data(),coords);
         for (int p=0;p<P;++p) for (int j=0;j<nbh.count;++j) for (int a=0;a<3;++a) {
             const double d=derivatives[static_cast<size_t>(p)*coords+3*j+a];
+            const int column=p<outer_heads ? species_count+p
+                : TwoLayerGateReadoutLinearColumnOffset()+InnerReadoutScalarOffset()+p-outer_heads;
             if (need_forces) {
-                forces_cmpnts(atom,species_count+p,a)+=d;
-                forces_cmpnts(nbh.inds[j],species_count+p,a)-=d;
+                forces_cmpnts(atom,column,a)+=d;
+                forces_cmpnts(nbh.inds[j],column,a)-=d;
             }
             if (need_stress)
-                for (int b=0;b<3;++b) stress_cmpnts[species_count+p][a][b]-=d*nbh.vecs[j][b];
+                for (int b=0;b<3;++b) stress_cmpnts[column][a][b]-=d*nbh.vecs[j][b];
         }
     }
 }
@@ -1096,6 +1135,20 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
                 if(tangent) ex.joint_tangent_adjoints[node]+=factor*head;
             }
             ReverseJointReadout(i,tangent);
+        }
+        if (TwoLayerGateReadoutEnabled()) {
+            const int offset=TwoLayerGateReadoutCoeffOffset(), first=InnerReadoutScalarOffset();
+            if (first) {
+                out[offset]+=center*ene_weight[i];
+                center_grad+=TwoLayerGateReadoutCoeff(0)*ene_weight[i];
+            }
+            const double* physical=two_layer_gate_scalar_values_cache_.data()+static_cast<size_t>(i)*Q;
+            for (int q=0;q<Q;++q) {
+                const double feature=ene_weight[i]*physical[q]
+                    +(tangent ? ex.scalar_tangents[static_cast<size_t>(i)*Q+q] : 0.0);
+                out[offset+first+q]+=center*feature;
+                center_grad+=TwoLayerGateReadoutCoeff(first+q)*feature;
+            }
         }
         out[LinearCoeffOffset()+type]+=center_grad;
         ReverseAdaptiveRadialGraph(tangent);
@@ -1273,6 +1326,13 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
                     }
         }
         if (tangent) EdgeDirections(neighborhoods[i],i,frc_weights,str_weights,direction);
+        if (TwoLayerGateReadoutEnabled())
+            for (int q=0;q<Q;++q) {
+                const double seed=linear_coeffs[neighborhoods[i].my_type]
+                    *TwoLayerGateReadoutCoeff(q+InnerReadoutScalarOffset());
+                ex.scalar_adjoints[static_cast<size_t>(i)*Q+q]+=ene_weight[i]*seed;
+                if (tangent) ex.scalar_tangent_adjoints[static_cast<size_t>(i)*Q+q]+=seed;
+            }
         AccumulateTwoLayerGateScalarParamGradForScalarSeeds(neighborhoods[i],out,
             ex.scalar_adjoints.data()+static_cast<size_t>(i)*Q,tangent ? direction.data() : nullptr,i,
             tangent ? ex.gate_moment_tangents.data()+static_cast<size_t>(i)*alpha_moments_count : nullptr,
