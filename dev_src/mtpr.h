@@ -92,6 +92,7 @@ protected:
 	bool outer_k_rank1_direct_radial_ = false;
 	// Absent model metadata retains the legacy factorized/cross-channel model.
 		std::string outer_channel_mode_ = "cross-channel";
+		int outer_channel_block_size_ = 0;
 		std::string outer_radial_mode_ = "legacy-plus-mixer";
 		std::string readout_mode_ = "shared";
 		std::string adaptive_radial_projection_ = "full";
@@ -553,6 +554,7 @@ protected:
 	void TraceSHSiteDerivativeCacheOnce(int neighbor_count,
 										int sh_count,
 										int radial_func_count);
+	int GroupedOuterNode(int node,int group) const;
 	void ApplySHProductRowsForward();
 	void ApplySHProductRowsDers(const Neighborhood& nbh);
 	void AccumulateSHProductRowsForward(const std::vector<double>& input_values,
@@ -1159,7 +1161,7 @@ public:
 			int AdaptiveRadialLatentCount() const { return AdaptiveRadialSharedN() ? adaptive_radial_shared_n_rank_ : 1; }
 			const std::string& AdaptiveRadialActivation() const { return adaptive_radial_activation_; }
 			bool AdaptiveRadialTanh() const { return adaptive_radial_activation_ == "tanh"; }
-			bool AdaptiveRadialV17() const { return adaptive_radial_shared_n_rank_ != 1 || AdaptiveRadialTanh(); }
+			bool AdaptiveRadialV17() const { return (OuterUsesAdaptiveRadialCoefficients() && outer_channel_mode_=="grouped-cross") || adaptive_radial_shared_n_rank_ != 1 || AdaptiveRadialTanh(); }
 			bool AdaptiveRadialSharedN() const { return adaptive_radial_projection_ == "shared-n"; }
 			bool AdaptiveRadialSpeciesAmplitude() const { return adaptive_radial_amplitude_mode_ == "species"; }
 			bool AdaptiveRadialExtendedLayout() const { return AdaptiveRadialSharedN() || AdaptiveRadialSpeciesAmplitude() || AdaptiveRadialV17(); }

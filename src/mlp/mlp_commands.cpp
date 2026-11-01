@@ -71,6 +71,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 						"two-layer-gate-readout",
                         "inner-readout",
 						"outer-k-rank",
+                        "outer-channel-block-size",
 						"outer-k-rank1",
 						"superlinear-mode",
 						"two-layer-gate-k-rank",
@@ -730,7 +731,8 @@ bool Commands(const string& command, vector<string>& args, map<string, string>& 
 					"    --inner-readout: add constant + inner scalar linear energy readout. Default=off\n"
 					"    --two-layer-gate-readout: add a linear energy readout from the gate scalar basis. Default=off\n"
 					"    --outer-k-rank=<R>: use a q-total K=R outer graph; R=1 contracts directly into the radial rows, R>=2 learns R independent K contractions per l, and 0/default disables it.\n"
-					"    --outer-k-rank1: compatibility alias for --outer-k-rank=1.\n"
+					"    --outer-channel-block-size=<b>: grouped-cross outer topology, positive b dividing O.\n"
+                    "    --outer-k-rank1: compatibility alias for --outer-k-rank=1.\n"
 					"    --two-layer-gate-k-rank=<R>: independently contract K to R before q-total gate products/scalars; requires --outer-k-rank; 0/default disables it.\n"
 					"    --multi-layer-gate: enable release3 second gate on the first gate endpoint coefficients.\n"
 					"    --second-layer-gate-body-order=<int>: second gate scalar body-order cutoff. Default=--body-order\n"

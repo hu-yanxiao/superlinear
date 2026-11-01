@@ -980,6 +980,40 @@ public:
 			ERROR("Channelwise outer scalar count must equal O times the angular scalar count.");
 	}
 
+    void BindGroupedPlan(const SHGraphBuilder& local)
+    {
+        const int b=local.kmax_;
+        if (b<=0 || kmax_%b || local.lmax_!=lmax_ || !products_.empty()
+            || !scalars_.empty() || node_count_!=static_cast<int>(basic_.size()))
+            ERROR("Invalid grouped outer plan binding");
+        const int groups=kmax_/b;
+        CheckedGraphCount({static_cast<size_t>(groups),static_cast<size_t>(local.node_count_)}, "Grouped outer node count");
+        CheckedGraphCount({static_cast<size_t>(groups),local.products_.size()}, "Grouped outer product count");
+        CheckedGraphCount({static_cast<size_t>(groups),local.scalars_.size()}, "Grouped outer scalar count");
+        body_lmax_=local.body_lmax_;
+        std::map<std::array<int,3>,int> basics;
+        for (int i=0;i<static_cast<int>(basic_.size());++i) {
+            const BasicIndex& v=basic_[i];basics[{{v.k,v.l,v.m}}]=i;
+        }
+        for (int g=0;g<groups;++g) {
+            std::vector<int> nodes(local.node_count_,-1);
+            for (int i=0;i<static_cast<int>(local.basic_.size());++i) {
+                const BasicIndex& v=local.basic_[i];nodes[i]=basics.at({{g*b+v.k,v.l,v.m}});
+            }
+            for (int i=static_cast<int>(local.basic_.size());i<local.node_count_;++i) nodes[i]=AddNode();
+            for (const Product& v:local.products_) products_.push_back({nodes[v.left],nodes[v.right],nodes[v.target],v.coeff});
+            for (size_t i=0;i<local.scalars_.size();++i) {
+                scalars_.push_back(nodes[local.scalars_[i]]);
+                ScalarSpec spec=local.scalar_infos_[i];
+                int* ids[]={&spec.q0,&spec.q1,&spec.q2,&spec.q3,&spec.q4};
+                for (int* q:ids) if (*q>=0) {
+                    const QIndex& v=local.q_[*q];*q=(lmax_-v.l)*kmax_+(kmax_-1-(g*b+v.k));
+                }
+                scalar_infos_.push_back(spec);
+            }
+        }
+    }
+
 	std::vector<int> L1SourceMomentBases() const
 	{
 		std::vector<int> bases;
@@ -1237,7 +1271,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--adaptive-radial-shared-n-rank must be in [1,radial-basis-size]; full projection requires rank 1.");
 	if (adaptive_activation != "none" && adaptive_activation != "tanh")
 		ERROR("--adaptive-radial-activation must be none or tanh.");
-	const bool adaptive_v17 = adaptive_shared_n_rank != 1 || adaptive_activation != "none";
+	const int outer_channel_block_size = StrictNonnegativeIntOpt(opts, "outer-channel-block-size", 0);
+	const bool grouped_outer = outer_channel_block_size > 0;
+	const bool adaptive_v17 = (grouped_outer && radial_coefficient_gate) || adaptive_shared_n_rank != 1 || adaptive_activation != "none";
 	const bool adaptive_extended = adaptive_projection != "full" || adaptive_amplitude_mode != "shared" || adaptive_v17;
 	if ((HasOpt(opts,"adaptive-radial-projection") || HasOpt(opts,"adaptive-radial-amplitude-mode")
 	    || HasOpt(opts,"adaptive-radial-shared-n-rank") || HasOpt(opts,"adaptive-radial-activation")) && !radial_coefficient_gate)
@@ -1253,9 +1289,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const SHFactorPruning factor_pruning = ParseFactorPruning(opts,
 		"sh-factor-pruning", (pure_w_channelwise || radial_coefficient_gate)
 			? SHFactorPruning::SameK : SHFactorPruning::QTotal);
-	const bool outer_same_channel_mode =
-		pure_w_channelwise
-		|| factor_pruning == SHFactorPruning::SameK;
+	const bool outer_same_channel_mode = !grouped_outer && (pure_w_channelwise || factor_pruning == SHFactorPruning::SameK);
 	const auto outer_k_rank1_alias_it = opts.find("outer-k-rank1");
 	const bool outer_k_rank1_alias = outer_k_rank1_alias_it != opts.end();
 	if (outer_k_rank1_alias && outer_k_rank1_alias_it->second != "true")
@@ -1347,7 +1381,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--superlinear-mode=radial-coefficient-gate supports --sh-factor-pruning=same-k or q-total.");
 	if (outer_k_rank < 0
 	    || ((!pure_w_channelwise && !radial_coefficient_gate)
-	        && outer_k_rank > kmax))
+	        && !grouped_outer && outer_k_rank > kmax))
 		ERROR("--outer-k-rank must be in [1, --k-max] when enabled.");
 	if (radial_coefficient_gate && outer_k_rank > kmax)
 		ERROR("--superlinear-mode=radial-coefficient-gate requires O <= raw K.");
@@ -1527,12 +1561,18 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		if (gate_rank_graph.scalars_.empty())
 			ERROR("--two-layer-gate-k-rank generated no gate scalar basis functions.");
 	}
+	if (HasOpt(opts,"outer-channel-block-size") && (!grouped_outer || !outer_k_rank_enabled || outer_k_rank % outer_channel_block_size || pure_w_channelwise))
+		ERROR("--outer-channel-block-size must be positive, divide O, and requires ranked non-pure outer mode");
 	SHGraphBuilder outer_rank_graph(
 		lmax, std::max(1, outer_k_rank), factor_pruning, &cg_cache);
 	if (outer_k_rank_enabled) {
 		outer_rank_graph.Build();
 		outer_rank_graph.AddAllBasics();
-		if (outer_same_channel_mode) {
+		if (grouped_outer) {
+			SHGraphBuilder local(lmax,outer_channel_block_size,SHFactorPruning::QTotal,&cg_cache);
+			local.Build();local.AddAllBasics();local.AddScalars(body_order,body_lmax);
+			outer_rank_graph.BindGroupedPlan(local);
+		} else if (outer_same_channel_mode) {
 			SHGraphBuilder angular(lmax, 1, SHFactorPruning::SameK, &cg_cache);
 			angular.Build();
 			angular.AddAllBasics();
@@ -1572,8 +1612,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		    || (two_layer_gate_k_rank_enabled
 		        && two_layer_gate_factor_pruning == SHFactorPruning::SameK));
 	ofs << "version = "
-	    << (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))))) << "\n";
+	    << (grouped_outer ? "1.9.0" : (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
 	ofs << "L = " << lmax << "\n";
@@ -1696,9 +1736,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		// prototype, whose reader does not know the generic rank field.
 		if (outer_k_rank != 1)
 			ofs << "outer_k_rank = " << outer_k_rank << "\n";
-		if (legacy_v18) {
+		if (legacy_v18 || (grouped_outer && !radial_coefficient_gate)) {
 			ofs << "outer_channel_mode = "
-			    << (outer_same_channel_mode ? "same-channel" : "cross-channel") << "\n";
+			    << (grouped_outer ? "grouped-cross" : (outer_same_channel_mode ? "same-channel" : "cross-channel")) << "\n";
+			if (grouped_outer) ofs << "outer_channel_block_size = " << outer_channel_block_size << "\n";
 			ofs << "outer_radial_mode = legacy-plus-mixer\n";
 			ofs << "readout_mode = " << readout_mode << "\n";
 		}
@@ -1708,9 +1749,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		}
 			if (radial_coefficient_gate) {
 				ofs << "outer_channel_mode = "
-				    << (outer_same_channel_mode ? "same-channel" : "cross-channel")
+				    << (grouped_outer ? "grouped-cross" : (outer_same_channel_mode ? "same-channel" : "cross-channel"))
 				    << "\n";
-				ofs << "outer_radial_mode = adaptive-coefficients\n";
+				if (grouped_outer) ofs << "outer_channel_block_size = " << outer_channel_block_size << "\n";
+			ofs << "outer_radial_mode = adaptive-coefficients\n";
 				if (readout_mode == "species" || tensor_message_lmax > 0 || adaptive_extended || joint_readout)
 					ofs << "readout_mode = " << readout_mode << "\n";
 				if (adaptive_extended || joint_readout) {

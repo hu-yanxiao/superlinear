@@ -2001,9 +2001,49 @@ void MLMTPR::TraceSHSiteDerivativeCacheOnce(int neighbor_count,
 	sh_site_der_cache_trace_printed_ = true;
 }
 
+// Map the one serialized template onto a group without duplicating its terms.
+int MLMTPR::GroupedOuterNode(int node,int group) const
+{
+    const int b=outer_channel_block_size_, groups=outer_k_rank_/b;
+    const int begin=outer_k_rank1_basic_begin_, end=begin+outer_k_rank1_basic_count_;
+    if(node<end) {
+        int at=begin;
+        for(int l=sh_l_max_;l>=0;--l) {
+            const int width=2*l+1;
+            if(node<at+outer_k_rank_*width) {
+                const int lane=(node-at)/width, m=(node-at)%width;
+                return at+(lane-group*b)*width+m;
+            }
+            at+=outer_k_rank_*width;
+        }
+        ERROR("Grouped primitive mapping is invalid");
+    }
+    return node+group*((alpha_moments_count-end)/groups);
+}
+
 void MLMTPR::ApplySHProductRowsForward()
 {
 	TraceSHProductProgramOnce();
+    if(outer_channel_mode_=="grouped-cross") {
+        const int groups=outer_k_rank_/outer_channel_block_size_;
+        const int end=outer_k_rank1_basic_begin_+outer_k_rank1_basic_count_;
+        const int first_end=end+(alpha_moments_count-end)/groups;
+        for(const SHProductRow& row:sh_product_rows_) {
+            if(row.target>=first_end) continue;
+            const int count=row.target<end?1:groups;
+            for(int g=0;g<count;++g) {
+                double value=0;
+                for(int t=row.term_begin;t<row.term_begin+row.term_count;++t) {
+                    const auto& v=sh_product_row_terms_[t];
+                    const int a=g?GroupedOuterNode(v.left,g):v.left,c=g?GroupedOuterNode(v.right,g):v.right;
+                    value+=v.coeff*moment_vals[a]*moment_vals[c];
+                }
+                moment_vals[g?GroupedOuterNode(row.target,g):row.target]+=value;
+            }
+        }
+        return;
+    }
+
 	for (const SHProductRow& row : sh_product_rows_) {
 		double value = 0.0;
 		const int end = row.term_begin + row.term_count;
@@ -2077,6 +2117,25 @@ void MLMTPR::AccumulateSHProductRowsForward(const std::vector<double>& input_val
 
 void MLMTPR::BackpropSHProductRows(std::vector<double>& adjoints) const
 {
+    if(outer_channel_mode_=="grouped-cross") {
+        const int groups=outer_k_rank_/outer_channel_block_size_;
+        const int end=outer_k_rank1_basic_begin_+outer_k_rank1_basic_count_;
+        const int first_end=end+(alpha_moments_count-end)/groups;
+        for(int r=static_cast<int>(sh_product_rows_.size())-1;r>=0;--r) {
+            const auto& row=sh_product_rows_[r];if(row.target>=first_end) continue;
+            const int count=row.target<end?1:groups;
+            for(int g=count-1;g>=0;--g) {
+                const double adj=adjoints[g?GroupedOuterNode(row.target,g):row.target];
+                for(int t=row.term_begin+row.term_count-1;t>=row.term_begin;--t) {
+                    const auto& v=sh_product_row_terms_[t];
+                    const int a=g?GroupedOuterNode(v.left,g):v.left,c=g?GroupedOuterNode(v.right,g):v.right;
+                    adjoints[a]+=v.coeff*moment_vals[c]*adj;adjoints[c]+=v.coeff*moment_vals[a]*adj;
+                }
+            }
+        }
+        return;
+    }
+
 	for (int r = static_cast<int>(sh_product_rows_.size()) - 1; r >= 0; --r) {
 		const SHProductRow& row = sh_product_rows_[r];
 		const double adj_target = adjoints[row.target];

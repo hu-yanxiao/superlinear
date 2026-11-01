@@ -2312,7 +2312,7 @@ void MLMTPR::AbsorbOuterKRank1WeightsIntoRadialCoeffs()
 
 void MLMTPR::ValidateOuterModeConfiguration() const
 {
-	if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
+	if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel" && outer_channel_mode_ != "grouped-cross")
 		ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
 	if (outer_radial_mode_ != "legacy-plus-mixer"
 	    && outer_radial_mode_ != "pure-matrix"
@@ -2320,6 +2320,38 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
 	if (readout_mode_ != "shared" && readout_mode_ != "species")
 		ERROR("SUS2-SH readout_mode should be shared or species");
+    if (outer_channel_mode_=="grouped-cross") {
+        if (!OuterKRankEnabled() || outer_channel_block_size_<=0 || OuterKRank()%outer_channel_block_size_)
+            ERROR("Grouped outer block must be positive and divide O");
+        std::vector<int> groups(alpha_moments_count,-1);
+        for(int o=0;o<OuterKRank();++o) for(int l=0;l<=sh_l_max_;++l) for(int m=-l;m<=l;++m)
+            groups[OuterKRank1OuterBasicIndex(o,l,m)]=o/outer_channel_block_size_;
+        for(size_t j=outer_k_rank1_product_begin_;j<sh_products_.size();++j) {
+            const auto& v=sh_products_[j];
+            if(groups[v.left]<0 || groups[v.left]!=groups[v.right] || (groups[v.target]>=0 && groups[v.target]!=groups[v.left]))
+                ERROR("Grouped outer product crosses groups or references foreign nodes");
+            groups[v.target]=groups[v.left];
+        }
+        for(int i=0;i<alpha_scalar_moments;++i) if(groups[alpha_moment_mapping[i]]<0)
+            ERROR("Grouped readout references foreign scalar");
+        const int ng=OuterKRank()/outer_channel_block_size_;
+        const int np=static_cast<int>(sh_products_.size())-outer_k_rank1_product_begin_;
+        const int nn=alpha_moments_count-outer_k_rank1_basic_begin_-outer_k_rank1_basic_count_;
+        if(np%ng || nn%ng || alpha_scalar_moments%ng) ERROR("Grouped topology sizes must match uniform groups");
+        for(int g=1;g<ng;++g) {
+            for(int j=0;j<np/ng;++j) {
+                const auto& a=sh_products_[outer_k_rank1_product_begin_+j];
+                const auto& b=sh_products_[outer_k_rank1_product_begin_+g*(np/ng)+j];
+                if(b.left!=GroupedOuterNode(a.left,g) || b.right!=GroupedOuterNode(a.right,g)
+                    || b.target!=GroupedOuterNode(a.target,g) || b.coeff!=a.coeff)
+                    ERROR("Grouped topology is not a shared group-major template");
+            }
+            for(int j=0;j<alpha_scalar_moments/ng;++j)
+                if(alpha_moment_mapping[g*(alpha_scalar_moments/ng)+j]!=GroupedOuterNode(alpha_moment_mapping[j],g))
+                    ERROR("Grouped readout mapping must be group-major shared template");
+        }
+    } else if (outer_channel_block_size_!=0) ERROR("Block metadata requires grouped-cross mode");
+
 	const bool pure = outer_radial_mode_ == "pure-matrix";
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
 	if (adaptive_radial_projection_ != "full" && adaptive_radial_projection_ != "shared-n")
@@ -2491,6 +2523,7 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 			if (!std::isfinite(scale) || scale <= 0.0)
 				ERROR("SUS2-SH adaptive radial weight optimizer-scale metadata must be positive");
 	}
+
 }
 
 int MLMTPR::LinearCoeffCount() const
@@ -4519,6 +4552,7 @@ void MLMTPR::Load(const string& filename)
 	has_radial_coeffs = false;
 	has_linear_coeffs = false;
 	outer_channel_mode_ = "cross-channel";
+	outer_channel_block_size_ = 0;
 	outer_radial_mode_ = "legacy-plus-mixer";
 	readout_mode_ = "shared";
 	adaptive_radial_projection_ = "full";
@@ -4560,8 +4594,15 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
-	const bool legacy_v18 = model_file_version == "1.8.0";
-	const bool adaptive_v17 = model_file_version == "1.7.0";
+	const bool grouped_v19 = model_file_version == "1.9.0";
+    bool grouped_adaptive=false;
+    if (grouped_v19) {
+        const std::streampos here=ifs.tellg();std::string line;
+        while(std::getline(ifs,line)) if(line.find("adaptive_radial_projection")!=std::string::npos) grouped_adaptive=true;
+        ifs.clear();ifs.seekg(here);
+    }
+    const bool legacy_v18 = model_file_version == "1.8.0" || (grouped_v19 && !grouped_adaptive);
+	const bool adaptive_v17 = model_file_version == "1.7.0" || (grouped_v19 && grouped_adaptive);
 	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;
 	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
 	bool readout_mode_seen = false;
@@ -4581,11 +4622,14 @@ void MLMTPR::Load(const string& filename)
 	std::map<std::string,int> adaptive_fields;
 	std::map<std::string,int> joint_fields;
 	std::string metadata_line;
-	int legacy_outer_channel_fields = 0, legacy_outer_radial_fields = 0;
+	int legacy_outer_channel_fields = 0, legacy_outer_radial_fields = 0, grouped_block_fields=0;
 	while (std::getline(ifs, metadata_line)) {
 		const size_t equals = metadata_line.find('=');
 		if (equals == std::string::npos) continue;
 		const std::string key = TrimCopy(metadata_line.substr(0, equals));
+        if (key=="outer_channel_block_size") {
+            if(!grouped_v19 || ++grouped_block_fields!=1) ERROR("Grouped block metadata requires unique version 1.9.0 field");
+        }
 		if (legacy_v18) {
 			if (key == "outer_channel_mode") ++legacy_outer_channel_fields;
 			if (key == "outer_radial_mode") ++legacy_outer_radial_fields;
@@ -4621,6 +4665,7 @@ void MLMTPR::Load(const string& filename)
 		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
 		else ERROR("SUS2-SH model contains an unknown tensor message field");
 	}
+	if (grouped_v19 && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
 	if (legacy_v18 && (readout_fields != 1 || legacy_outer_channel_fields != 1 || legacy_outer_radial_fields != 1))
 		ERROR("Version 1.8.0 requires unique readout and outer mode fields");
 	if (model_file_version == "1.4.0"
@@ -4690,6 +4735,7 @@ void MLMTPR::Load(const string& filename)
 			outer_k_rank_ = 0;
 			outer_k_rank1_direct_radial_ = false;
 			outer_channel_mode_ = "cross-channel";
+	outer_channel_block_size_ = 0;
 			outer_radial_mode_ = "legacy-plus-mixer";
 			outer_k_rank1_basic_begin_ = 0;
 		outer_k_rank1_basic_count_ = 0;
@@ -5365,7 +5411,11 @@ void MLMTPR::Load(const string& filename)
 			ifs >> outer_channel_mode_;
 			ifs >> tmpstr;
 		}
-		if (tmpstr == "outer_radial_mode") {
+		if (tmpstr == "outer_channel_block_size") {
+            if (!grouped_v19) ERROR("Grouped metadata requires version 1.9.0");
+            ifs.ignore(2);ifs >> outer_channel_block_size_;ifs >> tmpstr;
+        }
+        if (tmpstr == "outer_radial_mode") {
 			ifs.ignore(2);
 			ifs >> outer_radial_mode_;
 			ifs >> tmpstr;
@@ -5436,7 +5486,7 @@ void MLMTPR::Load(const string& filename)
 			}
 			ifs >> tmpstr;
 		}
-		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel")
+		if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel" && outer_channel_mode_ != "grouped-cross")
 			ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
 		if (outer_radial_mode_ != "legacy-plus-mixer"
 		    && outer_radial_mode_ != "pure-matrix"
@@ -5450,7 +5500,7 @@ void MLMTPR::Load(const string& filename)
 		if (outer_k_rank_ <= 0
 		    || (!OuterUsesPureRadialMatrix()
 		        && !OuterUsesAdaptiveRadialCoefficients()
-		        && outer_k_rank_ > sh_k_max_))
+		        && outer_channel_mode_!="grouped-cross" && outer_k_rank_ > sh_k_max_))
 			ERROR("SUS2-SH outer K-rank must be positive; only same-channel radial modes allow rank above sh_k_max");
 		if (readout_mode_ == "species" && !OuterUsesAdaptiveRadialCoefficients() && !legacy_v18)
 			ERROR("Legacy species readout requires model version 1.8.0");
@@ -5518,6 +5568,9 @@ void MLMTPR::Load(const string& filename)
 		}
 		if (tmpstr != "outer_channel_mode") ERROR("Legacy readout metadata order is invalid");
 		ifs.ignore(2); ifs >> outer_channel_mode_; ifs >> tmpstr;
+        if (tmpstr=="outer_channel_block_size") {
+            ifs.ignore(2);ifs >> outer_channel_block_size_;ifs >> tmpstr;
+        }
 		if (tmpstr != "outer_radial_mode") ERROR("Legacy radial metadata order is invalid");
 		ifs.ignore(2); ifs >> outer_radial_mode_; ifs >> tmpstr;
 		if (!readout_first) {
@@ -6940,7 +6993,7 @@ void MLMTPR::CalcEij(Configuration& cfg, ofstream& ofs)
 void MLMTPR::Save(const string& filename)
 {
 	sus2::ValidateModelOutputPath(filename);
-	if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
+	if (outer_channel_mode_=="grouped-cross" || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
 		ValidateOuterModeConfiguration();
 		ValidateSHProductGraphDefinitions();
 	}
@@ -6956,10 +7009,10 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
-	         && (UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
+	    << (outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
+	         && (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
 	        (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
-	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0"))))))) << '\n';
+	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << '\n';
 	ofs << "potential_name = " << pot_desc << endl;
 	if(scaling != 1.0)
 		ofs << "scaling = " << scaling << endl;
@@ -7116,7 +7169,7 @@ void MLMTPR::Save(const string& filename)
 	}
 	if (is_sh_potential_ && OuterKRankEnabled()) {
 		ValidateOuterModeConfiguration();
-		if (outer_k_rank_ > sh_k_max_ && !OuterUsesPureRadialMatrix())
+		if (outer_k_rank_ > sh_k_max_ && !OuterUsesPureRadialMatrix() && outer_channel_mode_!="grouped-cross")
 			ERROR("SUS2-SH outer K-rank exceeds sh_k_max");
 		if (outer_k_rank1_basic_count_
 		    != outer_k_rank_ * (sh_l_max_ + 1) * (sh_l_max_ + 1))
@@ -7127,10 +7180,11 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
-			if (OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
+			if (outer_channel_mode_=="grouped-cross" || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
 			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+            if (outer_channel_mode_=="grouped-cross") ofs << "outer_channel_block_size = " << outer_channel_block_size_ << '\n';
 				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-				if (UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
+				if (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "readout_mode = " << readout_mode_ << '\n';
 				if (AdaptiveRadialExtendedLayout() || JointReadoutEnabled()) {
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
@@ -7178,6 +7232,7 @@ void MLMTPR::Save(const string& filename)
 	if (is_sh_potential_ && UsesSpeciesReadout() && !OuterKRankEnabled()) {
 		ofs << "readout_mode = " << readout_mode_ << '\n';
 		ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
+            if (outer_channel_mode_=="grouped-cross") ofs << "outer_channel_block_size = " << outer_channel_block_size_ << '\n';
 		ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
 	}
 	if (is_sh_potential_ && TwoLayerGateKRankEnabled()) {
