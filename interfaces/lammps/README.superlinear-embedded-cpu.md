@@ -209,6 +209,16 @@ and all-rank table counters; leave it at its default zero for fair speed tests.
 
 - Native-exported Static, Legacy/Effect, Pure-W and Adaptive models, including
   supported inner/outer cross or diagonal graphs and species energy readout.
+  Version 1.9 `outer_channel_mode = grouped-cross` additionally admits equal
+  outer-channel blocks (`outer_channel_block_size` must divide O). The model
+  selects this automatically; LAMMPS input lines do not need another option.
+  Blocks retain independent readout weights and the full K-to-O projection.
+  The embedded CPU graph executor reuses one block topology across contiguous
+  block lanes, for both forward and force reverse passes. Direct and table
+  radial modes use the same grouped graph. `SUS2_SL_GROUPED_GRAPH=0` selects
+  the expanded graph for diagnostics; it does not change the model. Widths
+  are not limited to powers of two. Adaptive retains its existing O<=K radial
+  layout constraint. The constant and elemental scale are applied once.
   Persisted native legality rules still apply, especially for Pure-W.
 - `L`, `K`, `LK`, `pair` radial-coordinate sharing; supported separate inner
   coefficients/warps, Adaptive projections, joint/tensor paths and ZBL.

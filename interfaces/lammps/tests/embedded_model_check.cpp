@@ -43,6 +43,12 @@ void self_test(const std::string &path) {
   reject(replace(s,"version","9.9.0"),"unknown version");
   reject(s+"\ntwo_layer_residual_enabled = true\n","old residual");
   reject(s+"\nmulti_layer_gate_enabled = true\n","old multilayer");
+  if(original.text("outer_channel_mode")=="grouped-cross") {
+    reject(replace(s,"outer_channel_block_size","0"),"zero grouped width");
+    reject(replace(s,"outer_channel_block_size",std::to_string(original.integer("outer_k_rank")+1)),"nondividing grouped width");
+    reject(replace(s,"version","1.8.0"),"grouped metadata in old version");
+    reject(replace(s,"outer_channel_mode","cross-channel"),"orphan grouped width");
+  }
   if(original.has("adaptive_radial_weights")) {
     reject(replace(s,"adaptive_radial_weights","{nan}"),"nonfinite adaptive weights");
     reject(replace(s,"adaptive_radial_projection","unknown"),"unknown adaptive projection");

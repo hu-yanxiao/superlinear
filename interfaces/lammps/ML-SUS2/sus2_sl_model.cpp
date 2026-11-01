@@ -237,7 +237,7 @@ void Model::load(const std::string &path) {
 void Model::validate() const {
   validate_index_capacity(*this);
   const auto ver=text("version");
-  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0","unsupported version "+ver);
+  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0" || ver=="1.9.0","unsupported version "+ver);
   const std::set<std::string> adaptive_keys={"adaptive_radial_projection","adaptive_radial_amplitude_mode","adaptive_radial_shared_n_rank","adaptive_radial_activation","adaptive_radial_amplitude_count","adaptive_radial_amplitudes","adaptive_radial_weight_count","adaptive_radial_weights","adaptive_radial_amplitude_optimizer_scales","adaptive_radial_weight_optimizer_scales"};
   const std::set<std::string> tensor_keys={"tensor_message_lmax","tensor_message_coeff_count","tensor_message_coeffs","tensor_message_optimizer_scales"};
   const std::set<std::string> joint_keys={"joint_readout_enabled","joint_readout_l_max","joint_readout_body_order","joint_readout_body_l_max","joint_readout_alpha_moments_count","joint_readout_alpha_index_basic_count","joint_readout_alpha_index_basic","joint_readout_sh_product_count","joint_readout_sh_products","joint_readout_scalar_count","joint_readout_scalar_mapping","joint_readout_scalar_info_count","joint_readout_scalar_info","joint_readout_coeff_count","joint_readout_coeffs","joint_readout_optimizer_scales"};
@@ -247,10 +247,11 @@ void Model::validate() const {
     if(f.first.compare(0,14,"joint_readout_")==0) require(joint_keys.count(f.first),"unknown joint metadata "+f.first);
     if(ver=="1.8.0") require(!adaptive_keys.count(f.first) && !tensor_keys.count(f.first) && !joint_keys.count(f.first),"version 1.8.0 is reserved for Legacy scalar models");
   }
-  if(ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0") {
+  const bool adaptive_schema=ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || (ver=="1.9.0" && text("outer_radial_mode")=="adaptive-coefficients");
+  if(adaptive_schema) {
     for(const char *key:{"readout_mode","tensor_message_lmax","adaptive_radial_projection","adaptive_radial_amplitude_mode","adaptive_radial_amplitude_count","adaptive_radial_amplitudes","adaptive_radial_weight_count","adaptive_radial_weights"}) require(has(key),"missing required field "+std::string(key));
   }
-  if(ver=="1.7.0") for(const char *key:{"adaptive_radial_shared_n_rank","adaptive_radial_activation","joint_readout_enabled"}) require(has(key),"missing required v1.7 field "+std::string(key));
+  if(ver=="1.7.0" || (ver=="1.9.0" && adaptive_schema)) for(const char *key:{"adaptive_radial_shared_n_rank","adaptive_radial_activation","joint_readout_enabled"}) require(has(key),"missing required Adaptive field "+std::string(key));
   require(text("potential_tag")=="SUS2-SH","requires a SUS2-SH spherical harmonic model");
   require(lmax>=0 && lmax<=4 && kmax>0 && integer("L")==lmax && static_cast<long long>(kmax)*(lmax+1)==radial_funcs,"inconsistent L/K dimensions");
   require(integer("sh_body_order")>=2 && integer("sh_body_order")<=6 && text("sh_parity")=="even","unsupported body order or parity");
@@ -279,7 +280,15 @@ void Model::validate() const {
     require(text("two_layer_gate_radial_mixing")=="full","unknown two_layer_gate_radial_mixing");
     require(text("two_layer_gate_radial_mixing_layout")=="direct-k","unsupported two_layer_gate_radial_mixing_layout");
   }
-  const auto channel=text("outer_channel_mode","cross-channel"); require(channel=="cross-channel" || channel=="same-channel","invalid outer_channel_mode");
+  const auto channel=text("outer_channel_mode","cross-channel"); require(channel=="cross-channel" || channel=="same-channel" || channel=="grouped-cross","invalid outer_channel_mode");
+  if(channel=="grouped-cross") {
+    require(ver=="1.9.0" && boolean("outer_k_rank1_enabled"),"grouped-cross requires version 1.9.0 and ranked outer primitives");
+    const int width=integer("outer_channel_block_size"), rank=integer("outer_k_rank",1);
+    require(width>0 && rank>0 && rank%width==0,"outer_channel_block_size must be positive and divide outer_k_rank");
+  } else {
+    require(!has("outer_channel_block_size"),"outer_channel_block_size requires grouped-cross");
+    require(ver!="1.9.0","version 1.9.0 requires grouped-cross");
+  }
   const auto readout=text("readout_mode","shared"); require(readout=="shared" || readout=="species","invalid readout_mode");
   count("moment_coeffs",static_cast<size_t>(scalar_count)*(readout=="species" ? species_count : 1));
   if(has("sh_scalar_info")) {
@@ -289,11 +298,25 @@ void Model::validate() const {
   }
   if(boolean("outer_k_rank1_enabled")) {
     const int ro=integer("outer_k_rank",1), begin=integer("outer_k_rank1_basic_begin"), n=integer("outer_k_rank1_basic_count"), p=integer("outer_k_rank1_product_begin");
-    require(ro>0 && (outer!="legacy-plus-mixer" || ro<=kmax),"invalid outer rank");
+    require(ro>0 && (outer!="legacy-plus-mixer" || channel=="grouped-cross" || ro<=kmax),"invalid outer rank");
     require(n==static_cast<long long>(ro)*(lmax+1)*(lmax+1) && begin>=static_cast<int>(basic.size()) && static_cast<long long>(begin)+n<=moments && p>=0 && p<=static_cast<int>(products.size()),"invalid outer rank graph segment");
     const size_t nw=numbers("outer_k_rank1_weights").size();
     require(nw==0 || nw==static_cast<size_t>(lmax+1)*ro*kmax,"invalid outer contraction weights");
   } else require(outer=="legacy-plus-mixer","outer radial mode requires ranked graph");
+  if(channel=="grouped-cross") {
+    const int rank=integer("outer_k_rank",1), width=integer("outer_channel_block_size"), H=(lmax+1)*(lmax+1);
+    const int begin=integer("outer_k_rank1_basic_begin"), first=integer("outer_k_rank1_product_begin"), end=begin+rank*H;
+    std::vector<int> group(moments,-1);
+    for(int l=0;l<=lmax;++l) for(int o=0;o<rank;++o) for(int m=-l;m<=l;++m)
+      group[begin+rank*(H-(l+1)*(l+1))+(rank-1-o)*(2*l+1)+m+l]=o/width;
+    for(std::size_t q=first;q<products.size();++q) {
+      const auto& p=products[q];
+      require(p.out>=end && group[p.a]>=0 && group[p.a]==group[p.b],"grouped outer product has undefined or cross-block inputs");
+      require(group[p.out]<0 || group[p.out]==group[p.a],"grouped outer output mixes different blocks");
+      group[p.out]=group[p.a];
+    }
+    for(int node:scalar_mapping) require(group[node]>=0,"grouped outer scalar is outside the outer graph");
+  }
   if(integer("two_layer_gate_k_rank")>0) {
     const int rg=integer("two_layer_gate_k_rank"), begin=integer("two_layer_gate_k_rank_basic_begin"), n=integer("two_layer_gate_k_rank_basic_count"), p=integer("two_layer_gate_k_rank_product_begin"), end=integer("two_layer_gate_k_rank_product_end");
     require(rg<=kmax && n==static_cast<long long>(rg)*(lmax+1)*(lmax+1) && begin>=static_cast<int>(basic.size()) && static_cast<long long>(begin)+n<=moments && p>=0 && end>=p && end<=static_cast<int>(products.size()),"invalid gate rank graph segment");
@@ -320,6 +343,7 @@ void Model::validate() const {
     const std::string proj=text("adaptive_radial_projection","full"), amp=text("adaptive_radial_amplitude_mode","shared"), act=text("adaptive_radial_activation","none");
     require(proj=="full" || proj=="shared-n","invalid adaptive projection"); require(amp=="shared" || amp=="species","invalid adaptive amplitude mode"); require(act=="none" || act=="tanh","invalid adaptive activation");
     const int rank=integer("adaptive_radial_shared_n_rank",1), ro=integer("outer_k_rank",1);
+    if(channel=="grouped-cross") require(ro<=kmax,"Adaptive grouped outer rank exceeds the raw radial channel layout");
     require(rank>0 && (proj=="shared-n" || rank==1) && ro>0,"invalid adaptive rank");
     const size_t rows=static_cast<size_t>(lmax+1)*ro*radial_size, latent=proj=="shared-n" ? rank : 1;
     count("adaptive_radial_amplitudes",rows*latent*(amp=="species" ? species_count : 1));

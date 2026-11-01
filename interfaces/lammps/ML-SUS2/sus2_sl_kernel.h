@@ -24,6 +24,7 @@ class Kernel {
   int species_count() const { return model_.species_count; }
   const Model& model() const { return model_; }
   int communication_width() const;
+  int grouped_graph_groups() const { return grouped_groups_; }
   double cutoff() const { return model_.cutoff(); }
   RadialTableStats radial_stats() const { return radial_.stats(); }
   double memory_usage() const;
@@ -69,6 +70,13 @@ class Kernel {
   std::vector<int> basic_mu_,basic_sh_;
   struct Contraction { int src,dst; double coefficient; };
   std::vector<Contraction> gate_contraction_,outer_contraction_;
+  // One block's topology, with groups contiguous in a reusable scratch tile.
+  // No inter-block reduction is reordered; each block follows its native rows.
+  int grouped_groups_=0;
+  std::vector<Product> grouped_products_;
+  std::vector<int> grouped_nodes_;
+  mutable std::vector<double> grouped_values_,grouped_adj_;
+  void prepare_grouped_graph();
   // Geometry/interpolation metadata only. Rebuilt for the current directed
   // edge list on every begin(); no atom identity or periodic image survives.
   struct EdgeMetadata { double distance=0; int pair=0; RadialInterpolation interpolation; };

@@ -71,6 +71,43 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  for(const auto&b:m.basic){basic_mu_.push_back(b[0]*(m.lmax+1)+b[1]);basic_sh_.push_back(h(b[1],b[2]));}
  for(int gate=0;gate<2;++gate){const int rank=gate?gate_rank_:outer_rank_,begin=gate?gate_begin_:outer_begin_,H=(m.lmax+1)*(m.lmax+1);const auto&w=gate?gate_rank_weights_:outer_rank_weights_;auto&out=gate?gate_contraction_:outer_contraction_;
   for(int a=0;a<rank;++a)for(std::size_t b=0;b<m.basic.size();++b){int k=m.basic[b][0],l=m.basic[b][1],mm=m.basic[b][2];out.push_back({int(b),begin+rank*(H-(l+1)*(l+1))+(rank-1-a)*(2*l+1)+mm+l,at(w,(l*rank+a)*m.kmax+k,1)});}}
+ prepare_grouped_graph();
+}
+void Kernel::prepare_grouped_graph() {
+ if(model_.text("outer_channel_mode")!="grouped-cross")return;
+ const char* option=std::getenv("SUS2_SL_GROUPED_GRAPH");
+ if(option&&std::string(option)!="0"&&std::string(option)!="1")
+  throw std::runtime_error("SUS2_SL_GROUPED_GRAPH must be 0 or 1");
+ if(option&&std::string(option)=="0")return;
+ const int width=model_.integer("outer_channel_block_size"), G=outer_rank_/width;
+ if(G<=1)return; // The expanded graph already is a single compact template.
+ const int H=(model_.lmax+1)*(model_.lmax+1), end=outer_begin_+outer_rank_*H;
+ std::vector<int> group(model_.moments,-1),local(model_.moments,-1);
+ std::vector<std::vector<int>> nodes(G);
+ std::vector<std::vector<Product>> products(G);
+ for(int l=model_.lmax;l>=0;--l)for(int o=outer_rank_-1;o>=0;--o)for(int m=-l;m<=l;++m){
+  const int node=outer_begin_+outer_rank_*(H-(l+1)*(l+1))+(outer_rank_-1-o)*(2*l+1)+m+l,g=o/width;
+  group[node]=g;local[node]=nodes[g].size();nodes[g].push_back(node);
+ }
+ for(std::size_t q=outer_product_;q<model_.products.size();++q){
+  const auto&p=model_.products[q];const int g=group[p.a];
+  if(g<0||g!=group[p.b]||p.out<end)throw std::runtime_error("Invalid grouped graph dependency");
+  if(group[p.out]<0){group[p.out]=g;local[p.out]=nodes[g].size();nodes[g].push_back(p.out);}
+  if(group[p.out]!=g)throw std::runtime_error("Cross-group product output");
+  products[g].push_back({local[p.a],local[p.b],local[p.out],p.c});
+ }
+ for(int g=1;g<G;++g){
+  if(nodes[g].size()!=nodes[0].size()||products[g].size()!=products[0].size())
+   throw std::runtime_error("Grouped blocks do not share one topology");
+  for(std::size_t q=0;q<products[0].size();++q){const auto&a=products[0][q];const auto&b=products[g][q];
+   if(a.a!=b.a||a.b!=b.b||a.out!=b.out||a.c!=b.c)
+    throw std::runtime_error("Grouped block product template differs");}
+ }
+ grouped_groups_=G;grouped_products_=std::move(products[0]);
+ grouped_nodes_.resize(nodes[0].size()*G);
+ for(std::size_t q=0;q<nodes[0].size();++q)for(int g=0;g<G;++g)grouped_nodes_[q*G+g]=nodes[g][q];
+ for(auto&p:grouped_products_){p.a*=G;p.b*=G;p.out*=G;}
+ grouped_values_.resize(grouped_nodes_.size());grouped_adj_.resize(grouped_nodes_.size());
 }
 void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
  const char*reverse=std::getenv("SUS2_SL_REVERSE_STREAM");
@@ -164,6 +201,20 @@ void Kernel::edge_mixer(const Edge&e,std::vector<double>&v,std::vector<double>&d
  }
 }
 void Kernel::graph(double* v,bool gate,bool reverse,const double* values)const {
+ if(!gate&&grouped_groups_){
+  // Independent blocks occupy contiguous lanes, so the compiler can vectorize
+  // each native product without changing the accumulation order in any lane.
+  auto&tile=reverse?grouped_adj_:grouped_values_;
+  for(std::size_t q=0;q<grouped_nodes_.size();++q)tile[q]=v[grouped_nodes_[q]];
+  if(reverse)for(std::size_t q=0;q<grouped_nodes_.size();++q)grouped_values_[q]=values[grouped_nodes_[q]];
+  const double*x=grouped_values_.data();double*a=tile.data();const int G=grouped_groups_;
+  for(std::size_t q=0;q<grouped_products_.size();++q){const auto&p=grouped_products_[reverse?grouped_products_.size()-1-q:q];
+   if(reverse)for(int g=0;g<G;++g){const double z=p.c*a[p.out+g];a[p.a+g]+=z*x[p.b+g];a[p.b+g]+=z*x[p.a+g];}
+   else for(int g=0;g<G;++g)a[p.out+g]+=p.c*a[p.a+g]*a[p.b+g];
+  }
+  for(std::size_t q=0;q<grouped_nodes_.size();++q)v[grouped_nodes_[q]]=tile[q];
+  return;
+ }
  int lo=gate?gate_product_begin_:outer_product_;
  int hi=gate?gate_product_end_:int(model_.products.size());
  for(int q=0;q<hi-lo;++q){const auto&p=model_.products[reverse?hi-1-q:lo+q];
@@ -298,6 +349,7 @@ double Kernel::memory_usage() const {
  if(joint_)bytes+=joint_->memory_usage();
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
  bytes+=sizeof(std::array<double,4>)*edge_coeff_scratch_.capacity();
+ bytes+=sizeof(Product)*grouped_products_.capacity()+sizeof(int)*grouped_nodes_.capacity()+sizeof(double)*(grouped_values_.capacity()+grouped_adj_.capacity());
  for(const auto*v:arrays)bytes+=sizeof(double)*v->capacity();
  // Include the immutable model's principal numeric storage; strings/maps are
  // allocator-dependent and are not part of the MD workspace estimate.

@@ -96,6 +96,7 @@ int main(int argc,char** argv)
     kernels.back()->begin(owned[p],n,types,pe);
   }
   const int width=kernels[0]->communication_width(); std::vector<double> buffer(width);
+  std::cout<<"GROUPED_GRAPH_JSON {\"groups\":"<<kernels[0]->grouped_graph_groups()<<"}\n";
   for(int p=0;p<domains;++p) for(int i=owned[p];i<n;++i) {
     const int global=map[p][i]; kernels[owner[global]]->pack_forward(owner_local[global],buffer.data()); kernels[p]->unpack_forward(i,buffer.data());
   }
