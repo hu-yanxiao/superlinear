@@ -120,7 +120,34 @@ int main(int argc, char** argv)
         double dot=0;for(int a=0;a<outputs;++a) dot+=columns[i*outputs+a]*columns[j*outputs+a];
         cross_gram=std::max(cross_gram,std::abs(dot));
     }
+
+    // Synthetic full EFS target uses columns from every group. Solve one joint
+    // regularized Gram system: cross-group blocks are deliberately retained.
+    std::vector<double> gram(count*count,0),rhs(count,0),target(outputs,0);
+    for(int i=0;i<count;++i) for(int a=0;a<outputs;++a)
+        target[a]+=std::sin(i+0.3)*columns[i*outputs+a];
+    double largest=0;
+    for(int i=0;i<count;++i) {
+        for(int a=0;a<outputs;++a) rhs[i]+=columns[i*outputs+a]*target[a];
+        for(int j=0;j<count;++j) for(int a=0;a<outputs;++a)
+            gram[i*count+j]+=columns[i*outputs+a]*columns[j*outputs+a];
+        largest=std::max(largest,gram[i*count+i]);
+    }
+    for(int i=0;i<count;++i) gram[i*count+i]+=std::max(1e-18,largest*1e-12);
+    for(int k=0;k<count;++k) {
+        int pivot=k;for(int i=k+1;i<count;++i) if(std::abs(gram[i*count+k])>std::abs(gram[pivot*count+k])) pivot=i;
+        for(int j=k;j<count;++j) std::swap(gram[k*count+j],gram[pivot*count+j]);std::swap(rhs[k],rhs[pivot]);
+        const double diag=gram[k*count+k];if(!(std::abs(diag)>0)) return 6;
+        for(int i=k+1;i<count;++i) {
+            const double f=gram[i*count+k]/diag;
+            for(int j=k;j<count;++j) gram[i*count+j]-=f*gram[k*count+j];rhs[i]-=f*rhs[k];
+        }
+    }
+    std::vector<double> solution(count,0);
+    for(int i=count-1;i>=0;--i) { double value=rhs[i];for(int j=i+1;j<count;++j)value-=gram[i*count+j]*solution[j];solution[i]=value/gram[i*count+i]; }
+    double joint_fit_error=0;
+    for(int a=0;a<outputs;++a) {double value=0;for(int i=0;i<count;++i)value+=solution[i]*columns[i*outputs+a];joint_fit_error=std::max(joint_fit_error,std::abs(value-target[a]));}
     std::cout << "grouped_cross columns="<<count<<" vjp="<<max_vjp_error
-        <<" cross_group_design_gram="<<cross_gram<<" mixed_efs_fd="<<max_fd_error<<" force_fd="<<force_error<<std::endl;
-    return max_vjp_error<2e-8 && max_fd_error<2e-6 && force_error<2e-6 ? 0:1;
+        <<" cross_group_design_gram="<<cross_gram<<" joint_fit_error="<<joint_fit_error<<" mixed_efs_fd="<<max_fd_error<<" force_fd="<<force_error<<std::endl;
+    return joint_fit_error<2e-7 && max_vjp_error<2e-8 && max_fd_error<2e-6 && force_error<2e-6 ? 0:1;
 }
