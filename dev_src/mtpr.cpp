@@ -11465,18 +11465,18 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					profile_basis_calc_s += profile_after_basis - profile_basis_start;
 				for (int k = species_count; k < e1_linear_count; k++) {
 					const int i = k - species_count + 1;
-					energy_cmpnts[k] += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
+					energy_cmpnts[k] += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
 					if (need_forces)
 						for (int j = 0; j < nbh.count; j++)
 							for (int a = 0; a < 3; a++) {
-								forces_cmpnts(ind, k, a) += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
-								forces_cmpnts(nbh.inds[j], k, a) -= ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
+								forces_cmpnts(ind, k, a) += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
+								forces_cmpnts(nbh.inds[j], k, a) -= ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
 							}
 					if (need_stress)
 						for (int j = 0; j < nbh.count; j++)
 							for (int a = 0; a < 3; a++)
 									for (int b = 0; b < 3; b++)
-											stress_cmpnts[k][a][b] -= ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a) * nbh.vecs[j][b];
+											stress_cmpnts[k][a][b] -= ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a) * nbh.vecs[j][b];
 						}
 				if (profile_two_layer)
 					profile_component_fill_s += TwoLayerProfileNow() - profile_after_basis;
@@ -11490,7 +11490,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 						need_stress,
 						sh_gate_linear_adjoints_,
 						sh_gate_edge_l1_projection_linear_adjoints_,
- (fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0);
+ (fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0);
 					if (profile_two_layer)
 						profile_gate_adjoints_s +=
 							TwoLayerProfileNow() - profile_gate_adjoints_start;
@@ -11558,18 +11558,18 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 			for (int q = 0; q < alpha_scalar_moments; q++) {
 				const int k = scalar_column_begin + q;
 				const int i = q + 1;
-				energy_cmpnts[k] += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
+				energy_cmpnts[k] += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
 				if (need_forces)
 					for (int j = 0; j < nbh.count; j++)
 						for (int a = 0; a < 3; a++) {
-							forces_cmpnts(ind, k, a) += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
-							forces_cmpnts(nbh.inds[j], k, a) -= ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
+							forces_cmpnts(ind, k, a) += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
+							forces_cmpnts(nbh.inds[j], k, a) -= ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a);
 						}
 				if (need_stress)
 					for (int j = 0; j < nbh.count; j++)
 						for (int a = 0; a < 3; a++)
 							for (int b = 0; b < 3; b++)
-								stress_cmpnts[k][a][b] -= ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a) * nbh.vecs[j][b];
+								stress_cmpnts[k][a][b] -= ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_ders(i, j, a) * nbh.vecs[j][b];
 			}
 			if (need_gate_linear_chain) {
 				const double profile_gate_adjoints_start =
@@ -11581,7 +11581,7 @@ void MLMTPR::CalcEFSComponents(Configuration& cfg,
 					need_stress,
 					sh_gate_linear_adjoints_,
 					sh_gate_edge_l1_projection_linear_adjoints_,
- (fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0);
+ (fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0);
 				if (profile_two_layer)
 					profile_gate_adjoints_s +=
 						TwoLayerProfileNow() - profile_gate_adjoints_start;
@@ -11709,7 +11709,7 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 			CalcBasisFuncs(nbh, basis_vals);
 			for (int k = species_count; k < e1_linear_count; k++) {
 				const int i = k - species_count + 1;
-				energy_cmpnts[k] += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
+				energy_cmpnts[k] += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
 			}
 
 			active_two_layer_gate_values_ = nullptr;
@@ -11739,7 +11739,7 @@ void MLMTPR::CalcEComponents(Configuration& cfg,
 		{
 			const int k = species_count + (UsesSpeciesReadout() ? nbh.my_type * alpha_scalar_moments : 0) + q;
 			const int i = q + 1;
-			energy_cmpnts[k] += ((fixed_center_readout_columns && TwoLayerGateReadoutIncludesConstant()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
+			energy_cmpnts[k] += ((fixed_center_readout_columns && !UsesSpeciesReadout()) ? linear_coeffs[nbh.my_type] : 1.0) * basis_vals[i];
 		}
 		if (TwoLayerGateReadoutEnabled()) {
 			const int gate_count = TwoLayerGateScalarCount();

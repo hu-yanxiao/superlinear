@@ -33,3 +33,14 @@ Local build uses the serial developer make command with Clang and Accelerate.
 Use the system vecLib CBLAS headers (the bundled header lacks the symmetric
 BLAS declarations needed by the existing trainer). Tests also run against
 cross-generated Effect and Adaptive PT fixtures.
+
+An existing diagnostic limitation was exposed by fresh native initializers:
+ordinary shared Static/Effect heads with nonunit species prefactors were
+checked against raw TrainLinear columns, omitting that fixed prefactor. The
+explicit `fixed_center_readout_columns=true` chart now includes the center in
+all shared outer E/F/virial columns and gate-chain terms. The default false
+raw TrainLinear chart and solver remain unchanged. The diagnostic requests the
+explicit chart for shared heads; species heads keep their existing chart.
+`fixed_center_columns_check.cpp` covers zero, negative and unequal centers,
+nonunit global scaling, signed linear multipliers, inner on/off, species mode,
+and bitwise unchanged raw E/F/virial columns after explicit-chart evaluation.

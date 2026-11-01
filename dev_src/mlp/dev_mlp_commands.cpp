@@ -1416,11 +1416,10 @@ DevLinearReadoutResult CheckLinearReadout(
 		mtpr.CalcEFS(direct, neighborhoods);
 
 		Configuration component_cfg = configs[cfg_index];
-		// Adaptive shared heads use h_Z * d_q. Hold the center prefactors
+		// All shared heads use h_Z * d_q. Hold the center prefactors
 		// fixed in the component chart; raw TrainLinear columns intentionally
 		// omit h_Z and cannot reconstruct a checkpoint with unequal centers.
-		const bool fixed_center=(mtpr.OuterUsesAdaptiveRadialCoefficients() || mtpr.TwoLayerGateReadoutIncludesConstant())
-			&& !mtpr.UsesSpeciesReadout();
+		const bool fixed_center = !mtpr.UsesSpeciesReadout();
 		mtpr.CalcEFSComponents(component_cfg, neighborhoods, true, check_stress,
 		                      fixed_center);
 		double linear_energy = 0.0;
