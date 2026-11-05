@@ -45,6 +45,12 @@ For nonperiodic molecules, use Cartesian coordinates and omit `Supercell` from
 the CFG frame. No vacuum box is needed; periodic and molecular frames can be
 mixed in the training file. See the [molecular CFG example](docs/boxless-cfg.md).
 
+### Adaptive shared-o
+
+Adaptive models can share the environment projection across O with
+`model.response.layout: shared-o`. C++, PT, LAMMPS, GPUMD and the native Python
+interface use the compact layout. See [configuration and mathematics](docs/ADAPTIVE_SHARED_O.md).
+
 ### Training acceleration
 
 Exact parameter-gradient contractions and per-atom reuse during linear

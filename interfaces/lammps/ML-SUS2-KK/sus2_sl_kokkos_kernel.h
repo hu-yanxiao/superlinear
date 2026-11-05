@@ -95,7 +95,7 @@ template<class DeviceType> class KokkosKernel {
     int owned=0,all=0,edges=0,C=0,L=0,H=0,K=0,F=0,B=0,G=0,O=0,Q=0,W=0;
     int mode=0,tensor_lmax=0,tensor_components=0,latent=1,P=0,Drows=0,scaling_map=3;
     bool gated=false,mixing=false,species_readout=false,species_amplitude=false;
-    bool shared_n=false,activation_tanh=false,gate_readout=false,zbl=false;
+    bool shared_n=false,shared_o=false,activation_tanh=false,gate_readout=false,zbl=false;
     double cutoff=0,zbl_inner=.7,zbl_outer=1.4,zbl_factor=0;
     PublicMatrix x,s,sa,f,v;
     I type,off,nbr,error,inner_basic,outer_basic,outer_rank,gate_feature,gate_scalar;
@@ -561,7 +561,7 @@ template<class DeviceType> class KokkosKernel {
       const int j=static_cast<int>(idx%d.all),p=static_cast<int>(idx/d.all);double z=0.;for(int q=0;q<d.Q;++q)z+=d.U(p*d.Q+q)*d.s(j,q);d.projection(j,p)=d.activation_tanh?tanh(z):z;
     });
     Kokkos::parallel_for("sus2_adaptive_source_coefficients",Range(0,static_cast<std::size_t>(all_)*d.Drows),KOKKOS_LAMBDA(std::size_t idx){
-      const int j=static_cast<int>(idx%d.all),row=static_cast<int>(idx/d.all),p=d.shared_n?(row/d.B)*d.latent:row;
+      const int j=static_cast<int>(idx%d.all),row=static_cast<int>(idx/d.all),p=d.shared_n?(row/d.B)*d.latent:d.shared_o?(row/(d.O*d.B))*d.B+row%d.B:row;
       if(!d.valid_type(j))return;
       double z=d.base(row);for(int t=0;t<d.latent;++t)z+=d.amplitude(((d.species_amplitude?d.type(j)*d.Drows:0)+row)*d.latent+t)*d.projection(j,p+t);d.coeff(j,row)=z;
     });
@@ -640,9 +640,9 @@ template<class DeviceType> class KokkosKernel {
     }else message_reverse_team();
     if(d.mode!=3)return;
     Kokkos::parallel_for("sus2_adaptive_source_pullback",Range(0,static_cast<std::size_t>(all_)*d.P),KOKKOS_LAMBDA(std::size_t idx){
-      const int j=static_cast<int>(idx%d.all),p=static_cast<int>(idx/d.all),first=d.shared_n?(p/d.latent)*d.B:p,t=d.shared_n?p%d.latent:0,count=d.shared_n?d.B:1;double z=0.;
+      const int j=static_cast<int>(idx%d.all),p=static_cast<int>(idx/d.all),first=d.shared_n?(p/d.latent)*d.B:d.shared_o?(p/d.B)*d.O*d.B+p%d.B:p,t=d.shared_n?p%d.latent:0,count=d.shared_n?d.B:d.shared_o?d.O:1,stride=d.shared_o?d.B:1;double z=0.;
       if(!d.valid_type(j))return;
-      for(int n=0;n<count;++n)z+=d.amplitude(((d.species_amplitude?d.type(j)*d.Drows:0)+first+n)*d.latent+t)*d.coeff_adj(j,first+n);
+      for(int n=0;n<count;++n)z+=d.amplitude(((d.species_amplitude?d.type(j)*d.Drows:0)+first+n*stride)*d.latent+t)*d.coeff_adj(j,first+n*stride);
       if(d.activation_tanh){const double phi=d.projection(j,p);z*=1.-phi*phi;}d.projection(j,p)=z;
     });
     Kokkos::parallel_for("sus2_adaptive_source_Utranspose",Range(0,static_cast<std::size_t>(all_)*d.Q),KOKKOS_LAMBDA(std::size_t idx){
@@ -689,9 +689,9 @@ template<class DeviceType> class KokkosKernel {
     d_.gated=m.boolean("two_layer_gate_enabled");const auto mode=m.text("outer_radial_mode","legacy-plus-mixer");d_.mode=mode=="adaptive-coefficients"?3:mode=="pure-matrix"?2:d_.gated?1:0;
     d_.mixing=m.text("two_layer_gate_radial_mixing")=="full";d_.cutoff=m.max_dist;d_.species_readout=m.text("readout_mode")=="species";
     d_.Q=m.integer("two_layer_gate_scalar_count");d_.tensor_lmax=m.integer("tensor_message_lmax");d_.tensor_components=(d_.tensor_lmax+1)*(d_.tensor_lmax+1)-1;
-    d_.shared_n=m.text("adaptive_radial_projection","full")=="shared-n";d_.latent=d_.shared_n?m.integer("adaptive_radial_shared_n_rank",1):1;
+    d_.shared_o=m.text("adaptive_radial_projection","full")=="shared-o";d_.shared_n=m.text("adaptive_radial_projection","full")=="shared-n";d_.latent=d_.shared_n?m.integer("adaptive_radial_shared_n_rank",1):1;
     d_.species_amplitude=m.text("adaptive_radial_amplitude_mode","shared")=="species";d_.activation_tanh=m.text("adaptive_radial_activation","none")=="tanh";
-    d_.Drows=d_.mode==3?d_.L*d_.O*d_.B:0;d_.P=d_.mode==3?(d_.shared_n?d_.L*d_.O*d_.latent:d_.Drows):0;
+    d_.Drows=d_.mode==3?d_.L*d_.O*d_.B:0;d_.P=d_.mode==3?(d_.shared_n?d_.L*d_.O*d_.latent:d_.shared_o?d_.L*d_.B:d_.Drows):0;
     d_.W=d_.gated?(d_.mode==3?d_.Q+d_.G*d_.tensor_components:d_.F):0;
     const auto sm=m.text("scaling_map","LK");d_.scaling_map=sm=="pair"?0:sm=="L"?1:sm=="K"?2:3;
     d_.gate_readout=m.boolean("two_layer_gate_readout_enabled");d_.zbl=m.boolean("zbl_enabled");

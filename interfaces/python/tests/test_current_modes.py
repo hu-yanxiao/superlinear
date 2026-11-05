@@ -23,6 +23,7 @@ CLI = os.environ.get("PYSUPERLINEAR_TEST_BINARY")
 CASES = [(kind, head, projection, activation, message) for kind, projection, activation, message in (
     ("static", "full", "none", False), ("effect", "full", "none", False),
     ("adaptive", "full", "none", False), ("adaptive", "full", "tanh", False),
+    ("adaptive", "shared-o", "none", False), ("adaptive", "shared-o", "tanh", True),
     ("adaptive", "shared-n", "none", False), ("adaptive", "shared-n", "tanh", True),
 ) for head in ("shared", "species")]
 

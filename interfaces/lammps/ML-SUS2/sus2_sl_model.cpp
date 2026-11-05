@@ -49,7 +49,8 @@ void validate_index_capacity(const Model &m) {
     const int latent=shared?m.integer("adaptive_radial_shared_n_rank",1):1;
     require(O>0 && latent>0,"invalid adaptive rank");
     const int rows=index_product("Adaptive rows",{L,O,R});
-    const int projection=shared?index_product("Adaptive projection rows",{L,O,latent}):rows;
+    const bool shared_o=m.text("adaptive_radial_projection","full")=="shared-o";
+    const int projection=shared?index_product("Adaptive projection rows",{L,O,latent}):shared_o?index_product("Adaptive projection rows",{L,R}):rows;
     index_product("Adaptive projection weights",{projection,Q});
     index_product("Adaptive source amplitudes",{m.text("adaptive_radial_amplitude_mode","shared")=="species"?C:1,rows,latent});
     const int tensor_features=index_product("Adaptive tensor features",{G,(tl+1)*(tl+1)-1});
@@ -232,12 +233,13 @@ void Model::load(const std::string &path) {
   scalar_mapping=integers("alpha_moment_mapping");
   if(boolean("two_layer_gate_enabled") && !has("two_layer_gate_scalar_count"))
     fields["two_layer_gate_scalar_count"]=std::to_string(numbers("two_layer_gate_scalar_indices").size());
+  if(text("adaptive_radial_projection")=="share-o") fields["adaptive_radial_projection"]="shared-o";
   validate();
 }
 void Model::validate() const {
   validate_index_capacity(*this);
   const auto ver=text("version");
-  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0" || ver=="1.9.0","unsupported version "+ver);
+  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0" || ver=="1.9.0" || ver=="1.10.0","unsupported version "+ver);
   const std::set<std::string> adaptive_keys={"adaptive_radial_projection","adaptive_radial_amplitude_mode","adaptive_radial_shared_n_rank","adaptive_radial_activation","adaptive_radial_amplitude_count","adaptive_radial_amplitudes","adaptive_radial_weight_count","adaptive_radial_weights","adaptive_radial_amplitude_optimizer_scales","adaptive_radial_weight_optimizer_scales"};
   const std::set<std::string> tensor_keys={"tensor_message_lmax","tensor_message_coeff_count","tensor_message_coeffs","tensor_message_optimizer_scales"};
   const std::set<std::string> joint_keys={"joint_readout_enabled","joint_readout_l_max","joint_readout_body_order","joint_readout_body_l_max","joint_readout_alpha_moments_count","joint_readout_alpha_index_basic_count","joint_readout_alpha_index_basic","joint_readout_sh_product_count","joint_readout_sh_products","joint_readout_scalar_count","joint_readout_scalar_mapping","joint_readout_scalar_info_count","joint_readout_scalar_info","joint_readout_coeff_count","joint_readout_coeffs","joint_readout_optimizer_scales"};
@@ -247,11 +249,12 @@ void Model::validate() const {
     if(f.first.compare(0,14,"joint_readout_")==0) require(joint_keys.count(f.first),"unknown joint metadata "+f.first);
     if(ver=="1.8.0") require(!adaptive_keys.count(f.first) && !tensor_keys.count(f.first) && !joint_keys.count(f.first),"version 1.8.0 is reserved for Legacy scalar models");
   }
-  const bool adaptive_schema=ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || (ver=="1.9.0" && text("outer_radial_mode")=="adaptive-coefficients");
+  const bool adaptive_schema=ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ((ver=="1.9.0" || ver=="1.10.0") && text("outer_radial_mode")=="adaptive-coefficients");
   if(adaptive_schema) {
     for(const char *key:{"readout_mode","tensor_message_lmax","adaptive_radial_projection","adaptive_radial_amplitude_mode","adaptive_radial_amplitude_count","adaptive_radial_amplitudes","adaptive_radial_weight_count","adaptive_radial_weights"}) require(has(key),"missing required field "+std::string(key));
   }
-  if(ver=="1.7.0" || (ver=="1.9.0" && adaptive_schema)) for(const char *key:{"adaptive_radial_shared_n_rank","adaptive_radial_activation","joint_readout_enabled"}) require(has(key),"missing required Adaptive field "+std::string(key));
+  require((ver=="1.10.0")== (text("adaptive_radial_projection")=="shared-o" && text("outer_radial_mode")=="adaptive-coefficients"),"shared-o requires version 1.10.0 and Adaptive mode");
+  if(ver=="1.7.0" || ((ver=="1.9.0" || ver=="1.10.0") && adaptive_schema)) for(const char *key:{"adaptive_radial_shared_n_rank","adaptive_radial_activation","joint_readout_enabled"}) require(has(key),"missing required Adaptive field "+std::string(key));
   require(text("potential_tag")=="SUS2-SH","requires a SUS2-SH spherical harmonic model");
   require(lmax>=0 && lmax<=4 && kmax>0 && integer("L")==lmax && static_cast<long long>(kmax)*(lmax+1)==radial_funcs,"inconsistent L/K dimensions");
   require(integer("sh_body_order")>=2 && integer("sh_body_order")<=6 && text("sh_parity")=="even","unsupported body order or parity");
@@ -282,7 +285,7 @@ void Model::validate() const {
   }
   const auto channel=text("outer_channel_mode","cross-channel"); require(channel=="cross-channel" || channel=="same-channel" || channel=="grouped-cross","invalid outer_channel_mode");
   if(channel=="grouped-cross") {
-    require(ver=="1.9.0" && boolean("outer_k_rank1_enabled"),"grouped-cross requires version 1.9.0 and ranked outer primitives");
+    require((ver=="1.9.0" || ver=="1.10.0") && boolean("outer_k_rank1_enabled"),"grouped-cross requires version 1.9.0/1.10.0 and ranked outer primitives");
     const int width=integer("outer_channel_block_size"), rank=integer("outer_k_rank",1);
     require(width>0 && rank>0 && rank%width==0,"outer_channel_block_size must be positive and divide outer_k_rank");
   } else {
@@ -341,13 +344,13 @@ void Model::validate() const {
   if(outer=="adaptive-coefficients") {
     require(boolean("two_layer_gate_enabled") && boolean("outer_k_rank1_enabled"),"adaptive model requires gate and outer rank");
     const std::string proj=text("adaptive_radial_projection","full"), amp=text("adaptive_radial_amplitude_mode","shared"), act=text("adaptive_radial_activation","none");
-    require(proj=="full" || proj=="shared-n","invalid adaptive projection"); require(amp=="shared" || amp=="species","invalid adaptive amplitude mode"); require(act=="none" || act=="tanh","invalid adaptive activation");
+    require(proj=="full" || proj=="shared-n" || proj=="shared-o","invalid adaptive projection"); require(amp=="shared" || amp=="species","invalid adaptive amplitude mode"); require(act=="none" || act=="tanh","invalid adaptive activation");
     const int rank=integer("adaptive_radial_shared_n_rank",1), ro=integer("outer_k_rank",1);
     if(channel=="grouped-cross") require(ro<=kmax,"Adaptive grouped outer rank exceeds the raw radial channel layout");
     require(rank>0 && (proj=="shared-n" || rank==1) && ro>0,"invalid adaptive rank");
     const size_t rows=static_cast<size_t>(lmax+1)*ro*radial_size, latent=proj=="shared-n" ? rank : 1;
     count("adaptive_radial_amplitudes",rows*latent*(amp=="species" ? species_count : 1));
-    count("adaptive_radial_weights",(proj=="shared-n" ? rows/radial_size*rank : rows)*integer("two_layer_gate_scalar_count"));
+    count("adaptive_radial_weights",(proj=="shared-n" ? rows/radial_size*rank : proj=="shared-o" ? rows/ro : rows)*integer("two_layer_gate_scalar_count"));
     if(has("adaptive_radial_amplitude_optimizer_scales")) count("adaptive_radial_amplitude_optimizer_scales",numbers("adaptive_radial_amplitudes").size());
     if(has("adaptive_radial_weight_optimizer_scales")) count("adaptive_radial_weight_optimizer_scales",integer("two_layer_gate_scalar_count"));
   }

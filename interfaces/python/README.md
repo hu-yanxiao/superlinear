@@ -5,6 +5,10 @@ the same calculator. Static, coordination-effect and Adaptive models support
 shared and per-element readout. No training process or temporary CFG files are
 needed for ASE evaluations.
 
+Adaptive `shared-o` is selected in the saved model, with no additional ASE
+flag. Rebuild this extension from the updated source; `calculator.metadata["projection"]`
+reports `"shared-o"`. See [the model configuration](../../docs/ADAPTIVE_SHARED_O.md).
+
 ## Install
 
 **Python ≥3.9; Python 3.12 recommended.** Requires a C++17 compiler, BLAS and

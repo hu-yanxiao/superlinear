@@ -53,7 +53,7 @@ class Kernel {
   std::vector<double> zbl_inner_,zbl_outer_;
   std::unique_ptr<JointReadout> joint_;
   std::unique_ptr<Adaptive> adaptive_;
-  std::vector<double> local_gate_adj_,extra_energy_;
+  std::vector<double> local_gate_adj_,extra_energy_,adaptive_compact_adj_;
   Result partial_;
   std::vector<int> gate_nodes_,body_;
   int gate_rank_=0,outer_rank_=0,gate_begin_=0,outer_begin_=0,outer_product_=0;

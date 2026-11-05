@@ -59,8 +59,8 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 | `model.interaction.body_order` | `body-order` | 相互作用多体阶数，2..6；默认 5 |
 | `model.interaction.channel_coupling` | `sh-factor-pruning` | Adaptive / Effect 默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
 | `model.angular_limit_by_body_order` | `body-l-max` | 如 `{2: 3, 3: 3, 4: 2, 5: 1}`；2..5 必须齐全，六体模型还需 6；也作用于配位图，保持原生语义 |
-| `model.response.layout` | `adaptive-radial-projection` | `full`（默认）、`shared-n`；兼容 `per-basis`→full、`shared-latent`→shared-n |
-| `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 共享投影数 d；默认 1；full 只能 1，shared-n 要求 1..N |
+| `model.response.layout` | `adaptive-radial-projection` | `full`（默认）、`shared-n`、`shared-o`（跨 O 共享）；兼容 `share-o`→shared-o、 `per-basis`→full、`shared-latent`→shared-n |
+| `model.response.latent_channels` | `adaptive-radial-shared-n-rank` | 共享投影数 d；默认 1；full/shared-o 只能 1，shared-n 要求 1..N |
 | `model.response.activation` | `adaptive-radial-activation` | `linear`→none（默认）、`tanh` |
 | `model.response.element_mode` | `adaptive-radial-amplitude-mode` | `shared`（默认）、`source-element`→species；响应幅度按来源邻居元素区分 |
 | `model.readout.element_mode` | `readout-mode` | `shared`（默认）、`per-element`→species；能量读出按中心原子元素区分 |

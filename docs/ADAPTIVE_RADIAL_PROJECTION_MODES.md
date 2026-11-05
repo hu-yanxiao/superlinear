@@ -9,7 +9,7 @@ Two independent options extend the adaptive-coefficients model. Existing
 models and commands retain `full` projection and `shared` amplitudes.
 
 ```
---adaptive-radial-projection=full|shared-n
+--adaptive-radial-projection=full|shared-n|shared-o
 --adaptive-radial-amplitude-mode=shared|species
 ```
 
@@ -125,7 +125,7 @@ headers in order after `outer_radial_mode`:
 
 ```
 readout_mode = shared|species
-adaptive_radial_projection = full|shared-n
+adaptive_radial_projection = full|shared-n|shared-o
 adaptive_radial_amplitude_mode = shared|species
 tensor_message_lmax = 0|1|2
 ```
@@ -152,3 +152,8 @@ Server compilation, forward/EFS parity, full mixed parameter derivatives,
 regularization finite differences, format rejection, initialization, and
 legacy regression tests are required before deployment. Scientific execution
 and compilation are performed on server compute jobs, not on the workstation.
+
+## Shared-o
+
+See [Adaptive shared-o](ADAPTIVE_SHARED_O.md) for the compact U[l,n,q] layout,
+version 1.10.0 and cross-O reverse reduction. Existing full/shared-n behavior is unchanged.

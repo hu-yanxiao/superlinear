@@ -317,8 +317,9 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  const auto&species=species_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
  stage(0);
+ if(adaptive_)adaptive_->prepare(gate_.data(),all_);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,false>(e,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
+ if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,e.j);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
  stage(1);
  for(int i=0;i<owned_;++i){double*row=outer_moments_.data()+i*M;double*a=outer_adj_.data()+i*M;graph(row,false);
   std::fill(a,a+M,0);for(int q=0;q<m.scalar_count;++q)a[m.scalar_mapping[q]]+=(sp?1:at(species,types_[i]))*linear_[(sp?types_[i]*m.scalar_count:0)+q];if(joint_)extra_energy_[i]=joint_->evaluate(types_[i],at(species,types_[i]),row,gate_moments_.data()+i*M,a,local_gate_adj_.data()+i*M);graph(a,false,true,row);contract(a,false,true);}
@@ -327,7 +328,12 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  if(!pure_&&!adaptive_mode_){if(reverse_stream_)coordinate_reverse<Frozen,true,false>(outer_adj_,partial_);else coordinate_reverse<Frozen,false,false>(outer_adj_,partial_);}
  stage(3);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,true>(e,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];if(gated_)for(int mu=0;mu<F;++mu)gate_adj_[e.j*F+mu]+=adj*s[b*F+mu];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<feature_width_;++q)gate_adj_[e.j*feature_width_+q]+=adj*s[b*feature_width_+q];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+ if(adaptive_){const int W=adaptive_->derivative_width();const bool compact=m.text("adaptive_radial_projection")=="shared-o";
+  if(compact)adaptive_compact_adj_.assign(static_cast<std::size_t>(all_)*W,0);
+  auto&adjoint=compact?adaptive_compact_adj_:gate_adj_;
+  for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,e.j);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<W;++q)adjoint[static_cast<std::size_t>(e.j)*W+q]+=adj*s[b*W+q];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+  if(compact)adaptive_->pullback(adaptive_compact_adj_.data(),gate_adj_.data(),all_);
+ }
  stage(4);
 }
 void Kernel::add_force(Result&r,const Edge&e,const std::array<double,3>&g)const {for(int a=0;a<3;++a){r.force[e.i][a]+=g[a];r.force[e.j][a]-=g[a];}
@@ -347,6 +353,7 @@ double Kernel::memory_usage() const {
  const std::vector<double>* arrays[]={&gate_moments_,&gate_,&gate_adj_,&outer_moments_,&outer_adj_,&local_gate_adj_,&extra_energy_,&weights_,&linear_,&mult_,&gate_type_,&gate_add_,&gate_radial_,&scal_,&gate_scal_,&gate_rank_weights_,&outer_rank_weights_,&species_,&bias_,&body_mix_,&mixer_,&y_scratch_,&dy_scratch_,&rb_scratch_,&dr_scratch_,&rv_scratch_,&rd_scratch_,&v_scratch_,&d_scratch_,&s_scratch_,&gate_moment_adj_,&partial_.site_energy};
  std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_.stats().bytes;
  if(joint_)bytes+=joint_->memory_usage();
+ if(adaptive_)bytes+=adaptive_->memory_usage()+sizeof(double)*adaptive_compact_adj_.capacity();
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
  bytes+=sizeof(std::array<double,4>)*edge_coeff_scratch_.capacity();
  bytes+=sizeof(Product)*grouped_products_.capacity()+sizeof(int)*grouped_nodes_.capacity()+sizeof(double)*(grouped_values_.capacity()+grouped_adj_.capacity());
