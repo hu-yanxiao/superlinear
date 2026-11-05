@@ -28,7 +28,7 @@ int main(int argc,char**argv) {
  std::vector<double>target(rows),G(n*n),rhs(n);double cross=0,largest=0;
  for(int r=0;r<rows;++r)for(int q=0;q<n;++q)target[r]+=A[q*rows+r]*std::sin(.3+q);
  for(int q=0;q<n;++q){for(int r=0;r<rows;++r)rhs[q]+=A[q*rows+r]*target[r];for(int k=0;k<n;++k){for(int r=0;r<rows;++r)G[q*n+k]+=A[q*rows+r]*A[k*rows+r];if(q<outer&&k>=outer)cross=std::max(cross,std::abs(G[q*n+k]));}largest=std::max(largest,G[q*n+q]);}
- for(int q=0;q<n;++q)G[q*n+q]+=std::max(1e-20,largest*1e-12);
+ for(int q=0;q<n;++q)G[q*n+q]+=std::max(1e-20,largest*1e-14);
  for(int k=0;k<n;++k){int p=k;for(int i=k+1;i<n;++i)if(std::abs(G[i*n+k])>std::abs(G[p*n+k]))p=i;for(int j=k;j<n;++j)std::swap(G[k*n+j],G[p*n+j]);std::swap(rhs[k],rhs[p]);if(G[k*n+k]==0)return 5;for(int i=k+1;i<n;++i){double z=G[i*n+k]/G[k*n+k];for(int j=k;j<n;++j)G[i*n+j]-=z*G[k*n+j];rhs[i]-=z*rhs[k];}}
  std::vector<double>x(n);for(int i=n-1;i>=0;--i){double z=rhs[i];for(int j=i+1;j<n;++j)z-=G[i*n+j]*x[j];x[i]=z/G[i*n+i];m.Coeff()[idx[i]]=x[i];}
  auto fit=efs(m,cfg);double err=0,cnorm=0;for(int r=0;r<rows;++r){err=std::max(err,std::abs(fit[r]-constant[r]-target[r]));cnorm=std::max(cnorm,std::abs(constant[r]));}

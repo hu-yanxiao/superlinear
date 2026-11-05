@@ -23,10 +23,14 @@ def main():
         ('none','shared',False,'same-k',3),
         ('tanh','species',True,'q-total',3),
         ('none','species',False,'q-total',1),
+        ('tanh','species',True,'q-total',4),
     ]:
         label=f'{activation}-{amplitude}-{outer}-o{rank}'
         options=topology_args(gate='q-total',outer=outer,readout='species',message=0)
         options=[x for x in options if not x.startswith('--outer-k-rank=')]
+        if rank==4:
+            options=[x for x in options if not x.startswith('--k-max=')]
+            options += ['--k-max=4','--outer-channel-block-size=2']
         options += [f'--outer-k-rank={rank}','--adaptive-radial-projection=shared-o',
                     f'--adaptive-radial-amplitude-mode={amplitude}',
                     f'--adaptive-radial-activation={activation}',f'--joint-readout={str(joint).lower()}']
@@ -50,7 +54,7 @@ def main():
         L=int(assignment(text,'sh_l_max'))+1
         Q=int(assignment(text,'two_layer_gate_scalar_count'))
         U=numbers(text,'adaptive_radial_weights').reshape(L,-1,Q)
-        full=put(text,'version','1.7.0')
+        full=put(text,'version','1.9.0' if rank==4 else '1.7.0')
         full=put(full,'adaptive_radial_projection','full')
         expanded=np.repeat(U[:,None,:,:],rank,axis=1).ravel()
         full=put(full,'adaptive_radial_weight_count',str(len(expanded)))
