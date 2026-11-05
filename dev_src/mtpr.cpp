@@ -4604,6 +4604,7 @@ void MLMTPR::Load(const string& filename)
         while(std::getline(ifs,line)) if(line.find("adaptive_radial_projection")!=std::string::npos) grouped_adaptive=true;
         ifs.clear();ifs.seekg(here);
     }
+	if (shared_o_v110 && !grouped_adaptive) ERROR("Version 1.10.0 requires Adaptive shared-o metadata");
     const bool legacy_v18 = model_file_version == "1.8.0" || (grouped_v19 && !grouped_adaptive);
 	const bool adaptive_v17 = model_file_version == "1.7.0" || (grouped_v19 && grouped_adaptive);
 	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;

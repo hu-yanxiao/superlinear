@@ -26,7 +26,9 @@ def main():
     report={}
     for path in sorted(args.fixtures.glob('*.mtp')):
         if path.stem.endswith('_full'): continue
-        model=SuperlinearModel(str(path),[1,8]);full=SuperlinearModel(str(path.with_name(path.stem+'_full.mtp')),[1,8])
+        model=SuperlinearModel(str(path),[1,8])
+        full_path=path.with_name(path.stem+'_full.mtp')
+        full=SuperlinearModel(str(full_path),[1,8]) if full_path.exists() else model
         def calc(m,x=positions):return m.calculate(numbers,x,cell,[True]*3)
         r=calc(model);f=calc(full)
         diffs={k:float(np.max(np.abs(np.asarray(r[k])-np.asarray(f[k])))) for k in ('energy','forces','virial')}
@@ -40,7 +42,7 @@ def main():
                 plus=positions.copy();minus=positions.copy();plus[i,d]+=eps;minus[i,d]-=eps
                 fd[i,d]=-(calc(model,plus)['energy']-calc(model,minus)['energy'])/(2*eps)
         np.testing.assert_allclose(fd,r['forces'],atol=2e-9,rtol=2e-6)
-        report[path.stem]={'tied_full_max_error':diffs,'PT_max_error':float(np.max(np.abs(prediction-ref))),
+        report[path.stem]={'tied_full_max_error':diffs if full_path.exists() else None,'PT_max_error':float(np.max(np.abs(prediction-ref))),
                            'force_fd_max_error':float(np.max(np.abs(fd-r['forces'])))}
     assert len(report)>=12, 'expected all same/cross/grouped, shared/species, none/tanh fixtures'
     args.report.write_text(json.dumps({'status':'PASS','cases':report},indent=2)+'\n')
