@@ -33,7 +33,7 @@ def main():
         top=check.out/(label+'.topology.sus2'); material=check.out/(label+'.material.sus2')
         check.run(label+'-init','init-sh',top,*options)
         check.run(label+'-materialize','roundtrip-model-dev',top,material)
-        text=asymmetric_shared_text(material.read_text())
+        text=put(asymmetric_shared_text(material.read_text()),'readout_mode','species')
         # Make the nonlinear fixture non-vacuous while keeping finite differences stable.
         if activation=='tanh':
             text=put_numbers(text,'adaptive_radial_weights',numbers(text,'adaptive_radial_weights')*20)
