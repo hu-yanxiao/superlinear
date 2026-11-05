@@ -57,6 +57,11 @@ void validate_index_capacity(const Model &m) {
     const long long width=static_cast<long long>(Q)+tensor_features;
     require(width<=std::numeric_limits<int>::max(),"int index capacity exceeded in Adaptive signal width");
     index_product("Adaptive primitive signal Jacobian",{O,H,width});
+    if(shared_o) {
+      const long long compact_width=static_cast<long long>(projection)+tensor_features;
+      require(compact_width<=std::numeric_limits<int>::max(),"int index capacity exceeded in Adaptive compact signal width");
+      index_product("Adaptive compact primitive Jacobian",{O,H,compact_width});
+    }
     index_product("Adaptive tensor coefficients",{tl,O,G});
   }
   const long long stride=static_cast<long long>(R)+C;
