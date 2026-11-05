@@ -729,7 +729,7 @@ const char* Help() {
            "    --coord-coupling cross|diagonal --interaction-coupling cross|diagonal\n"
            "    --coord-enabled false: static radial weights, no coordination/response keys\n"
            "    --distance-warp-sharing L|K|LK|pair (default LK; semantic aliases remain valid)\n"
-           "    --response-layout full|shared-n (default full); --model.response.latent_channels d\n"
+           "    --response-layout full|shared-n|shared-o (default full); --model.response.latent_channels d\n"
            "  All grouped scalar keys also accept --group.key=value. Historical flags remain valid.\n"
            "  Conflicting values, unknown keys and unsupported native/PT-only options are errors.\n"
            "  Configuration paths are relative to the YAML directory; no output is overwritten.\n"

@@ -41,6 +41,12 @@ def main():
             text=put_numbers(text,'joint_readout_coeffs',.04*np.sin(np.arange(len(numbers(text,'joint_readout_coeffs')))*.31+.23))
         model=check.out/(label+'.sus2');model.write_text(text)
         assert assignment(text,'version')=='1.10.0'
+        for bad_key,bad_value in [('adaptive_radial_shared_n_rank','2'),('version','1.7.0'),('adaptive_radial_projection','full')]:
+            bad=check.out/(label+'.bad-'+bad_key+'.sus2')
+            bad.write_text(put(text,bad_key,bad_value))
+            check.run(label+'-reject-'+bad_key,'roundtrip-model-dev',bad,check.out/'rejected.sus2',fail=True)
+        check.run(label+'-reject-rank-init','init-sh',check.out/'bad-rank.topology.sus2',
+                  *options,'--adaptive-radial-shared-n-rank=2',fail=True)
         L=int(assignment(text,'sh_l_max'))+1
         Q=int(assignment(text,'two_layer_gate_scalar_count'))
         U=numbers(text,'adaptive_radial_weights').reshape(L,-1,Q)

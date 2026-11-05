@@ -1264,12 +1264,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const int adaptive_shared_n_rank = StrictNonnegativeIntOpt(opts, "adaptive-radial-shared-n-rank", 1);
 	const std::string adaptive_activation = StringOpt(opts, "adaptive-radial-activation", "none");
 	if (adaptive_projection != "full" && adaptive_projection != "shared-n" && adaptive_projection != "shared-o")
-		ERROR("--adaptive-radial-projection must be full or shared-n.");
+		ERROR("--adaptive-radial-projection must be full, shared-n, or shared-o.");
 	if (adaptive_amplitude_mode != "shared" && adaptive_amplitude_mode != "species")
 		ERROR("--adaptive-radial-amplitude-mode must be shared or species.");
 	if (adaptive_shared_n_rank < 1 || adaptive_shared_n_rank > rb_size
 	    || (adaptive_projection != "shared-n" && adaptive_shared_n_rank != 1))
-		ERROR("--adaptive-radial-shared-n-rank must be in [1,radial-basis-size]; full projection requires rank 1.");
+		ERROR("--adaptive-radial-shared-n-rank must be in [1,radial-basis-size]; full and shared-o projections require rank 1.");
 	if (adaptive_activation != "none" && adaptive_activation != "tanh")
 		ERROR("--adaptive-radial-activation must be none or tanh.");
 	const int outer_channel_block_size = StrictNonnegativeIntOpt(opts, "outer-channel-block-size", 0);

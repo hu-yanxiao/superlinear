@@ -2357,12 +2357,12 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 	const bool pure = outer_radial_mode_ == "pure-matrix";
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
 	if (adaptive_radial_projection_ != "full" && adaptive_radial_projection_ != "shared-n" && adaptive_radial_projection_ != "shared-o")
-		ERROR("SUS2-SH adaptive_radial_projection must be full or shared-n");
+		ERROR("SUS2-SH adaptive_radial_projection must be full, shared-n, or shared-o");
 	if (adaptive_radial_amplitude_mode_ != "shared" && adaptive_radial_amplitude_mode_ != "species")
 		ERROR("SUS2-SH adaptive_radial_amplitude_mode must be shared or species");
 	if (adaptive_radial_shared_n_rank_ < 1 || (p_RadialBasis && adaptive_radial_shared_n_rank_ > p_RadialBasis->rb_size)
 	    || (!AdaptiveRadialSharedN() && adaptive_radial_shared_n_rank_ != 1))
-		ERROR("SUS2-SH adaptive_radial_shared_n_rank must be in [1,N]; full projection requires rank 1");
+		ERROR("SUS2-SH adaptive_radial_shared_n_rank must be in [1,N]; full and shared-o projections require rank 1");
 	if (adaptive_radial_activation_ != "none" && adaptive_radial_activation_ != "tanh")
 		ERROR("SUS2-SH adaptive_radial_activation must be none or tanh");
 	if (AdaptiveRadialExtendedLayout() && !adaptive)
