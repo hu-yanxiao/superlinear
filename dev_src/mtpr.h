@@ -1161,7 +1161,8 @@ public:
 			int AdaptiveRadialLatentCount() const { return AdaptiveRadialSharedN() ? adaptive_radial_shared_n_rank_ : 1; }
 			const std::string& AdaptiveRadialActivation() const { return adaptive_radial_activation_; }
 			bool AdaptiveRadialTanh() const { return adaptive_radial_activation_ == "tanh"; }
-			bool AdaptiveRadialV17() const { return (OuterUsesAdaptiveRadialCoefficients() && outer_channel_mode_=="grouped-cross") || adaptive_radial_shared_n_rank_ != 1 || AdaptiveRadialTanh(); }
+			bool AdaptiveRadialV17() const { return AdaptiveRadialSharedO() || (OuterUsesAdaptiveRadialCoefficients() && outer_channel_mode_=="grouped-cross") || adaptive_radial_shared_n_rank_ != 1 || AdaptiveRadialTanh(); }
+			bool AdaptiveRadialSharedO() const { return adaptive_radial_projection_ == "shared-o"; }
 			bool AdaptiveRadialSharedN() const { return adaptive_radial_projection_ == "shared-n"; }
 			bool AdaptiveRadialSpeciesAmplitude() const { return adaptive_radial_amplitude_mode_ == "species"; }
 			bool AdaptiveRadialExtendedLayout() const { return AdaptiveRadialSharedN() || AdaptiveRadialSpeciesAmplitude() || AdaptiveRadialV17(); }

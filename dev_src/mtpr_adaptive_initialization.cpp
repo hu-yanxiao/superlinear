@@ -345,7 +345,7 @@ void MLMTPR::InitializeAdaptiveRadialFromData(
 						double response = 0.0;
 						for (int n = 0; n < R; ++n) {
 							base += c[n] * rb[rb_start + n];
-							const int pr = AdaptiveRadialSharedN() ? block*latent : row0+n;
+							const int pr = AdaptiveRadialProjectionRow(row0+n);
 							for (int t = 0; t < latent; ++t)
 								response += latent_scale*signal[pr+t]*rb[rb_start+n];
 						}

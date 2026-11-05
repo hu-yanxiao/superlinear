@@ -195,7 +195,7 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
                 const double* c=regression_coeffs.data()+RadialCoeffOffset()+mu*RadialCoeffBlockSize();
                 for (int n=0; n<R; ++n) {
                     const size_t at=static_cast<size_t>(i)*D+row+n;
-                    const int projection_row=AdaptiveRadialSharedN() ? (l*outer_k_rank_+o)*T : row+n;
+                    const int projection_row=AdaptiveRadialProjectionRow(row+n);
                     double correction=0.0;
                     for (int t=0;t<T;++t)
                         correction+=amplitude[ex.amplitude_offsets[i]+(row+n)*T+t]
@@ -551,7 +551,7 @@ void MLMTPR::ReduceAdaptiveRadialCoefficientAdjoints(bool tangent) {
     const int D=ex.rows,P=ex.projection_rows,R=p_RadialBasis->rb_size,T=AdaptiveRadialLatentCount();
     const int atoms=static_cast<int>(ex.amplitude_offsets.size());
     const double* a=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
-    if (!AdaptiveRadialSharedN() && !AdaptiveRadialTanh()) {
+    if (!AdaptiveRadialSharedN() && !AdaptiveRadialSharedO() && !AdaptiveRadialTanh()) {
         // Keep the original full/linear in-place pullback: no extra buffer,
         // zero-fill or copy is needed for already uncompressed rows.
         for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) {
@@ -566,7 +566,7 @@ void MLMTPR::ReduceAdaptiveRadialCoefficientAdjoints(bool tangent) {
     if (tangent) ex.signal_tangent_adjoints.assign(static_cast<size_t>(atoms)*P,0.0);
     for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) {
         const size_t at=static_cast<size_t>(i)*D+row;
-        const int pr=AdaptiveRadialSharedN() ? (row/R)*T : row;
+        const int pr=AdaptiveRadialProjectionRow(row);
         for (int t=0;t<T;++t) {
             const double amp=a[ex.amplitude_offsets[i]+row*T+t];
             const size_t to=static_cast<size_t>(i)*P+pr+t;
@@ -597,7 +597,7 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
     const double* Bmsg=tensor_enabled
         ? regression_coeffs.data()+TensorMessageCoeffOffset() : nullptr;
     ReduceAdaptiveRadialCoefficientAdjoints(false);
-    const double* seeds=(!AdaptiveRadialSharedN() && !AdaptiveRadialTanh())
+    const double* seeds=(!AdaptiveRadialSharedN() && !AdaptiveRadialSharedO() && !AdaptiveRadialTanh())
         ? ex.coefficient_adjoints.data() : ex.signal_adjoints.data();
     ex.scalar_adjoints.resize(static_cast<size_t>(atoms)*Q);
     if (atoms>0)
@@ -878,7 +878,7 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
     const double* amplitude=regression_coeffs.data()+AdaptiveRadialAmplitudeOffset();
     std::vector<double> scalar_seeds(static_cast<size_t>(P)*Q);
     std::vector<double> padded_seeds(TwoLayerGateReadoutEnabled() ? static_cast<size_t>(P)*D : 0);
-    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialTanh();
+    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialSharedO() && !AdaptiveRadialTanh();
     std::vector<double> compact_seeds(direct_linear ? 0 : static_cast<size_t>(P)*projection_rows);
     std::vector<double> adj(static_cast<size_t>(alpha_moments_count)*P);
     std::vector<double> gate_values(alpha_moments_count,0.0);
@@ -901,7 +901,7 @@ void MLMTPR::FinishAdaptiveRadialGateComponents(Configuration& cfg,const Neighbo
         std::fill(compact_seeds.begin(),compact_seeds.end(),0.0);
         for (int p=0;p<P;++p)
             for (int row=0;row<D;++row) {
-                const int pr=AdaptiveRadialSharedN() ? (row/R)*T : row;
+                const int pr=AdaptiveRadialProjectionRow(row);
                 for (int t=0;t<T;++t)
                     compact_seeds[p*projection_rows+pr+t]+=seeds[p*D+row]
                         *amplitude[ex.amplitude_offsets[atom]+row*T+t];
@@ -1054,7 +1054,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
         if (atoms>0)
             cblas_dgemm(CblasRowMajor,CblasNoTrans,CblasTrans,atoms,projection_rows,Q,1.0,ex.scalar_tangents.data(),Q,weights,Q,0.0,ex.signal_tangents.data(),projection_rows);
         for (int i=0;i<atoms;++i) for (int row=0;row<D;++row) {
-            const int pr=AdaptiveRadialSharedN() ? (row/R)*T : row;
+            const int pr=AdaptiveRadialProjectionRow(row);
             double value=0.0;
             for (int t=0;t<T;++t) {
                 const size_t at=static_cast<size_t>(i)*projection_rows+pr+t;
@@ -1243,7 +1243,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
                     const int row=row0+n; const size_t at=static_cast<size_t>(i)*D+row;
                     const double ca=ex.coefficient_adjoints[at];
                     out[RadialCoeffOffset()+mu*RadialCoeffBlockSize()+n]+=ca;
-                    const int pr=AdaptiveRadialSharedN() ? (row/R)*T : row;
+                    const int pr=AdaptiveRadialProjectionRow(row);
                     for (int t=0;t<T;++t) {
                         const size_t signal_at=static_cast<size_t>(i)*ex.projection_rows+pr+t;
                         const double x=ex.signals[signal_at];
@@ -1258,7 +1258,7 @@ void MLMTPR::AccumulateAdaptiveRadialCombinationGrad(Configuration& cfg,const Ne
             }
     ReduceAdaptiveRadialCoefficientAdjoints(tangent);
     const int projection_rows=ex.projection_rows;
-    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialTanh();
+    const bool direct_linear=!AdaptiveRadialSharedN() && !AdaptiveRadialSharedO() && !AdaptiveRadialTanh();
     const double* seeds=direct_linear ? ex.coefficient_adjoints.data() : ex.signal_adjoints.data();
     const double* tangent_seeds=direct_linear ? ex.coefficient_tangent_adjoints.data() : ex.signal_tangent_adjoints.data();
     ex.scalar_adjoints.resize(static_cast<size_t>(atoms)*Q);
@@ -1442,7 +1442,7 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
         for (int zi=0;zi<C;++zi) for (int zj=0;zj<C;++zj) {
             const int a_offset=AdaptiveRadialAmplitudeOffset()+(AdaptiveRadialSpeciesAmplitude() ? zj*blocks*R*T : 0);
             for (int n=0;n<R;++n) {
-                const int pr=AdaptiveRadialSharedN() ? (l*O+o)*T : row0+n;
+                const int pr=AdaptiveRadialProjectionRow(row0+n);
                 for (int q=0;q<Q;++q) {
                     double value=0.0;
                     for (int t=0;t<T;++t)
@@ -1476,7 +1476,7 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
                     const double common=2.0*weight*scaling*p_RadialBasis->rb_ders[n];
                     (*gradient)[c0+n]+=common*der[0];
                     const int a_index=a_offset+(row0+n)*T;
-                    const int u0=AdaptiveRadialWeightOffset()+(AdaptiveRadialSharedN() ? (l*O+o)*T : row0+n)*Q;
+                    const int u0=AdaptiveRadialWeightOffset()+(AdaptiveRadialProjectionRow(row0+n))*Q;
                     for (int t=0;t<T;++t) {
                         double a_grad=0.0;
                         for (int q=0;q<Q;++q) {

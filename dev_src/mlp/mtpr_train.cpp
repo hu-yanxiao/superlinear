@@ -2497,6 +2497,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 				if (mtpr.JointReadoutEnabled()) ERROR("--joint-readout=false cannot remove a trained head during resume");
 			} else ERROR("--joint-readout must be true or false");
 		}
+		if (opts["adaptive-radial-projection"] == "share-o") opts["adaptive-radial-projection"] = "shared-o";
 		if (!opts["adaptive-radial-projection"].empty()
 		    && (!mtpr.OuterUsesAdaptiveRadialCoefficients()
 		        || opts["adaptive-radial-projection"] != mtpr.AdaptiveRadialProjection()))

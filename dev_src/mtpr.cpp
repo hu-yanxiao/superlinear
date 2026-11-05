@@ -1853,6 +1853,7 @@ int MLMTPR::TensorMessageCoeffCount() const
 int MLMTPR::AdaptiveRadialProjectionRowCount() const
 {
 	const int rows = AdaptiveRadialRowCount();
+	if (AdaptiveRadialSharedO()) return rows / outer_k_rank_;
 	return AdaptiveRadialSharedN() && rows > 0
 		? CheckedIntProduct(static_cast<size_t>(rows / p_RadialBasis->rb_size),
 			static_cast<size_t>(adaptive_radial_shared_n_rank_), "Adaptive radial projection rows") : rows;
@@ -1877,6 +1878,7 @@ int MLMTPR::AdaptiveRadialProjectionRow(int row, int t) const
 	if (row < 0 || row >= AdaptiveRadialRowCount())
 		ERROR("SUS2-SH adaptive radial row index is out of range");
 	if (t < 0 || t >= AdaptiveRadialLatentCount()) ERROR("Adaptive radial latent index out of range");
+	if (AdaptiveRadialSharedO()) return (row / (outer_k_rank_*p_RadialBasis->rb_size))*p_RadialBasis->rb_size + row%p_RadialBasis->rb_size;
 	return AdaptiveRadialSharedN() ? (row / p_RadialBasis->rb_size) * adaptive_radial_shared_n_rank_ + t : row;
 }
 
@@ -2354,7 +2356,7 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 
 	const bool pure = outer_radial_mode_ == "pure-matrix";
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
-	if (adaptive_radial_projection_ != "full" && adaptive_radial_projection_ != "shared-n")
+	if (adaptive_radial_projection_ != "full" && adaptive_radial_projection_ != "shared-n" && adaptive_radial_projection_ != "shared-o")
 		ERROR("SUS2-SH adaptive_radial_projection must be full or shared-n");
 	if (adaptive_radial_amplitude_mode_ != "shared" && adaptive_radial_amplitude_mode_ != "species")
 		ERROR("SUS2-SH adaptive_radial_amplitude_mode must be shared or species");
@@ -4594,7 +4596,8 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
-	const bool grouped_v19 = model_file_version == "1.9.0";
+	const bool shared_o_v110 = model_file_version == "1.10.0";
+	const bool grouped_v19 = model_file_version == "1.9.0" || shared_o_v110;
     bool grouped_adaptive=false;
     if (grouped_v19) {
         const std::streampos here=ifs.tellg();std::string line;
@@ -4665,7 +4668,7 @@ void MLMTPR::Load(const string& filename)
 		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
 		else ERROR("SUS2-SH model contains an unknown tensor message field");
 	}
-	if (grouped_v19 && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
+	if (grouped_v19 && !shared_o_v110 && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
 	if (legacy_v18 && (readout_fields != 1 || legacy_outer_channel_fields != 1 || legacy_outer_radial_fields != 1))
 		ERROR("Version 1.8.0 requires unique readout and outer mode fields");
 	if (model_file_version == "1.4.0"
@@ -5429,6 +5432,8 @@ void MLMTPR::Load(const string& filename)
 		if (tmpstr == "adaptive_radial_projection") {
 			ifs.ignore(2);
 			ifs >> adaptive_radial_projection_;
+			if ((adaptive_radial_projection_ == "shared-o") != shared_o_v110)
+				ERROR("shared-o projection requires model format 1.10.0 and vice versa");
 			projection_seen = true;
 			ifs >> tmpstr;
 		}
@@ -7009,7 +7014,7 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
+	    << (AdaptiveRadialSharedO() ? "1.10.0" : outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
 	         && (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
 	        (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
 	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << '\n';

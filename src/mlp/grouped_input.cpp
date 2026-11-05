@@ -42,7 +42,7 @@ const Rule rules[] = {
     {"model.interaction.channels", "outer-k-rank", "positive-int"},
     {"model.interaction.body_order", "body-order", "positive-int"},
     {"model.interaction.channel_coupling", "sh-factor-pruning", "diagonal=same-k|cross=q-total"},
-    {"model.response.layout", "adaptive-radial-projection", "full=full|shared-n=shared-n|per-basis=full|shared-latent=shared-n"},
+    {"model.response.layout", "adaptive-radial-projection", "full=full|shared-n=shared-n|shared-o=shared-o|share-o=shared-o|per-basis=full|shared-latent=shared-n"},
     {"model.response.latent_channels", "adaptive-radial-shared-n-rank", "positive-int"},
     {"model.response.activation", "adaptive-radial-activation", "linear=none|tanh=tanh"},
     {"model.response.element_mode", "adaptive-radial-amplitude-mode", "shared=shared|source-element=species"},
@@ -582,7 +582,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             Fail("joint readout requires l_max >= 1");
         const int d = GetInt(opts, "adaptive-radial-shared-n-rank", 1);
         const std::string projection = opts.count("adaptive-radial-projection") ? opts["adaptive-radial-projection"] : "full";
-        if (d < 1 || d > n || (projection == "full" && d != 1)) Fail("latent channels require shared-n (shared-latent) layout and 1<=d<=basis_size");
+        if (d < 1 || d > n || (projection != "shared-n" && d != 1)) Fail("latent channels require shared-n (shared-latent) layout and 1<=d<=basis_size");
         std::string limits; bool explicit_limits = false;
         for (const auto& value : settings) if (Starts(value.first, "model.angular_limit_by_body_order.")) explicit_limits = true;
         if (explicit_limits) {
