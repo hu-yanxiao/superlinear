@@ -33,7 +33,7 @@ class AnyRadialBasis
 {
 private:
 	struct TableKey {
-		std::uint64_t slope, shift;
+		std::uint64_t slope, shift, cutoff;
 		int channel;
 		bool operator<(const TableKey& other) const;
 	};
@@ -54,6 +54,14 @@ private:
 	int table_state_size_ = -1, table_state_cutoff_p_ = -1;
 	std::string table_state_cutoff_;
 	void ClearInferenceRadialTables();
+	double evaluation_cutoff_ = 0;
+	bool raw_envelope_ = false;
+	bool split_cutoff_enabled_ = false;
+	double raw_r_ = 0, raw_slope_ = 0, raw_shift_ = 0;
+	double raw_min_ = 0, raw_max_ = 0, raw_scaling_ = 0;
+	int raw_channel_ = 0;
+	bool raw_valid_ = false, raw_derivatives_ = false;
+	std::vector<double> raw_values_, raw_ders_;
 protected:
 	// Inference only: parameter/mixed derivative blocks are unspecified on hits.
 	bool TryInferenceRadialTable(double r, double scal, double s, int k);
@@ -79,6 +87,10 @@ public:
 	void WriteRadialBasis(std::ofstream& ofs);
 	void SetRadialCutoff(const std::string& cutoff_type, int cutoff_p);
 	void CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const;
+	// Change physical support only; max_dist remains the warp coordinate scale.
+	void RB_CalcForCutoff(double r, double scal, double s, int k,
+		double cutoff, bool derivatives = true);
+	void EnableSplitCutoff(bool enabled) { split_cutoff_enabled_=enabled; raw_valid_=false; }
 	// Both Table and Auto lazily try a table and explicitly fall back to direct
 	// evaluation outside [max(0,min_dist),max_dist], on non-finite samples or on
 	// an explicitly configured memory limit. Storage grows lazily with requests;

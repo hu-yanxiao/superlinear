@@ -7,7 +7,12 @@
 #include <cstdlib>
 namespace LAMMPS_NS { namespace SUS2SL {
 Radial::Radial(const std::string& type, double lo, double hi, int n,
-               double scaling, const std::string& cutoff, int p) {
+               double scaling, const std::string& cutoff, int p, double angular) {
+  angular_cutoff_=angular>0?angular:hi;
+  if(angular!=0 && (!std::isfinite(angular)||angular<=0||angular>hi))
+    throw std::invalid_argument("Invalid angular cutoff");
+  if(angular_cutoff_!=hi && type!="RBChebyshev_sss" && type!="RBLaguerre_log1p")
+    throw std::invalid_argument("Two cutoffs require RBChebyshev_sss or RBLaguerre_log1p");
   if (n <= 0 || !std::isfinite(lo) || !std::isfinite(hi) || !(hi > lo) ||
       !std::isfinite(scaling)) throw std::invalid_argument("Invalid radial basis metadata");
   if (type == "RBShapeev") basis_.reset(new radial_math::RadialBasis_Shapeev(lo,hi,n));
@@ -49,6 +54,7 @@ Radial::Radial(const std::string& type, double lo, double hi, int n,
   else throw std::invalid_argument("Unsupported radial basis: " + type);
   basis_->scaling = scaling;
   basis_->SetRadialCutoff(cutoff,p);
+  basis_->EnableSplitCutoff(angular_cutoff_!=hi);
   basis_->SetInferenceRadialTableActive(true);
 }
 void Radial::configure(RadialTableMode mode, double spacing, std::size_t max_bytes) {
@@ -66,14 +72,12 @@ void Radial::configure(RadialTableMode mode, double spacing, std::size_t max_byt
   bulk_=!bulk||std::strcmp(bulk,"1")==0;
   for(auto& f:frozen_){f.status=0;f.packed=false;f.intervals=0;std::vector<double>().swap(f.knots);}
   for(auto& t:frozen_tiles_){t.lanes=0;std::vector<double>().swap(t.knots);}
-  try {frozen_tiles_.resize(frozen_.size()/tile_width_+(frozen_.size()%tile_width_!=0));}
-  catch(const std::bad_alloc&){frozen_tiles_.clear();tiled_=false;}
-  catch(const std::length_error&){frozen_tiles_.clear();tiled_=false;}
+  frozen_tiles_.clear();
+  tile_tail_.fill(std::numeric_limits<std::size_t>::max());
 }
 void Radial::eval(double r,double slope,double shift,int k,
-                  std::vector<double>& vals,std::vector<double>& ders,bool derivatives) {
-  if(derivatives)basis_->RB_CalcRDerOnly(r,slope,shift,k);
-  else basis_->RB_CalcValsOnly(r,slope,shift,k);
+                  std::vector<double>& vals,std::vector<double>& ders,bool derivatives,bool positive_l) {
+  basis_->RB_CalcForCutoff(r,slope,shift,k,positive_l?angular_cutoff_:basis_->max_dist,derivatives);
   vals.assign(basis_->rb_vals.begin(),basis_->rb_vals.begin()+basis_->rb_size);
   if(derivatives)ders.assign(basis_->rb_ders.begin(),basis_->rb_ders.begin()+basis_->rb_size);
 }
@@ -140,7 +144,7 @@ void Radial::freeze(const Model& m,const std::vector<int>& used_species) {
  std::map<std::vector<std::uint64_t>,std::size_t> unique;
  for(int gate=0;gate<2;++gate)for(int ti:species)for(int tj:species)for(int mu=0;mu<frozen_funcs_;++mu){
   const std::size_t pair=std::size_t(ti)*Csize+std::size_t(tj);
-  Frozen f;f.channel=mu/L;const int l=mu%L;
+  Frozen f;f.channel=mu/L;const int l=mu%L;f.cutoff=l?m.angular_max_dist:m.max_dist;
   const int sb=sm=="K"?f.channel:(sm=="L"?l:(sm=="pair"?0:mu));
   const auto& sc=gate&&!gscale.empty()?gscale:scale;const std::size_t off=2*std::size_t(sb)*model_pairs+pair;
   f.slope=number(sc,off,1);f.shift=number(sc,off+model_pairs);
@@ -149,19 +153,27 @@ void Radial::freeze(const Model& m,const std::vector<int>& used_species) {
   for(int b=0;b<R;++b){f.coeff[b]=number(co,std::size_t(mu)*stride+b);finite=finite&&std::isfinite(f.coeff[b]);}
   // Avoid floating-point map comparison for NaNs. Such requests remain direct.
   std::vector<std::uint64_t> key;auto bits=[&](double x){std::uint64_t u;std::memcpy(&u,&x,sizeof(u));key.push_back(u);};
-  bits(f.slope);bits(f.shift);key.push_back(std::uint64_t(f.channel));for(double x:f.coeff)bits(x);
+  bits(f.slope);bits(f.shift);bits(f.cutoff);key.push_back(std::uint64_t(f.channel));for(double x:f.coeff)bits(x);
   auto it=finite?unique.find(key):unique.end();
   if(it!=unique.end())frozen_ids_.push_back(it->second);
   else {std::size_t id=frozen_.size();frozen_ids_.push_back(id);frozen_.push_back(std::move(f));if(finite)unique.emplace(std::move(key),id);}
  }
- frozen_tiles_.resize(frozen_.size()/tile_width_+(frozen_.size()%tile_width_!=0));
+ frozen_tiles_.clear();
  }catch(const std::bad_alloc&){std::vector<Frozen>().swap(frozen_);std::vector<std::size_t>().swap(frozen_ids_);std::vector<Tile>().swap(frozen_tiles_);frozen_species_slots_.clear();frozen_pairs_=0;frozen_model_pairs_=0;frozen_used_species_=0;frozen_model_species_=0;frozen_funcs_=0;}
  catch(const std::length_error&){std::vector<Frozen>().swap(frozen_);std::vector<std::size_t>().swap(frozen_ids_);std::vector<Tile>().swap(frozen_tiles_);frozen_species_slots_.clear();frozen_pairs_=0;frozen_model_pairs_=0;frozen_used_species_=0;frozen_model_species_=0;frozen_funcs_=0;}
 }
 void Radial::pack_frozen(Frozen& f) {
  if(!tiled_)return;
- const std::size_t id=std::size_t(&f-frozen_.data()),group=id/tile_width_;
- Tile& tile=frozen_tiles_[group];const std::size_t old=tile.lanes,lanes=old+1,nodes=f.intervals+1;
+ // Only two immutable grids exist. A per-grid tail avoids a quadratic scan
+ // through the already-built tiles for models with many element pairs.
+ auto& tail=tile_tail_[f.cutoff<basis_->max_dist?1:0];
+ std::size_t group=tail;
+ if(group>=frozen_tiles_.size()||frozen_tiles_[group].lanes==tile_width_){
+  group=frozen_tiles_.size();
+  try{frozen_tiles_.emplace_back();}catch(const std::bad_alloc&){return;}
+  tail=group;
+ }
+ Tile& tile=frozen_tiles_[group];tile.intervals=f.intervals;tile.cutoff=f.cutoff;const std::size_t old=tile.lanes,lanes=old+1,nodes=f.intervals+1;
  // Bound transient repacking to one small tile. Large grids retain scalar
  // ownership. No knot is duplicated persistently or reserved before admission.
  if(nodes>1024*1024/sizeof(double)/2/lanes)return;
@@ -180,7 +192,7 @@ void Radial::pack_frozen(Frozen& f) {
  }catch(const std::bad_alloc&){ /* Keep the already-qualified scalar table. */ }
 }
 void Radial::build_frozen(Frozen& f) {
- const double lo=std::max(0.0,basis_->min_dist),hi=basis_->max_dist;
+ const double lo=std::max(0.0,basis_->min_dist),hi=f.cutoff;
  const double count=std::ceil((hi-lo)/spacing_);const std::size_t available=budget_-frozen_stats_.bytes;
  if(!std::isfinite(count)||count<1||count>=double(std::numeric_limits<std::size_t>::max())){f.status=3;return;}
  const std::size_t n=std::size_t(count);
@@ -192,7 +204,7 @@ void Radial::build_frozen(Frozen& f) {
  try {
   std::vector<double> knots((n+1)*2),leftv(R),leftd(R),rightv(R),rightd(R);
   auto sample=[&](double r,double* dest,std::vector<double>&v,std::vector<double>&d){
-   basis_->RB_CalcRDerOnly(r,f.slope,f.shift,f.channel);double value=0,der=0;
+   basis_->RB_CalcForCutoff(r,f.slope,f.shift,f.channel,f.cutoff,true);double value=0,der=0;
    for(int b=0;b<R;++b){v[b]=basis_->rb_vals[b];d[b]=basis_->rb_ders[b];
     if(!std::isfinite(v[b])||!std::isfinite(d[b]))return false;
     value+=f.coeff[b]*v[b];der+=f.coeff[b]*d[b];}
@@ -201,7 +213,7 @@ void Radial::build_frozen(Frozen& f) {
   if(!sample(lo,knots.data(),leftv,leftd)){f.status=2;return;}
   for(std::size_t i=0;i<n;++i){
    if(!sample(i+1==n?hi:lo+(i+1)*f.step,knots.data()+2*(i+1),rightv,rightd)){f.status=2;return;}
-   basis_->RB_CalcRDerOnly(lo+(i+0.5)*f.step,f.slope,f.shift,f.channel);
+   basis_->RB_CalcForCutoff(lo+(i+0.5)*f.step,f.slope,f.shift,f.channel,f.cutoff,true);
    double midv=0,midd=0;
    for(int b=0;b<R;++b){const double v=basis_->rb_vals[b],d=basis_->rb_ders[b];
     const double hv=.5*(leftv[b]+rightv[b])+.125*f.step*(leftd[b]-rightd[b]);
@@ -232,13 +244,15 @@ bool Radial::eval_frozen(double r,int pair,bool gate,std::vector<double>& vals,s
  if(si<0||sj<0)return false;
  const std::size_t pair_slot=std::size_t(si)*frozen_used_species_+std::size_t(sj);
  vals.resize(frozen_funcs_);if(derivatives)ders.resize(frozen_funcs_);
- const double lo=std::max(0.0,basis_->min_dist),hi=basis_->max_dist;
- const bool domain=std::isfinite(r)&&r>=lo&&r<=hi;
+ const double lo=std::max(0.0,basis_->min_dist);
  bool have_direct=false;int direct_channel=0;
- RadialInterpolation local;RadialInterpolation& context=interpolation?*interpolation:local;
- double direct_slope=0,direct_shift=0;double* w=context.weights.data();
+ RadialInterpolation local;RadialInterpolation& contexts=interpolation?*interpolation:local;
+ double direct_slope=0,direct_shift=0,direct_cutoff=0;
  const std::size_t* handles=frozen_ids_.data()+(std::size_t(gate)*frozen_pairs_+pair_slot)*std::size_t(frozen_funcs_);
  for(int mu=0;mu<frozen_funcs_;++mu){Frozen& f=frozen_[handles[mu]];
+  if(f.cutoff<basis_->max_dist && r>=f.cutoff){vals[mu]=0;if(derivatives)ders[mu]=0;continue;}
+  const double hi=f.cutoff;const bool domain=std::isfinite(r)&&r>=lo&&r<=hi&&hi>lo;
+  auto& context=contexts.shell[f.cutoff<basis_->max_dist?1:0];double* w=context.weights.data();
   if(domain&&f.status==0){build_frozen(f);have_direct=false;}
   if(domain&&f.status==1){const std::size_t n=f.intervals;
    if(!context.ready){context.interval=std::min(std::size_t((r-lo)/f.step),n-1);
@@ -268,13 +282,12 @@ bool Radial::eval_frozen(double r,int pair,bool gate,std::vector<double>& vals,s
   }else{
    ++frozen_stats_.direct_fallbacks;if(!domain)++frozen_stats_.domain_fallbacks;
    else if(f.status==3)++frozen_stats_.memory_fallbacks;else ++frozen_stats_.invalid_fallbacks;
-   if(!have_direct||direct_channel!=f.channel||
+   if(!have_direct||direct_channel!=f.channel||direct_cutoff!=f.cutoff||
       std::memcmp(&direct_slope,&f.slope,sizeof(double))||std::memcmp(&direct_shift,&f.shift,sizeof(double))){
     const bool active=basis_->SetInferenceRadialTableActive(false);
     struct Restore {radial_math::AnyRadialBasis* b;bool a;~Restore(){b->SetInferenceRadialTableActive(a);}}restore{basis_.get(),active};
-    if(derivatives)basis_->RB_CalcRDerOnly(r,f.slope,f.shift,f.channel);
-    else basis_->RB_CalcValsOnly(r,f.slope,f.shift,f.channel);
-    have_direct=true;direct_channel=f.channel;direct_slope=f.slope;direct_shift=f.shift;
+    basis_->RB_CalcForCutoff(r,f.slope,f.shift,f.channel,f.cutoff,derivatives);
+    have_direct=true;direct_channel=f.channel;direct_slope=f.slope;direct_shift=f.shift;direct_cutoff=f.cutoff;
    }
    double v=0,d=0;for(int b=0;b<basis_->rb_size;++b){v+=f.coeff[b]*basis_->rb_vals[b];if(derivatives)d+=f.coeff[b]*basis_->rb_ders[b];}
    vals[mu]=v;if(derivatives)ders[mu]=d;

@@ -202,7 +202,7 @@ void Model::load(const std::string &path) {
   species_count=integer("species_count"); lmax=integer("sh_l_max"); kmax=integer("sh_k_max");
   radial_size=integer("radial_basis_size"); radial_funcs=integer("radial_funcs_count");
   moments=integer("alpha_moments_count"); scalar_count=integer("alpha_scalar_moments");
-  min_dist=real("min_dist"); max_dist=real("max_dist"); scaling=real("scaling",1);
+  min_dist=real("min_dist"); max_dist=real("max_dist"); angular_max_dist=real("angular_max_dist",max_dist); scaling=real("scaling",1);
   validate_index_capacity(*this);
   const int radial_count=index_product("radial coefficients",{radial_funcs,static_cast<long long>(radial_size)+species_count});
   if(!radial_text.empty()) { fields["radial_coeffs"]="{"+radial_text+"}"; radial_coeffs=numbers("radial_coeffs"); }
@@ -264,6 +264,8 @@ void Model::validate() const {
   require(lmax>=0 && lmax<=4 && kmax>0 && integer("L")==lmax && static_cast<long long>(kmax)*(lmax+1)==radial_funcs,"inconsistent L/K dimensions");
   require(integer("sh_body_order")>=2 && integer("sh_body_order")<=6 && text("sh_parity")=="even","unsupported body order or parity");
   require(max_dist>min_dist && min_dist>=0 && scaling>0,"invalid distance or scaling");
+  require(std::isfinite(angular_max_dist)&&angular_max_dist>0&&angular_max_dist<=max_dist,"angular_max_dist must be finite and in (0,max_dist]");
+  require(angular_max_dist==max_dist || text("radial_basis_type")=="RBChebyshev_sss" || text("radial_basis_type")=="RBLaguerre_log1p","two-cutoff support requires RBChebyshev_sss or RBLaguerre_log1p");
   const auto sm=text("scaling_map","LK"); require(sm=="L" || sm=="K" || sm=="LK" || sm=="pair","unknown scaling_map");
   auto count=[&](const std::string &key,size_t n) { require(numbers(key).size()==n,"wrong coefficient count in "+key); };
   count("shift_coeffs",species_count); count("species_coeffs",species_count);

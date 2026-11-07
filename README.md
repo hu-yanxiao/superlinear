@@ -53,6 +53,11 @@ interface use the compact layout. See [configuration and mathematics](docs/ADAPT
 
 ### Training acceleration
 
+SH training can use two physical radial cutoffs: `model.neighbor_cutoff` for
+`l=0` and optional `model.angular_cutoff` for all `l>0`. Inner and outer layers
+share this pair; omission preserves the original single-cutoff model. See
+[configuration, simulation support and limits](docs/scalar-angular-cutoffs.md).
+
 Exact parameter-gradient contractions and per-atom reuse during linear
 initialization are automatic on supported `coordination-effect` paths.
 These additional switches are optional and off by default; export them before

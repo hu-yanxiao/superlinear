@@ -110,6 +110,8 @@ public:
         d["precision"]="float64"; d["backend"]="superlinear-cpp-in-process";
         d["is_sh_potential"]=model_->IsSHPotential();
         d["species_count"]=model_->species_count; d["cutoff"]=model_->CutOff();
+        d["radial_cutoff"]=model_->p_RadialBasis->max_dist;
+        d["angular_cutoff"]=model_->p_RadialBasis->angular_max_dist;
         // L stores the angular-order count; K_ is the number of warp blocks,
         // which is NOT the radial channel count for L/LK/pair sharing.
         d["L"]=model_->L-1;

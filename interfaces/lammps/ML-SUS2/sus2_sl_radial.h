@@ -10,21 +10,22 @@ struct Model;
 using RadialTableMode = radial_math::RadialTableMode;
 using RadialTableStats = radial_math::RadialTableStats;
 // Caller invalidates this when geometry or radial configuration changes.
-struct RadialInterpolation {
+struct RadialInterpolationSlot {
   std::size_t interval=0;
   std::array<double,8> weights{};
   bool ready=false;
 };
+struct RadialInterpolation { std::array<RadialInterpolationSlot,2> shell; };
 class Radial {
  public:
   Radial(const std::string& type, double min_dist, double max_dist, int size,
-         double scaling = 1.0, const std::string& cutoff = "legacy", int p = 5);
+         double scaling = 1.0, const std::string& cutoff = "legacy", int p = 5, double angular_max_dist = 0);
   void configure(RadialTableMode mode, double spacing = 0.001,
                  std::size_t max_bytes = std::numeric_limits<std::size_t>::max());
   // With derivatives=false only vals is refreshed; ders remains unchanged.
   void eval(double r, double slope, double shift, int k,
             std::vector<double>& vals, std::vector<double>& ders,
-            bool derivatives = true);
+            bool derivatives = true, bool positive_l = false);
   // Frozen hits/fallbacks count scalar contraction requests; generic counts
   // count basis-vector requests. tables/bytes describe resident knot storage.
   RadialTableStats stats() const;
@@ -41,20 +42,23 @@ class Radial {
   int size() const { return basis_->rb_size; }
  private:
   std::unique_ptr<radial_math::AnyRadialBasis> basis_;
+  double angular_cutoff_=0;
   struct Frozen {
-    double slope=1, shift=0, step=0;
+    double slope=1, shift=0, step=0, cutoff=0;
     int channel=0, status=0; // 0 unbuilt, 1 table, 2 invalid, 3 capacity
     std::size_t intervals=0, tile=0, lane=0;
     bool packed=false;
     std::vector<double> coeff, knots;
   };
   struct Tile {
-    std::size_t lanes=0;
+    std::size_t lanes=0, intervals=0;
+    double cutoff=0;
     // [grid point][occupied lane][value, derivative], no padding lanes.
     std::vector<double> knots;
   };
   std::vector<Frozen> frozen_;
   std::vector<Tile> frozen_tiles_;
+  std::array<std::size_t,2> tile_tail_{{std::numeric_limits<std::size_t>::max(),std::numeric_limits<std::size_t>::max()}};
   std::vector<std::size_t> frozen_ids_;
   std::vector<int> frozen_species_slots_;
   std::size_t frozen_pairs_=0, frozen_model_pairs_=0;

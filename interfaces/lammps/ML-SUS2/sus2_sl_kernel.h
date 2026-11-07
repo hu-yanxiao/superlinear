@@ -67,7 +67,8 @@ class Kernel {
   std::vector<double> y_scratch_,dy_scratch_,rb_scratch_,dr_scratch_,rv_scratch_,rd_scratch_;
   std::vector<double> v_scratch_,d_scratch_,s_scratch_,gate_moment_adj_;
   std::vector<std::array<double,4>> edge_coeff_scratch_;
-  std::vector<int> basic_mu_,basic_sh_;
+  std::vector<int> basic_mu_,basic_sh_,basic_all_,basic_l0_,basic_none_;
+  const std::vector<int>* active_basic_=nullptr;
   struct Contraction { int src,dst; double coefficient; };
   std::vector<Contraction> gate_contraction_,outer_contraction_;
   // One block's topology, with groups contiguous in a reusable scratch tile.

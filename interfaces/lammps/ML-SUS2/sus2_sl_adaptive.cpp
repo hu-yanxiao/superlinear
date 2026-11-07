@@ -60,15 +60,15 @@ void Adaptive::edge(Radial&radial,const std::array<double,3>&d,int ti,int tj,con
  if(ti<0||ti>=C||tj<0||tj>=C)throw std::runtime_error("adaptive species out of range");
  value.assign(N,0);coord.assign(3*N,0);const int W=derivative_width();signal_der.assign(static_cast<size_t>(N)*W,0);
  double r2=0;for(double x:d)r2+=x*x;double r=std::sqrt(r2);if(r>=m.max_dist)return;
- auto&y=y_;auto&dy=dy_;auto&rb=rb_;auto&dr=dr_;harmonics(d,m.lmax,harmonic_norm_,y,dy);
+ auto&y=y_;auto&dy=dy_;auto&rb=rb_;auto&dr=dr_;const int active_L=r>=m.angular_max_dist?1:L;harmonics(d,active_L-1,harmonic_norm_,y,dy);
  const int P=shared_n_?L*o_*latent_:shared_o_?L*R:rows_;
  auto&phi=phi_;auto&first=first_;
  if(shared_o_){if(source<0 || (static_cast<std::size_t>(source)+1)*P>projected_.size())throw std::runtime_error("shared-o source projection is not prepared");std::copy(projected_.begin()+static_cast<std::size_t>(source)*P,projected_.begin()+(static_cast<std::size_t>(source)+1)*P,phi.begin());}
- else for(int p=0;p<P;++p){double z=0;for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
- for(int l=0;l<L;++l)for(int o=0;o<o_;++o){
+ else for(int p=0;p<(active_L==1?P/L:P);++p){double z=0;for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
+ for(int l=0;l<active_L;++l)for(int o=0;o<o_;++o){
   const int mu=o*L+l,row=(l*o_+o)*R;
   const int sb=scaling_map_==0?0:scaling_map_==1?l:scaling_map_==2?o:mu,pair=ti*C+tj,sc=2*sb*C*C+pair;
-  radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr);
+  radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr,true,l>0);
   double rv=0,rd=0;auto&rq=rq_;rq.assign(shared_o_?P:q_,0);
   for(int n=0;n<R;++n){double coeff=m.radial_coeffs[mu*(R+C)+n];for(int t=0;t<latent_;++t){int p=shared_n_?(l*o_+o)*latent_+t:shared_o_?l*R+n:row+n;double a=amplitude_[((species_?tj*rows_:0)+row+n)*latent_+t];coeff+=a*phi[p];if(shared_o_)rq[p]+=rb[n]*a;else for(int q=0;q<q_;++q)rq[q]+=rb[n]*a*first[p]*weight_[p*q_+q];}rv+=coeff*rb[n];rd+=coeff*dr[n];}
   double species=m.radial_coeffs[mu*(R+C)+R+ti]*m.radial_coeffs[mu*(R+C)+R+tj];

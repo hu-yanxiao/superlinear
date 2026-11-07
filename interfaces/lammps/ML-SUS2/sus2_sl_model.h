@@ -11,7 +11,7 @@ struct Model {
   std::map<std::string,std::string> fields;
   int species_count=0, lmax=0, kmax=0, radial_size=0, radial_funcs=0;
   int moments=0, scalar_count=0;
-  double min_dist=0, max_dist=0, scaling=1;
+  double min_dist=0, max_dist=0, angular_max_dist=0, scaling=1;
   std::vector<double> radial_coeffs;
   std::vector<std::array<int,3> > basic;
   std::vector<Product> products;

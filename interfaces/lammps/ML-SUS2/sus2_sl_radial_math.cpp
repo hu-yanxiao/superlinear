@@ -40,12 +40,14 @@ bool AnyRadialBasis::TableKey::operator<(const TableKey& other) const
 {
 	if (slope != other.slope) return slope < other.slope;
 	if (shift != other.shift) return shift < other.shift;
+	if (cutoff != other.cutoff) return cutoff < other.cutoff;
 	return channel < other.channel;
 }
 
 void AnyRadialBasis::ClearInferenceRadialTables()
 {
 	inference_tables_.clear();
+	raw_valid_ = false;
 	inference_table_stats_.tables = 0;
 	inference_table_stats_.bytes = 0;
 	table_state_size_ = -1;
@@ -80,7 +82,7 @@ RadialTableStats AnyRadialBasis::GetInferenceRadialTableStats() const
 
 bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, int k)
 {
-	if (!inference_table_active_ || inference_table_building_ ||
+	if (raw_envelope_ || !inference_table_active_ || inference_table_building_ ||
 		inference_table_mode_ == RadialTableMode::Direct) return false;
 	// Each cache belongs to one concrete radial basis instance, so distinct
 	// basis types cannot alias. All mutable base state is checked separately.
@@ -96,9 +98,10 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 		table_state_cutoff_ = radial_cutoff_type;
 		table_state_cutoff_p_ = radial_cutoff_p;
 	}
+	const double upper = evaluation_cutoff_ > 0 ? evaluation_cutoff_ : max_dist;
 	const double lower = std::max(0.0, min_dist);
 	if (!std::isfinite(r) || !std::isfinite(min_dist) || !std::isfinite(max_dist) ||
-		r < lower || r > max_dist || !(max_dist > lower)) {
+		r < lower || r > upper || !(upper > lower)) {
 		++inference_table_stats_.domain_fallbacks;
 		++inference_table_stats_.direct_fallbacks;
 		return false;
@@ -108,7 +111,7 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 		++inference_table_stats_.direct_fallbacks;
 		return false;
 	}
-	const TableKey key = {RadialDoubleBits(scal), RadialDoubleBits(s), k};
+	const TableKey key = {RadialDoubleBits(scal), RadialDoubleBits(s), RadialDoubleBits(upper), k};
 	auto found = inference_tables_.find(key);
 	// Empty entries memoize a rejected direct basis, avoiding a table rebuild
 	// for every neighbor. Their metadata is outside the knot-storage cap.
@@ -126,7 +129,7 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 			++inference_table_stats_.memory_fallbacks;
 			++inference_table_stats_.direct_fallbacks;
 		};
-		const double count = std::ceil((max_dist - lower) / inference_table_spacing_);
+		const double count = std::ceil((upper - lower) / inference_table_spacing_);
 		if (static_cast<std::size_t>(rb_size) > std::numeric_limits<std::size_t>::max() / 2) {
 			reject_capacity();
 			return false;
@@ -142,13 +145,13 @@ bool AnyRadialBasis::TryInferenceRadialTable(double r, double scal, double s, in
 		}
 		HermiteTable table;
 		table.lower = lower;
-		table.upper = max_dist;
+		table.upper = upper;
 		table.intervals = static_cast<std::size_t>(count);
 		if (table.intervals >= available / sizeof(double) / width) {
 			reject_capacity();
 			return false;
 		}
-		table.step = (max_dist - lower) / static_cast<double>(table.intervals);
+		table.step = (upper - lower) / static_cast<double>(table.intervals);
 		const std::size_t storage = (table.intervals + 1) * width;
 		if (storage > table.knots.max_size()) {
 			reject_capacity();
@@ -252,22 +255,25 @@ void AnyRadialBasis::SetRadialCutoff(const std::string& cutoff_type, int cutoff_
 
 void AnyRadialBasis::CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const
 {
+	if (raw_envelope_) { cutoff_f=1; cutoff_der=0; return; }
+	const double rc=evaluation_cutoff_>0?evaluation_cutoff_:max_dist;
+	if (evaluation_cutoff_>0 && r>=rc) {cutoff_f=0;cutoff_der=0;return;}
 	if (radial_cutoff_type == "legacy") {
-		const double Dr = r - max_dist;
+		const double Dr = r - rc;
 		cutoff_f = Dr * Dr;
 		cutoff_der = 2.0 * Dr;
 		return;
 	}
 	if (radial_cutoff_type != "polynomial")
 		ERROR("Unknown radial_cutoff_type: " + radial_cutoff_type);
-	if (!(max_dist > 0.0))
+	if (!(rc > 0.0))
 		ERROR("Polynomial radial cutoff requires max_dist > 0");
-	if (r >= max_dist) {
+	if (r >= rc) {
 		cutoff_f = 0.0;
 		cutoff_der = 0.0;
 		return;
 	}
-	const double x = r / max_dist;
+	const double x = r / rc;
 	const double one_minus_x = 1.0 - x;
 	// This is algebraically identical to the normalized smooth polynomial
 	// 1-A*x^p+B*x^(p+1)-C*x^(p+2), but its factored form stays
@@ -283,9 +289,51 @@ void AnyRadialBasis::CalcRadialCutoff(double r, double& cutoff_f, double& cutoff
 	const double x_p_minus_1 =
 		radial_cutoff_p == 1 ? 1.0 : std::pow(x, radial_cutoff_p - 1);
 	cutoff_der = -0.5 * p * (p + 1.0) * (p + 2.0)
-		* x_p_minus_1 * one_minus_x * one_minus_x / max_dist;
+		* x_p_minus_1 * one_minus_x * one_minus_x / rc;
 }
 
+
+void AnyRadialBasis::RB_CalcForCutoff(double r,double scal,double shift,int k,
+    double cutoff,bool derivatives)
+{
+    if (!(cutoff>0) || !std::isfinite(cutoff) || cutoff>max_dist)
+        throw std::invalid_argument("Invalid physical radial cutoff");
+    // Preserve the old route, including its arithmetic and table admission.
+    if (cutoff==max_dist && !split_cutoff_enabled_) {
+        if (derivatives) RB_CalcRDerOnly(r,scal,shift,k);
+        else RB_CalcValsOnly(r,scal,shift,k);
+        return;
+    }
+    // The two admitted bases do not depend on channel k. Exact raw-basis
+    // reuse spans l=0 / l>0 and channels sharing the same numerical warp.
+    k=0;
+    if (r>=cutoff) {
+        std::fill(rb_vals.begin(),rb_vals.end(),0.);
+        if (derivatives) std::fill(rb_ders.begin(),rb_ders.end(),0.);
+        return;
+    }
+    const double previous=evaluation_cutoff_;
+    struct Restore {double& target; double value; ~Restore(){target=value;}} restore{evaluation_cutoff_,previous};
+    evaluation_cutoff_=cutoff;
+    if (TryInferenceRadialTable(r,scal,shift,k)) return;
+    if (!raw_valid_ || r!=raw_r_ || scal!=raw_slope_ || shift!=raw_shift_ ||
+        k!=raw_channel_ || min_dist!=raw_min_ || max_dist!=raw_max_ || scaling!=raw_scaling_ ||
+        (derivatives&&!raw_derivatives_)) {
+        struct RawGuard {bool& flag; RawGuard(bool& f):flag(f){flag=true;} ~RawGuard(){flag=false;}} guard(raw_envelope_);
+        if (derivatives) RB_CalcRDerOnly(r,scal,shift,k);
+        else RB_CalcValsOnly(r,scal,shift,k);
+        raw_values_.assign(rb_vals.begin(),rb_vals.begin()+rb_size);
+        if (derivatives) raw_ders_.assign(rb_ders.begin(),rb_ders.begin()+rb_size);
+        raw_r_=r;raw_slope_=scal;raw_shift_=shift;raw_channel_=k;
+        raw_min_=min_dist;raw_max_=max_dist;raw_scaling_=scaling;
+        raw_derivatives_=derivatives;raw_valid_=true;
+    }
+    double f,df;CalcRadialCutoff(r,f,df);
+    for(int b=0;b<rb_size;++b) {
+        rb_vals[b]=f*raw_values_[b];
+        if(derivatives) rb_ders[b]=df*raw_values_[b]+f*raw_ders_[b];
+    }
+}
 
 void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 {

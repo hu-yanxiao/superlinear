@@ -42,7 +42,7 @@ void harmonics(const std::array<double,3>& x,int L,std::vector<double>& v,std::v
 }
 double at(const std::vector<double>& v,int i,double fallback=0) { return i>=0&&i<int(v.size())?v[i]:fallback; }
 }
-Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.min_dist,m.max_dist,m.radial_size,m.scaling,m.text("radial_cutoff_type","legacy"),m.integer("radial_cutoff_p",5)) {
+Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.min_dist,m.max_dist,m.radial_size,m.scaling,m.text("radial_cutoff_type","legacy"),m.integer("radial_cutoff_p",5),m.angular_max_dist) {
  m.validate(); gated_=m.boolean("two_layer_gate_enabled");
  gate_rank_=m.integer("two_layer_gate_k_rank"); outer_rank_=m.boolean("outer_k_rank1_enabled")?m.integer("outer_k_rank",1):0;
  gate_begin_=m.integer("two_layer_gate_k_rank_basic_begin"); outer_begin_=m.integer("outer_k_rank1_basic_begin");
@@ -68,7 +68,7 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  if(m.boolean("multi_layer_gate_enabled")||m.boolean("two_layer_gate_edge_l1_enabled")||m.boolean("two_layer_residual_enabled")) throw std::runtime_error("SUS2 embedded: multilayer, tensor-edge and residual modes are not implemented yet");
  if(gated_&&m.text("two_layer_gate_site_mode","neighbor")!="neighbor") throw std::runtime_error("SUS2 embedded: center-gate mode is not implemented yet");
  if(linear_.size()!=std::size_t(m.scalar_count)*(m.text("readout_mode")=="species"?m.species_count:1)) throw std::runtime_error("SUS2 embedded: invalid readout coefficient count");
- for(const auto&b:m.basic){basic_mu_.push_back(b[0]*(m.lmax+1)+b[1]);basic_sh_.push_back(h(b[1],b[2]));}
+ for(const auto&b:m.basic){basic_all_.push_back(int(basic_mu_.size()));if(b[1]==0)basic_l0_.push_back(int(basic_mu_.size()));basic_mu_.push_back(b[0]*(m.lmax+1)+b[1]);basic_sh_.push_back(h(b[1],b[2]));}
  for(int gate=0;gate<2;++gate){const int rank=gate?gate_rank_:outer_rank_,begin=gate?gate_begin_:outer_begin_,H=(m.lmax+1)*(m.lmax+1);const auto&w=gate?gate_rank_weights_:outer_rank_weights_;auto&out=gate?gate_contraction_:outer_contraction_;
   for(int a=0;a<rank;++a)for(std::size_t b=0;b<m.basic.size();++b){int k=m.basic[b][0],l=m.basic[b][1],mm=m.basic[b][2];out.push_back({int(b),begin+rank*(H-(l+1)*(l+1))+(rank-1-a)*(2*l+1)+mm+l,at(w,(l*rank+a)*m.kmax+k,1)});}}
  prepare_grouped_graph();
@@ -153,29 +153,33 @@ double Kernel::edge_basis(const Edge& e,bool gate,std::vector<double>& v,std::ve
  EdgeMetadata*metadata=Frozen?edge_metadata(e):nullptr;double r;
  if(metadata)r=metadata->distance;else {double r2=0;for(double x:e.d)r2+=x*x;r=std::sqrt(r2);}
  const int pair=metadata?metadata->pair:types_[e.i]*C+types_[e.j];
- auto&y=y_scratch_;auto&dy=dy_scratch_;auto&rb=rb_scratch_;auto&dr=dr_scratch_;harmonics<Derivatives>(e.d,m.lmax,y,dy);
+ auto&y=y_scratch_;auto&dy=dy_scratch_;auto&rb=rb_scratch_;auto&dr=dr_scratch_;
  if(Materialize){v.resize(m.basic.size());if(Derivatives)d.resize(3*m.basic.size());}
+ active_basic_=r>=m.max_dist?&basic_none_:(r>=m.angular_max_dist?&basic_l0_:&basic_all_);
  if(r>=m.max_dist){
   // The ordinary path overwrites all outputs; only this early exit needs zeros.
   if(Materialize){std::fill(v.begin(),v.end(),0.);if(Derivatives)std::fill(d.begin(),d.end(),0.);}
   return r;
  }
+ const int active_L=r>=m.angular_max_dist?1:L;
+ harmonics<Derivatives>(e.d,active_L-1,y,dy);
+ if(Materialize&&active_L<L){std::fill(v.begin(),v.end(),0.);if(Derivatives)std::fill(d.begin(),d.end(),0.);}
  const auto&scale=(gate&&!gate_scal_.empty())?gate_scal_:scal_;
  const auto& coeff=(gate&&!gate_radial_.empty())?gate_radial_:m.radial_coeffs;
  auto&rv=rv_scratch_;auto&rd=rd_scratch_;rv.resize(m.radial_funcs);rd.resize(m.radial_funcs);
- if(!Frozen||!radial_.eval_frozen(r,pair,gate,rv,rd,metadata?&metadata->interpolation:nullptr,Derivatives))for(int mu=0;mu<m.radial_funcs;++mu) {
-  int k=mu/L,l=mu%L;
+ if(!Frozen||!radial_.eval_frozen(r,pair,gate,rv,rd,metadata?&metadata->interpolation:nullptr,Derivatives))for(int k=0;k<m.kmax;++k)for(int l=0;l<active_L;++l) {
+  const int mu=k*L+l;
   int sb=scaling_mode_==2?k:(scaling_mode_==1?l:(scaling_mode_==0?0:mu));
   int sc=2*sb*C*C+pair;
   double slope=at(scale,sc,1),shift=at(scale,sc+C*C,0);
   // K/pair maps share exactly the same warp and basis k across all l.
-  if(l==0||scaling_mode_==1||scaling_mode_==3)radial_.eval(r,slope,shift,k,rb,dr,Derivatives);
+  if(l==0||(l==1&&m.angular_max_dist!=m.max_dist)||scaling_mode_==1||scaling_mode_==3)radial_.eval(r,slope,shift,k,rb,dr,Derivatives,l>0);
   int stride=(gate&&!gate_radial_.empty())?R:R+C;int off=mu*stride;
   // Native radial coefficients are shared across center species.
   double a=0,da=0;for(int q=0;q<R;++q){a+=at(coeff,off+q)*rb[q];if(Derivatives)da+=at(coeff,off+q)*dr[q];}
   rv[mu]=a;rd[mu]=da;
  }
- if(Materialize)for(std::size_t b=0;b<m.basic.size();++b){int mu=basic_mu_[b],sh=basic_sh_[b];v[b]=rv[mu]*y[sh];if(Derivatives)for(int q=0;q<3;++q)d[3*b+q]=rd[mu]*e.d[q]/r*y[sh]+rv[mu]*dy[3*sh+q];}
+ if(Materialize)for(int b:*active_basic_){int mu=basic_mu_[b],sh=basic_sh_[b];v[b]=rv[mu]*y[sh];if(Derivatives)for(int q=0;q<3;++q)d[3*b+q]=rd[mu]*e.d[q]/r*y[sh]+rv[mu]*dy[3*sh+q];}
  return r;
 }
 void Kernel::contract(double* v,bool gate,bool reverse)const {
@@ -186,13 +190,14 @@ void Kernel::contract(double* v,bool gate,bool reverse)const {
 template<bool Frozen,bool Derivatives>
 void Kernel::edge_mixer(const Edge&e,std::vector<double>&v,std::vector<double>&d,std::vector<double>&s){
  const Model&m=model_;int L=m.lmax+1,H=L*L,O=outer_rank_,F=m.radial_funcs,R=m.radial_size,C=m.species_count;
- v.assign(O*H,0);if(Derivatives){d.assign(3*O*H,0);s.assign(O*H*F,0);}auto&y=y_scratch_;auto&dy=dy_scratch_;auto&rb=rb_scratch_;auto&dr=dr_scratch_;harmonics<Derivatives>(e.d,m.lmax,y,dy);
+ v.assign(O*H,0);if(Derivatives){d.assign(3*O*H,0);s.assign(O*H*F,0);}auto&y=y_scratch_;auto&dy=dy_scratch_;auto&rb=rb_scratch_;auto&dr=dr_scratch_;
  EdgeMetadata*metadata=Frozen?edge_metadata(e):nullptr;double r;
  if(metadata)r=metadata->distance;else {double r2=0;for(double a:e.d)r2+=a*a;r=std::sqrt(r2);}
  if(r>=m.max_dist)return;
- for(int l=0;l<L;++l)for(int k=0;k<m.kmax;++k){int mu=k*L+l;
+ const int active_L=r>=m.angular_max_dist?1:L;harmonics<Derivatives>(e.d,active_L-1,y,dy);
+ for(int l=0;l<active_L;++l)for(int k=0;k<m.kmax;++k){int mu=k*L+l;
   int sb=scaling_mode_==2?k:(scaling_mode_==1?l:(scaling_mode_==0?0:mu));int sc=2*sb*C*C+types_[e.i]*C+types_[e.j];
-  radial_.eval(r,at(scal_,sc,1),at(scal_,sc+C*C),k,rb,dr,Derivatives);
+  radial_.eval(r,at(scal_,sc,1),at(scal_,sc+C*C),k,rb,dr,Derivatives,l>0);
   double c=at(m.radial_coeffs,mu*(R+C)+R+types_[e.i]),z=at(m.radial_coeffs,mu*(R+C)+R+types_[e.j]);
   double a=at(gate_add_,types_[e.j]*F+mu,at(gate_add_,types_[e.j],1)),signal=c*(z+(gated_?a*gate_[e.j*F+mu]:0));
   for(int o=0;o<O;++o){double w=0,dw=0;int base=((l*O+o)*m.kmax+k)*R;for(int b=0;b<R;++b){double q=mixer_.at(base+b);w+=q*rb[b];if(Derivatives)dw+=q*dr[b];}
@@ -243,7 +248,7 @@ void Kernel::coordinate_reverse(const std::vector<double>&moment_adj,Result&resu
   const double r=edge_basis<Frozen,true,!Stream>(e,Gate,v,d);
   prepare_edge_coefficients<Gate>(e);
   const bool within=r<m.max_dist;std::array<double,3>g{{0,0,0}};
-  for(std::size_t b=0;b<m.basic.size();++b){const int mu=basic_mu_[b],sh=basic_sh_[b];const auto&x=edge_coeff_scratch_[mu];
+  for(int b:*active_basic_){const int mu=basic_mu_[b],sh=basic_sh_[b];const auto&x=edge_coeff_scratch_[mu];
    double adj;
    if(Gate)adj=moment_adj[e.i*M+b]*x[0]*x[1];
    else {
@@ -289,14 +294,14 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  }
  catch(const std::bad_alloc&){edge_metadata_.clear();}
  for(std::size_t k=0;k<edges_.size();++k){const auto&x=edges_[k];double r2=0;for(double a:x.d)r2+=a*a;if(x.i<0||x.i>=n||x.j<0||x.j>=all||!(r2>0)||!std::isfinite(r2))throw std::runtime_error("distributed EFS neighborhood contains an invalid source or distance");
-  if(Frozen&&k<edge_metadata_.size()){auto&meta=edge_metadata_[k];meta.distance=std::sqrt(r2);meta.pair=t[x.i]*m.species_count+t[x.j];meta.interpolation.ready=false;}}
+  if(Frozen&&k<edge_metadata_.size()){auto&meta=edge_metadata_[k];meta.distance=std::sqrt(r2);meta.pair=t[x.i]*m.species_count+t[x.j];meta.interpolation.shell[0].ready=false;meta.interpolation.shell[1].ready=false;}}
  // outer() initializes each complete adjoint row before seeding/backpropagation.
  gate_.assign(all*W,0);gate_adj_.assign(all*W,0);outer_moments_.assign(n*M,0);outer_adj_.resize(n*M);
  local_gate_adj_.assign(joint_?n*M:0,0);extra_energy_.assign(n,0);
  // finish() assigns every owned site energy before gate-readout/ZBL additions.
  partial_.energy=0;partial_.virial.fill(0);partial_.force.assign(all,std::array<double,3>{{0,0,0}});partial_.site_energy.resize(n);
  if(!gated_)return;gate_moments_.assign(n*M,0);
- auto&v=v_scratch_;auto&d=d_scratch_;for(const auto&x:edges_){edge_basis<Frozen,false>(x,true,v,d);prepare_edge_coefficients<true>(x);for(std::size_t b=0;b<v.size();++b){int mu=basic_mu_[b];
+ auto&v=v_scratch_;auto&d=d_scratch_;for(const auto&x:edges_){edge_basis<Frozen,false>(x,true,v,d);prepare_edge_coefficients<true>(x);for(int b:*active_basic_){int mu=basic_mu_[b];
   gate_moments_[x.i*M+b]+=edge_coeff_scratch_[mu][0]*edge_coeff_scratch_[mu][1]*v[b];}}
  for(int i=0;i<n;++i){double*a=gate_moments_.data()+i*M;contract(a,true);graph(a,true);
   if(adaptive_mode_)for(int q=0;q<W;++q)gate_[i*W+q]=a[feature_nodes_[q]];
@@ -312,7 +317,7 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  typedef std::chrono::steady_clock Clock;Clock::time_point stamp;
  if(profile_enabled_){outer_profile_.fill(0);stamp=Clock::now();}
  const auto stage=[&](int index){if(profile_enabled_){const auto now=Clock::now();outer_profile_[index]=std::chrono::duration<double>(now-stamp).count();stamp=now;}};
- auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;for(const auto&e:edges_){if(!pure_&&!adaptive_mode_){edge_basis<Frozen,false>(e,false,v,d);prepare_edge_coefficients<false>(e);for(std::size_t b=0;b<v.size();++b){int mu=basic_mu_[b];
+ auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;for(const auto&e:edges_){if(!pure_&&!adaptive_mode_){edge_basis<Frozen,false>(e,false,v,d);prepare_edge_coefficients<false>(e);for(int b:*active_basic_){int mu=basic_mu_[b];
   outer_moments_[e.i*M+b]+=edge_coeff_scratch_[mu][0]*edge_coeff_scratch_[mu][3]*v[b];}}}
  const auto&species=species_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
@@ -351,7 +356,7 @@ const Result& Kernel::finish_impl(){const Model&m=model_;int M=m.moments,F=m.rad
 }
 double Kernel::memory_usage() const {
  const std::vector<double>* arrays[]={&gate_moments_,&gate_,&gate_adj_,&outer_moments_,&outer_adj_,&local_gate_adj_,&extra_energy_,&weights_,&linear_,&mult_,&gate_type_,&gate_add_,&gate_radial_,&scal_,&gate_scal_,&gate_rank_weights_,&outer_rank_weights_,&species_,&bias_,&body_mix_,&mixer_,&y_scratch_,&dy_scratch_,&rb_scratch_,&dr_scratch_,&rv_scratch_,&rd_scratch_,&v_scratch_,&d_scratch_,&s_scratch_,&gate_moment_adj_,&partial_.site_energy};
- std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_.stats().bytes;
+ std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity()+basic_all_.capacity()+basic_l0_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_.stats().bytes;
  if(joint_)bytes+=joint_->memory_usage();
  if(adaptive_)bytes+=adaptive_->memory_usage()+sizeof(double)*adaptive_compact_adj_.capacity();
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
