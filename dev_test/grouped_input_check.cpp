@@ -222,6 +222,14 @@ int main() {
         Require(stat((root + "/run").c_str(), &info) == 0 && S_ISDIR(info.st_mode), "create output directory only for execution");
         Fixture("keep", "run/initial.sus2");
         Bad({"train", config}, "refusing to reuse/overwrite");
+        std::string dual_model = model;
+        dual_model.insert(dual_model.find("  neighbor_cutoff:"), "  angular_cutoff: 5\n");
+        const auto dual_cutoff = Run({"init-sh", Fixture(dual_model),
+            "--output.model=" + root + "/dual.sus2", "--check-config"});
+        Require(dual_cutoff.opts.at("angular-cutoff") == "5", "angular cutoff mapping");
+        Bad({"init-sh", "--model.kind=static-radial", "--model.neighbor_cutoff=6.5", "--model.angular_cutoff=7", "--check-config"}, "must be <=");
+        Bad({"init-sh", "--model.kind=static-radial", "--model.angular_cutoff=0", "--check-config"}, "finite");
+        Bad({"init-sh", "--model.kind=static-radial", "--model.angular_cutoff=nan", "--check-config"}, "finite");
         std::cout << "GROUPED_INPUT_PASS checks=" << checks << " fixtures=" << root << '\n';
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

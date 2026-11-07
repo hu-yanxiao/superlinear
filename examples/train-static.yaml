@@ -5,7 +5,8 @@ model:
   species_count: 2                 # Number of CFG types (0, 1, ...)
   l_max: 3                        # L
   radial_channels: 4              # K
-  neighbor_cutoff: 6.5             # Angstrom
+  neighbor_cutoff: 6.5             # Angstrom; l=0 and neighbor search
+  angular_cutoff: 5.0              # Optional l>0 cutoff in both layers; default neighbor_cutoff
   radial:
     basis: chebyshev-sss
     basis_size: 10

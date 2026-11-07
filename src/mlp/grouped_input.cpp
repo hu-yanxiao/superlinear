@@ -28,6 +28,7 @@ const Rule rules[] = {
     {"model.l_max", "l-max", "int"},
     {"model.radial_channels", "k-max", "positive-int"},
     {"model.neighbor_cutoff", "cutoff", "positive-real"},
+    {"model.angular_cutoff", "angular-cutoff", "positive-real"},
     {"model.radial.basis", "radial-basis-type", "chebyshev-sss=RBChebyshev_sss|laguerre-log1p=RBLaguerre_log1p"},
     {"model.radial.basis_size", "radial-basis-size", "positive-int"},
     {"model.radial.basis_scale", "scaling", "positive-real"},
@@ -363,6 +364,12 @@ void ValidateLegacyOptions(const Values& opts, bool static_profile, bool legacy_
             while (std::getline(in, item, '|')) if (item.substr(item.find('=') + 1) == opts.at(r.option)) valid = true;
             if (!valid) Fail("unsupported native value for --" + std::string(r.option));
         }
+    }
+    if (opts.count("angular-cutoff")) {
+        const double angular = std::stod(opts.at("angular-cutoff"));
+        const double radial = opts.count("cutoff") ? std::stod(opts.at("cutoff")) :
+            opts.count("max-dist") ? std::stod(opts.at("max-dist")) : 7.5;
+        if (angular > radial) Fail("model.angular_cutoff must be <= model.neighbor_cutoff (default 7.5)");
     }
     if (opts.count("two-layer-gate-decoupled-scaling") && opts.at("two-layer-gate-decoupled-scaling") != "true")
         Fail("a legacy decoupled-scaling flag enables the feature by presence; use model.coordination.distance_warp: shared instead");
