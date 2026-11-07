@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 
 using namespace std;
 
@@ -20,28 +21,31 @@ void AnyRadialBasis::SetRadialCutoff(const std::string& cutoff_type, int cutoff_
 		ERROR("radial_cutoff_type should be 'legacy' or 'polynomial'");
 	if (cutoff_p < 1 || cutoff_p > 64)
 		ERROR("radial_cutoff_p should be in [1, 64]");
+	raw_valid_ = false;
 	radial_cutoff_type = cutoff_type;
 	radial_cutoff_p = cutoff_p;
 }
 
 void AnyRadialBasis::CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const
 {
+	if (raw_envelope_) { cutoff_f=1.0; cutoff_der=0.0; return; }
+	const double rc = envelope_cutoff_ > 0.0 ? envelope_cutoff_ : max_dist;
 	if (radial_cutoff_type == "legacy") {
-		const double Dr = r - max_dist;
+		const double Dr = r - rc;
 		cutoff_f = Dr * Dr;
 		cutoff_der = 2.0 * Dr;
 		return;
 	}
 	if (radial_cutoff_type != "polynomial")
 		ERROR("Unknown radial_cutoff_type: " + radial_cutoff_type);
-	if (!(max_dist > 0.0))
+	if (!(rc > 0.0))
 		ERROR("Polynomial radial cutoff requires max_dist > 0");
-	if (r >= max_dist) {
+	if (r >= rc) {
 		cutoff_f = 0.0;
 		cutoff_der = 0.0;
 		return;
 	}
-	const double x = r / max_dist;
+	const double x = r / rc;
 	const double one_minus_x = 1.0 - x;
 	// This is algebraically identical to the normalized smooth polynomial
 	// 1-A*x^p+B*x^(p+1)-C*x^(p+2), but its factored form stays
@@ -57,9 +61,53 @@ void AnyRadialBasis::CalcRadialCutoff(double r, double& cutoff_f, double& cutoff
 	const double x_p_minus_1 =
 		radial_cutoff_p == 1 ? 1.0 : std::pow(x, radial_cutoff_p - 1);
 	cutoff_der = -0.5 * p * (p + 1.0) * (p + 2.0)
-		* x_p_minus_1 * one_minus_x * one_minus_x / max_dist;
+		* x_p_minus_1 * one_minus_x * one_minus_x / rc;
 }
 
+
+void AnyRadialBasis::RB_CalcForCutoff(double r,double scal,double shift,int k,double cutoff,int mode)
+{
+    if (angular_max_dist == max_dist) {
+        if(mode==0) RB_CalcValsOnly(r,scal,shift,k);
+        else if(mode==1) RB_CalcRDerOnly(r,scal,shift,k);
+        else RB_Calc(r,scal,shift,k);
+        return;
+    }
+    const int width=mode==0?0:(mode==1?rb_size:5*rb_size);
+    if(r>=cutoff) {
+        std::fill(rb_vals.begin(),rb_vals.end(),0.0);
+        std::fill(rb_ders.begin(),rb_ders.begin()+width,0.0);
+        return;
+    }
+    if(!raw_valid_ || std::memcmp(&r,&raw_r_,sizeof(double))
+        || std::memcmp(&scal,&raw_scal_,sizeof(double))
+        || std::memcmp(&shift,&raw_shift_,sizeof(double))
+        || scaling!=raw_vals_.back() || k!=raw_k_ || mode!=raw_mode_) {
+        raw_valid_=false;
+        raw_envelope_=true;
+        try {
+            if(mode==0) RB_CalcValsOnly(r,scal,shift,k);
+            else if(mode==1) RB_CalcRDerOnly(r,scal,shift,k);
+            else RB_Calc(r,scal,shift,k);
+        } catch(...) { raw_envelope_=false; throw; }
+        raw_envelope_=false;
+        // Trailing private slot records basis scaling; public rb_vals stays R-wide.
+        raw_vals_=rb_vals;raw_vals_.push_back(scaling);raw_ders_.assign(rb_ders.begin(),rb_ders.begin()+width);
+        raw_r_=r;raw_scal_=scal;raw_shift_=shift;raw_k_=k;raw_mode_=mode;raw_valid_=true;
+    }
+    double f,df;envelope_cutoff_=cutoff;
+    CalcRadialCutoff(r,f,df);envelope_cutoff_=0.0;
+    for(int b=0;b<rb_size;++b) {
+        rb_vals[b]=f*raw_vals_[b];
+        if(mode>0) rb_ders[b]=df*raw_vals_[b]+f*raw_ders_[b];
+        if(mode==2) {
+            rb_ders[rb_size+b]=f*raw_ders_[rb_size+b];
+            rb_ders[2*rb_size+b]=df*raw_ders_[rb_size+b]+f*raw_ders_[2*rb_size+b];
+            rb_ders[3*rb_size+b]=f*raw_ders_[3*rb_size+b];
+            rb_ders[4*rb_size+b]=df*raw_ders_[3*rb_size+b]+f*raw_ders_[4*rb_size+b];
+        }
+    }
+}
 
 void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 {
@@ -68,6 +116,7 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 
 	string tmpstr;
 
+	raw_valid_=false;
 	// reading min_dist / scaling
 	ifs >> tmpstr;
 	if (tmpstr == "scaling") {
@@ -94,8 +143,17 @@ void AnyRadialBasis::ReadRadialBasis(std::ifstream & ifs)
 	if (ifs.fail())
 		ERROR("Error reading .sus2 file");
 
-	// reading rb_size 
-	ifs >> tmpstr;
+    angular_max_dist=max_dist;
+    // Optional, serialized immediately after max_dist.
+    ifs >> tmpstr;
+    if(tmpstr=="angular_max_dist") {
+        ifs.ignore(2);ifs>>angular_max_dist;
+        ifs>>tmpstr;
+    }
+    if(!std::isfinite(angular_max_dist) || !(angular_max_dist>0) || angular_max_dist>max_dist)
+        ERROR("angular_max_dist must be finite, positive and <= max_dist");
+    // reading rb_size
+
 	if (tmpstr != "radial_basis_size")
 		ERROR("Error reading .sus2 file");
 	ifs.ignore(2);
@@ -151,8 +209,9 @@ void AnyRadialBasis::WriteRadialBasis(std::ofstream & ofs)
 	if (scaling != 1.0)
 		ofs << "\tscaling = " << scaling << '\n';
 	ofs << "\tmin_dist = " << min_dist << '\n'
-		<< "\tmax_dist = " << max_dist << '\n'
-		<< "\tradial_basis_size = " << rb_size << '\n';
+        << "\tmax_dist = " << max_dist << '\n';
+    if(angular_max_dist!=max_dist) ofs << "\tangular_max_dist = " << angular_max_dist << '\n';
+    ofs << "\tradial_basis_size = " << rb_size << '\n';
 	if (radial_cutoff_type != "legacy") {
 		ofs << "\tradial_cutoff_type = " << radial_cutoff_type << '\n';
 		ofs << "\tradial_cutoff_p = " << radial_cutoff_p << '\n';
@@ -160,7 +219,7 @@ void AnyRadialBasis::WriteRadialBasis(std::ofstream & ofs)
 }
 
 AnyRadialBasis::AnyRadialBasis(double _min_dist, double _max_dist, int _size)
-	: rb_size(_size), min_dist(_min_dist), max_dist(_max_dist)
+	: rb_size(_size), min_dist(_min_dist), max_dist(_max_dist), angular_max_dist(_max_dist)
 {
 	rb_vals.resize(rb_size);
 	rb_ders.resize(rb_size*5);

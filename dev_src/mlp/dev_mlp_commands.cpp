@@ -2626,6 +2626,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 						"         --adaptive-radial-activation=none|tanh (default=none; before radial expansion),\n"
 						"         --adaptive-radial-amplitude-mode=shared|species (default=shared; species is source-neighbor j),\n"
 						"         --tensor-message-lmax=0|1|2 (adaptive radial coefficient gate only; default=0),\n"
+						"         --angular-cutoff=<rc> (0<rc<=cutoff, default=cutoff; l>=1 in both layers),\n"
 						"         --radial-cutoff-type=legacy|polynomial (default=legacy), --radial-cutoff-p=<int> (polynomial default=5),\n"
 				"         --sh-factor-pruning=same-k|legacy|q-total (default=q-total; adaptive/pure default=same-k), --write-sh-scalar-info,\n"
 				"         --two-layer-gate (uses scalar buckets up to --two-layer-gate-body-order),\n"

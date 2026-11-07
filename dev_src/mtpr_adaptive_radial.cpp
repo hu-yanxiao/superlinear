@@ -336,6 +336,13 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                 ? RDM0Angular::PoleValue(l) : 1.0;
             for (int o=0; o<outer_k_rank_; ++o) {
                 const int block=l*outer_k_rank_+o,row=block*R,mu=o*(sh_l_max_+1)+l;
+                if(l>0 && AngularCutoffActive()>0 && nbh.dists[j]>=AngularCutoffActive()) {
+                    ex.radial_values[edge*B+block]=0.0;
+                    if(ex.derivatives) ex.radial_derivatives[edge*B+block]=0.0;
+                    if(tangent) ex.radial_tangents[edge*B+block]=0.0;
+                    continue;
+                }
+
                 const int rb_start=mu_to_radial_eval_block_[mu]*R;
                 double value=0,radial_der=0,value_t=0;
                 for (int n=0; n<R; ++n) {
@@ -1350,8 +1357,6 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
         ERROR("adaptive radial smoothness requires nonnegative weight and positive grid size");
     const int R=p_RadialBasis->rb_size,Q=TwoLayerGateScalarCount(),O=outer_k_rank_;
     const int blocks=(sh_l_max_+1)*O,C=species_count,T=AdaptiveRadialLatentCount();
-    const double cutoff=p_RadialBasis->max_dist;
-    const double weight=coeff*cutoff/(static_cast<double>(grid_size)*blocks*C*C);
     if (gradient!=nullptr) gradient->resize(CoeffCount());
     std::vector<double> inverse_scale(Q);
     for (int q=0;q<Q;++q) inverse_scale[q]=1.0/AdaptiveRadialWeightOptimizerScale(q);
@@ -1362,6 +1367,8 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
         std::vector<double> gram(T*T), u_metric(T*T), g(T), gs(T), gh(T), gg(T);
         for (int l=0;l<=sh_l_max_;++l) for (int o=0;o<O;++o) {
             const int block=l*O+o, mu=o*(sh_l_max_+1)+l;
+        const double cutoff=RadialCutoffForMu(mu);
+        const double weight=coeff*cutoff/(static_cast<double>(grid_size)*blocks*C*C);
             const int c0=RadialCoeffOffset()+mu*RadialCoeffBlockSize();
             const int u0=AdaptiveRadialWeightOffset()+block*T*Q;
             std::fill(gram.begin(),gram.end(),0.0);
@@ -1375,8 +1382,8 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
                 const int slope=ScalingSlopeOffset(mu_to_K[mu],zi,zj);
                 const int shift=ScalingShiftOffset(mu_to_K[mu],zi,zj);
                 for (int point=0;point<grid_size;++point) {
-                    p_RadialBasis->RB_Calc(cutoff*(point+0.5)/grid_size,
-                        regression_coeffs[slope],regression_coeffs[shift],RadialBasisKForMu(mu));
+                    p_RadialBasis->RB_CalcForCutoff(cutoff*(point+0.5)/grid_size,
+                        regression_coeffs[slope],regression_coeffs[shift],RadialBasisKForMu(mu), RadialCutoffForMu(mu), 2);
                     std::fill(g.begin(),g.end(),0.0);
                     std::fill(gs.begin(),gs.end(),0.0);
                     std::fill(gh.begin(),gh.end(),0.0);
@@ -1435,6 +1442,8 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
     std::vector<double> response(static_cast<size_t>(Q+1)*R),der(Q+1),ds(Q+1),dh(Q+1);
     for (int l=0;l<=sh_l_max_;++l) for (int o=0;o<O;++o) {
         const int mu=o*(sh_l_max_+1)+l,row0=(l*O+o)*R;
+        const double cutoff=RadialCutoffForMu(mu);
+        const double weight=coeff*cutoff/(static_cast<double>(grid_size)*blocks*C*C);
         const int c0=RadialCoeffOffset()+mu*RadialCoeffBlockSize();
         for (int n=0;n<R;++n) {
             response[n]=regression_coeffs[c0+n];
@@ -1454,7 +1463,7 @@ void MLMTPR::AddAdaptiveRadialSmoothnessPenalty(double coeff,int grid_size,
             const int slope=ScalingSlopeOffset(mu_to_K[mu],zi,zj),shift=ScalingShiftOffset(mu_to_K[mu],zi,zj);
             for (int point=0;point<grid_size;++point) {
                 const double r=cutoff*(point+0.5)/grid_size;
-                p_RadialBasis->RB_Calc(r,regression_coeffs[slope],regression_coeffs[shift],RadialBasisKForMu(mu));
+                p_RadialBasis->RB_CalcForCutoff(r,regression_coeffs[slope],regression_coeffs[shift],RadialBasisKForMu(mu), RadialCutoffForMu(mu), 2);
                 for (int q=0;q<=Q;++q) {
                     der[q]=ds[q]=dh[q]=0.0;
                     for (int n=0;n<R;++n) {

@@ -1233,6 +1233,9 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const int rb_size = IntOpt(opts, "radial-basis-size", 10);
 	const double min_dist = DoubleOpt(opts, "min-dist", 1.5);
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
+    const double angular_max_dist = DoubleOpt(opts, "angular-cutoff", max_dist);
+    if(!std::isfinite(angular_max_dist) || !(angular_max_dist>0.0) || angular_max_dist>max_dist)
+        ERROR("angular-cutoff must be finite, positive and <= cutoff");
 	const double scaling = DoubleOpt(opts, "scaling", 0.01);
 	const std::string scaling_map = StringOpt(opts, "scaling-map", "LK");
 	const std::string rbasis = CanonicalRadialBasisType(StringOpt(opts, "radial-basis-type", "RBChebyshev_sss"));
@@ -1634,6 +1637,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "radial_basis_type = " << rbasis << "\n";
 	ofs << "\tmin_dist = " << min_dist << "\n";
 	ofs << "\tmax_dist = " << max_dist << "\n";
+    if(angular_max_dist!=max_dist) ofs << "\tangular_max_dist = " << angular_max_dist << "\n";
 	ofs << "\tradial_basis_size = " << rb_size << "\n";
 	if (radial_cutoff_type != "legacy") {
 		ofs << "\tradial_cutoff_type = " << radial_cutoff_type << "\n";

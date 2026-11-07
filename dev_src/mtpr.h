@@ -588,6 +588,10 @@ protected:
 		std::vector<double>& edge_basic_values);
 
 	std::vector<int> radial_eval_to_basis_k_;
+	std::vector<int> radial_eval_positive_l_;
+	double AngularCutoffActive() const { return p_RadialBasis->angular_max_dist!=p_RadialBasis->max_dist ? p_RadialBasis->angular_max_dist : 0.0; }
+	double RadialCutoffForMu(int mu) const { return is_sh_potential_ && mu % (sh_l_max_+1) ? p_RadialBasis->angular_max_dist : p_RadialBasis->max_dist; }
+	double RadialCutoffForEval(int block) const { return radial_eval_positive_l_[block] ? p_RadialBasis->angular_max_dist : p_RadialBasis->max_dist; }
 
 
 

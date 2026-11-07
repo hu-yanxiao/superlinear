@@ -18,6 +18,7 @@ public:
 
 	double min_dist;
 	double max_dist;
+	double angular_max_dist = 0.0; // initialized to max_dist by constructors/read
 	double scaling = 1.0; // all functions are multiplied by scaling
 	std::string radial_cutoff_type = "legacy";
 	int radial_cutoff_p = 5;
@@ -35,6 +36,16 @@ public:
 	void WriteRadialBasis(std::ofstream& ofs);
 	void SetRadialCutoff(const std::string& cutoff_type, int cutoff_p);
 	void CalcRadialCutoff(double r, double& cutoff_f, double& cutoff_der) const;
+
+    // Split-cutoff path only: cache an un-enveloped jet, then apply the
+    // requested envelope. mode: 0 values, 1 radial derivative, 2 full mixed.
+    void RB_CalcForCutoff(double r,double scal,double shift,int k,double cutoff,int mode=2);
+private:
+    bool raw_envelope_ = false, raw_valid_ = false;
+    double envelope_cutoff_ = 0.0, raw_r_=0,raw_scal_=0,raw_shift_=0;
+    int raw_k_=0,raw_mode_=-1;
+    std::vector<double> raw_vals_,raw_ders_;
+public:
 
 	AnyRadialBasis(double _min_dist, double _max_dist, int _size);;
 	AnyRadialBasis(std::ifstream& ifs);

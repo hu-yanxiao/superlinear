@@ -1070,6 +1070,19 @@ void EvalRealSHValuesOnly(const Vector3& rvec,
 
 } // namespace
 
+void EvalRealSHCutoff(const Vector3& v,double r,int lmax,double* y,double* dy,double cutoff) {
+    if(cutoff>0 && r>=cutoff) {
+        const int H=(lmax+1)*(lmax+1);
+        std::fill(y,y+H,0.0);std::fill(dy,dy+3*H,0.0);
+        EvalRealSH(v,r,0,y,dy);
+    } else EvalRealSH(v,r,lmax,y,dy);
+}
+void EvalRealSHValuesOnlyCutoff(const Vector3& v,double r,int lmax,double* y,double cutoff) {
+    if(cutoff>0 && r>=cutoff) {
+        std::fill(y,y+(lmax+1)*(lmax+1),0.0);EvalRealSHValuesOnly(v,r,0,y);
+    } else EvalRealSHValuesOnly(v,r,lmax,y);
+}
+
 void MLMTPR::InvalidateTwoLayerGateTanhMuCache()
 {
 	if (!two_layer_gate_tanh_mu_cache_valid_.empty())
@@ -2713,9 +2726,9 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 						? two_layer_edge_rd_m0_ders_cache_.data() + edge * 3 * sh_count
 						: nullptr);
 			else if (need_derivatives)
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 			else
-				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+				EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 				if (use_lmp_table) {
 					if (store_outer_mu_cache)
@@ -2762,11 +2775,11 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 							C + 2 * scaling_block * C * C + C * C
 							+ C * type_central + type_outer];
 					if (coordinate_only)
-						p_RadialBasis->RB_CalcRDerOnly(r, sigma, shift, basis_k);
+						p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 1);
 					else if (need_derivatives)
-						p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
+						p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 2);
 					else
-						p_RadialBasis->RB_CalcValsOnly(r, sigma, shift, basis_k);
+						p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] =
 							p_RadialBasis->rb_vals[xi] * scaling;
@@ -2849,12 +2862,12 @@ void MLMTPR::BuildTwoLayerEdgePrimitiveCache(const Neighborhoods& neighborhoods,
 										type_central,
 										type_outer);
 								if (coordinate_only)
-									p_RadialBasis->RB_CalcRDerOnly(r, sigma, shift, basis_k);
+									p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 1);
 								else if (need_derivatives)
-									p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
+									p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 2);
 								else
-									p_RadialBasis->RB_CalcValsOnly(
-										r, sigma, shift, basis_k);
+									p_RadialBasis->RB_CalcForCutoff(
+										r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 0);
 								for (int xi = 0; xi < R; ++xi)
 									gate_rb_vals_write[
 										eval_block * R + xi] =
@@ -3447,7 +3460,7 @@ void MLMTPR::CalcSHMomentValuesOnlyLegacy(const Neighborhood& nbh)
 			radial_values_use =
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -3464,11 +3477,11 @@ void MLMTPR::CalcSHMomentValuesOnlyLegacy(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_CalcValsOnly(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				}
@@ -3669,7 +3682,7 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 						const int scaling_block =
 							radial_eval_to_scaling_block_[eval_block];
 						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_CalcValsOnly(
+						p_RadialBasis->RB_CalcForCutoff(
 							r,
 							regression_coeffs[
 								C + 2 * scaling_block * C * C
@@ -3677,7 +3690,7 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 							regression_coeffs[
 								C + 2 * scaling_block * C * C + C * C
 								+ C * type_central + type_outer],
-							basis_k);
+							basis_k, RadialCutoffForEval(eval_block), 0);
 						for (int xi = 0; xi < R; ++xi)
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -3685,7 +3698,7 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 				}
 			}
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -3702,11 +3715,11 @@ void MLMTPR::CalcSHMomentValuesOnlyRadialMixing(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_CalcValsOnly(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				}
@@ -3867,7 +3880,7 @@ void MLMTPR::CalcSHEdgeBasicValues(const Neighborhood& nbh,
 		radial_values_use =
 			two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(radial_list,
@@ -3886,13 +3899,13 @@ void MLMTPR::CalcSHEdgeBasicValues(const Neighborhood& nbh,
 			     ++eval_block) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_CalcValsOnly(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C
 					                  + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C
 					                  + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 0);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] =
 						p_RadialBasis->rb_vals[xi] * scaling;
@@ -4017,7 +4030,7 @@ void MLMTPR::CalcTwoLayerGateEdgeBasicValues(
 			+ edge * static_cast<size_t>(
 				use_gate_radial ? gate_mu_stride : mu_stride);
 	} else {
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(
 				use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -4029,13 +4042,13 @@ void MLMTPR::CalcTwoLayerGateEdgeBasicValues(
 				const int scaling_block =
 					radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_CalcValsOnly(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					TwoLayerGateScalingSlope(
 						scaling_block, type_central, type_outer),
 					TwoLayerGateScalingShift(
 						scaling_block, type_central, type_outer),
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 0);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] =
 						p_RadialBasis->rb_vals[xi] * scaling;
@@ -4480,7 +4493,7 @@ void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)
 			          two_layer_edge_mu_ders_cache_.data() + (edge + 1) * mu_stride,
 			          cached_radial_derivatives);
 	} else {
-		EvalRealSH(rvec, r, sh_l_max_, cached_sh_values, cached_sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, cached_sh_values, cached_sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -4497,11 +4510,11 @@ void MLMTPR::CalcSHMomentValuesWithSiteDerivativeCache(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -4678,16 +4691,16 @@ void MLMTPR::CalcSHMomentValuesWithGradientCacheLegacy(const Neighborhood& nbh)
 				+ static_cast<size_t>(j) * mu_stride;
 			cached_sh_values = cached_sh_values_write;
 			cached_radial_values = cached_radial_values_write;
-			EvalRealSH(rvec, r, sh_l_max_, cached_sh_values_write, cached_sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, cached_sh_values_write, cached_sh_ders, AngularCutoffActive());
 
 			for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi)
 					cached_rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -4885,16 +4898,16 @@ void MLMTPR::CalcSHMomentValuesWithGradientCacheRadialMixing(const Neighborhood&
 			cached_sh_values = cached_sh_values_write;
 			cached_radial_values = cached_radial_values_write;
 			cached_rb_vals_read = cached_rb_vals;
-			EvalRealSH(rvec, r, sh_l_max_, cached_sh_values_write, cached_sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, cached_sh_values_write, cached_sh_ders, AngularCutoffActive());
 
 			for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi)
 					cached_rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -5069,7 +5082,7 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 			radial_derivatives_use =
 				two_layer_edge_mu_ders_cache_.data() + edge * mu_stride;
 	} else {
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -5086,11 +5099,11 @@ void MLMTPR::CalcSHBasisFuncsDers(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -5318,7 +5331,7 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 			EvalRDM0Physical(rvec, r, sh_l_max_, sh_values, nullptr, rd_values);
 			angular_values_use = rd_values;
 		} else
-			EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+			EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -5335,11 +5348,11 @@ void MLMTPR::CalcTwoLayerGateScalarValuesOnly(
 					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_CalcValsOnly(
+						p_RadialBasis->RB_CalcForCutoff(
 							r,
 							TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 							TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-							basis_k);
+							basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				}
@@ -5443,7 +5456,7 @@ void MLMTPR::CalcSecondLayerGateScalarValuesOnly(
 		const Vector3& rvec = nbh.vecs[j];
 		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
-		EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+		EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(use_gate_radial ? second_layer_gate_radial_list : radial_list,
@@ -5460,11 +5473,11 @@ void MLMTPR::CalcSecondLayerGateScalarValuesOnly(
 			for (int eval_block : second_layer_gate_required_radial_eval_blocks_) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_CalcValsOnly(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 0);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] =
 						p_RadialBasis->rb_vals[xi] * scaling;
@@ -5630,11 +5643,11 @@ void MLMTPR::ComputeTwoLayerGateEdgeL1PairCoordTangents(
 	const double* sh_ders_use = edge_sh_ders;
 	if (sh_values_use == nullptr
 	    || (edge_der_weight != nullptr && sh_ders_use == nullptr)) {
-		EvalRealSH(nbh.vecs[neighbor_index],
+		EvalRealSHCutoff(nbh.vecs[neighbor_index],
 		           nbh.dists[neighbor_index],
 		           sh_l_max_,
 		           local_sh_values,
-		           local_sh_ders);
+		           local_sh_ders, AngularCutoffActive());
 		sh_values_use = local_sh_values;
 		sh_ders_use = local_sh_ders;
 	}
@@ -5845,7 +5858,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 					+ edge * static_cast<size_t>(
 						use_gate_radial ? gate_mu_stride : mu_stride);
 			} else {
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 				if (use_lmp_table) {
 					InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
 					                         use_gate_radial ? two_layer_gate_radial_der_list : radial_der_list,
@@ -5861,11 +5874,11 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1ForceChain(
 						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 							const int basis_k = radial_eval_to_basis_k_[eval_block];
-							p_RadialBasis->RB_Calc(
+							p_RadialBasis->RB_CalcForCutoff(
 								r,
 								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-								basis_k);
+								basis_k, RadialCutoffForEval(eval_block), 2);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -6019,8 +6032,8 @@ void MLMTPR::AddTwoLayerGateX2Penalty(
 					edge_sh_values =
 						two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 				} else {
-					EvalRealSHValuesOnly(
-						nbh.vecs[j], nbh.dists[j], sh_l_max_, sh_values);
+					EvalRealSHValuesOnlyCutoff(
+						nbh.vecs[j], nbh.dists[j], sh_l_max_, sh_values, AngularCutoffActive());
 					edge_sh_values = sh_values;
 				}
 			}
@@ -6911,19 +6924,19 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 				sh_values_use =
 					two_layer_edge_sh_values_cache_.data() + edge * sh_count;
 			} else {
-				EvalRealSHValuesOnly(
-					nbh.vecs[j], nbh.dists[j], sh_l_max_, sh_values);
+				EvalRealSHValuesOnlyCutoff(
+					nbh.vecs[j], nbh.dists[j], sh_l_max_, sh_values, AngularCutoffActive());
 			}
 
 			for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 				const int scaling_block =
 					radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					nbh.dists[j],
 					TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 					TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] =
 						p_RadialBasis->rb_vals[xi] * scaling;
@@ -7084,7 +7097,7 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 		if (rd_m0)
 			EvalRDM0Physical(rvec, r, sh_l_max_, sh_values, sh_ders, rd_values);
 		else
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -7101,11 +7114,11 @@ void MLMTPR::AccumulateTwoLayerGateEdgeL1SourceParamGradFromAdjoints(
 			for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 					TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 					rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -7347,7 +7360,7 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 							+ edge * static_cast<size_t>(
 								use_gate_radial ? gate_mu_stride : mu_stride);
 		} else {
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -7364,11 +7377,11 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDers(
 					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 							const int basis_k = radial_eval_to_basis_k_[eval_block];
-							p_RadialBasis->RB_Calc(
+							p_RadialBasis->RB_CalcForCutoff(
 								r,
 								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-								basis_k);
+								basis_k, RadialCutoffForEval(eval_block), 2);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 							rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -7605,7 +7618,7 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 				+ edge * static_cast<size_t>(
 					use_gate_radial ? gate_mu_stride : mu_stride);
 		} else {
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(use_gate_radial ? two_layer_gate_radial_list : radial_list,
@@ -7622,11 +7635,11 @@ void MLMTPR::CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 					for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 						const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
+						p_RadialBasis->RB_CalcForCutoff(
 							r,
 							TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 							TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-							basis_k);
+							basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -7812,7 +7825,7 @@ void MLMTPR::CalcSecondLayerGateWeightedScalarDersForScalarSeeds(
 		const double r = nbh.dists[j];
 		const double inv_r = 1.0 / r;
 		const int type_outer = nbh.types[j];
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 		if (use_lmp_table) {
 			InterpolateSHLmpMuTable(SecondLayerGateUsesSharedRadial()
 					? second_layer_gate_radial_list : radial_list,
@@ -7830,11 +7843,11 @@ void MLMTPR::CalcSecondLayerGateWeightedScalarDersForScalarSeeds(
 			for (int eval_block : second_layer_gate_required_radial_eval_blocks_) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] =
 						p_RadialBasis->rb_vals[xi] * scaling;
@@ -8070,16 +8083,16 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 								+ edge * static_cast<size_t>(
 									use_gate_radial ? gate_mu_stride : mu_stride);
 					} else {
-					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+					EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 							const int basis_k = radial_eval_to_basis_k_[eval_block];
-							p_RadialBasis->RB_Calc(
+							p_RadialBasis->RB_CalcForCutoff(
 								r,
 								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-								basis_k);
+								basis_k, RadialCutoffForEval(eval_block), 2);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -8289,16 +8302,16 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGrad(
 				+ edge * static_cast<size_t>(
 					use_gate_radial ? gate_mu_stride : mu_stride);
 		} else {
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 						TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -8733,16 +8746,16 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 						+ edge * static_cast<size_t>(
 							use_gate_radial ? gate_mu_stride : mu_stride);
 				} else {
-					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+					EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 						for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 							const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 							const int basis_k = radial_eval_to_basis_k_[eval_block];
-							p_RadialBasis->RB_Calc(
+							p_RadialBasis->RB_CalcForCutoff(
 								r,
 								TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 								TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-								basis_k);
+								basis_k, RadialCutoffForEval(eval_block), 2);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -8971,16 +8984,16 @@ void MLMTPR::AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 				+ edge * static_cast<size_t>(
 					use_gate_radial ? gate_mu_stride : mu_stride);
 		} else {
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						TwoLayerGateScalingSlope(scaling_block, type_central, type_outer),
 						TwoLayerGateScalingShift(scaling_block, type_central, type_outer),
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -9408,18 +9421,18 @@ void MLMTPR::AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
 				const double wr =
 					(dir[0] * rvec[0] + dir[1] * rvec[1] + dir[2] * rvec[2])
 					* inv_r;
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 				for (int eval_block : second_layer_gate_required_radial_eval_blocks_) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[
 							C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[
 							C + 2 * scaling_block * C * C + C * C
 							+ C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] =
 							p_RadialBasis->rb_vals[xi] * scaling;
@@ -9510,18 +9523,18 @@ void MLMTPR::AccumulateSecondLayerGateScalarParamGradForScalarSeeds(
 		const double wr = has_der_weights
 			? (wx * rvec[0] + wy * rvec[1] + wz * rvec[2]) * inv_r
 			: 0.0;
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 		for (int eval_block : second_layer_gate_required_radial_eval_blocks_) {
 			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 			const int basis_k = radial_eval_to_basis_k_[eval_block];
-			p_RadialBasis->RB_Calc(
+			p_RadialBasis->RB_CalcForCutoff(
 				r,
 				regression_coeffs[
 					C + 2 * scaling_block * C * C + C * type_central + type_outer],
 				regression_coeffs[
 					C + 2 * scaling_block * C * C + C * C
 					+ C * type_central + type_outer],
-				basis_k);
+				basis_k, RadialCutoffForEval(eval_block), 2);
 			for (int xi = 0; xi < R; ++xi)
 				rb_vals[eval_block * R + xi] =
 					p_RadialBasis->rb_vals[xi] * scaling;
@@ -9670,7 +9683,7 @@ void MLMTPR::CalcSHBasisGateDers(const Neighborhood& nbh,
 			radial_values_use =
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 		} else {
-			EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+			EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -9687,11 +9700,11 @@ void MLMTPR::CalcSHBasisGateDers(const Neighborhood& nbh,
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_CalcValsOnly(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				}
@@ -9893,7 +9906,7 @@ void MLMTPR::AccumulateSHBasisGateDers(
 				sh_ders_use =
 					two_layer_edge_sh_ders_cache_.data() + edge * 3 * sh_count;
 			else if (has_edge_l1) {
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 				sh_values_use = sh_values;
 				sh_ders_use = sh_ders;
 			}
@@ -9901,9 +9914,9 @@ void MLMTPR::AccumulateSHBasisGateDers(
 				two_layer_edge_mu_vals_cache_.data() + edge * mu_stride;
 	} else {
 			if (has_edge_l1)
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 			else
-				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+				EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -9922,13 +9935,13 @@ void MLMTPR::AccumulateSHBasisGateDers(
 				     ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_CalcValsOnly(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C
 							+ C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C
 							+ C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 0);
 					for (int xi = 0; xi < R; ++xi)
 						rb_vals[eval_block * R + xi] =
 							p_RadialBasis->rb_vals[xi] * scaling;
@@ -10285,9 +10298,9 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 					reduce_rd_values ? rd_values : nullptr);
 				if (reduce_rd_values) angular_values_use = rd_values;
 			} else if (has_direction)
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 			else
-				EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+				EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 				for (int eval_block : two_layer_gate_required_radial_eval_blocks_) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
@@ -10297,9 +10310,9 @@ void MLMTPR::CalcTwoLayerGateScalarDirectionalDerivatives(
 					const double shift =
 						TwoLayerGateScalingShift(scaling_block, type_central, type_outer);
 					if (has_direction)
-					p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
+					p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 2);
 				else
-					p_RadialBasis->RB_CalcValsOnly(r, sigma, shift, basis_k);
+					p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 0);
 				for (int xi = 0; xi < R; ++xi) {
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 					if (has_direction)
@@ -10463,9 +10476,9 @@ void MLMTPR::CalcSecondLayerGateScalarDirectionalDerivatives(
 		const double r = nbh.dists[j];
 		const int type_outer = nbh.types[j];
 		if (has_direction)
-			EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+			EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 		else
-			EvalRealSHValuesOnly(rvec, r, sh_l_max_, sh_values);
+			EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, sh_values, AngularCutoffActive());
 
 		for (int eval_block : second_layer_gate_required_radial_eval_blocks_) {
 			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
@@ -10478,9 +10491,9 @@ void MLMTPR::CalcSecondLayerGateScalarDirectionalDerivatives(
 					C + 2 * scaling_block * C * C + C * C
 					+ C * type_central + type_outer];
 			if (has_direction)
-				p_RadialBasis->RB_Calc(r, sigma, shift, basis_k);
+				p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 2);
 			else
-				p_RadialBasis->RB_CalcValsOnly(r, sigma, shift, basis_k);
+				p_RadialBasis->RB_CalcForCutoff(r, sigma, shift, basis_k, RadialCutoffForEval(eval_block), 0);
 			for (int xi = 0; xi < R; ++xi) {
 				rb_vals[eval_block * R + xi] =
 					p_RadialBasis->rb_vals[xi] * scaling;
@@ -10747,7 +10760,7 @@ void MLMTPR::CalcSHSiteEnergyDersLegacy(const Neighborhood& nbh)
 			radial_values_use = grad_neighbor_mu_contract_vals_cache_.data() + static_cast<size_t>(j) * mu_stride;
 			radial_derivatives_use = grad_neighbor_mu_contract_ders_cache_.data() + static_cast<size_t>(j) * mu_stride;
 	} else {
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -10764,11 +10777,11 @@ void MLMTPR::CalcSHSiteEnergyDersLegacy(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -11314,7 +11327,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 						const int scaling_block =
 							radial_eval_to_scaling_block_[eval_block];
 						const int basis_k = radial_eval_to_basis_k_[eval_block];
-						p_RadialBasis->RB_Calc(
+						p_RadialBasis->RB_CalcForCutoff(
 							r,
 							regression_coeffs[
 								C + 2 * scaling_block * C * C
@@ -11322,7 +11335,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 							regression_coeffs[
 								C + 2 * scaling_block * C * C + C * C
 								+ C * type_central + type_outer],
-							basis_k);
+							basis_k, RadialCutoffForEval(eval_block), 2);
 						for (int xi = 0; xi < R; ++xi) {
 							rb_vals[eval_block * R + xi] =
 								p_RadialBasis->rb_vals[xi] * scaling;
@@ -11338,7 +11351,7 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 			radial_values_use = grad_neighbor_mu_contract_vals_cache_.data() + static_cast<size_t>(j) * mu_stride;
 			radial_derivatives_use = grad_neighbor_mu_contract_ders_cache_.data() + static_cast<size_t>(j) * mu_stride;
 	} else {
-		EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+		EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 			if (use_lmp_table) {
 				InterpolateSHLmpMuTable(radial_list,
@@ -11355,11 +11368,11 @@ void MLMTPR::CalcSHSiteEnergyDersRadialMixing(const Neighborhood& nbh)
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi) {
 						rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 						rb_ders[eval_block * R + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -12168,15 +12181,15 @@ void MLMTPR::AccumulateSHGateTangentGradImpl(
 				cached_sh_values = cached_sh_values_write;
 				cached_rb_vals = cached_rb_vals_write;
 				cached_radial_values = cached_radial_values_write;
-				EvalRealSHValuesOnly(rvec, r, sh_l_max_, cached_sh_values_write);
+				EvalRealSHValuesOnlyCutoff(rvec, r, sh_l_max_, cached_sh_values_write, AngularCutoffActive());
 				for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; ++xi)
 						cached_rb_vals_write[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 					for (int xi = 0; xi < R * 5; ++xi)
@@ -13752,16 +13765,16 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 								+ static_cast<size_t>(j) * mu_stride;
 						}
 					} else {
-					EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+					EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 				for (int eval_block = 0; eval_block < eval_block_count; ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 					r,
 					regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < R; ++xi)
 					rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < R * 5; ++xi)
@@ -14327,16 +14340,16 @@ void MLMTPR::AccumulateSHCombinationGradImpl(
 			                           radial_func_count,
 			                           type_central,
 			                           0);
-				EvalRealSH(rvec, r, sh_l_max_, sh_values, sh_ders);
+				EvalRealSHCutoff(rvec, r, sh_l_max_, sh_values, sh_ders, AngularCutoffActive());
 
 		for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 			const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 			const int basis_k = radial_eval_to_basis_k_[eval_block];
-			p_RadialBasis->RB_Calc(
+			p_RadialBasis->RB_CalcForCutoff(
 				r,
 				regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 				regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-				basis_k);
+				basis_k, RadialCutoffForEval(eval_block), 2);
 			for (int xi = 0; xi < R; ++xi)
 				rb_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 			for (int xi = 0; xi < R * 5; ++xi)

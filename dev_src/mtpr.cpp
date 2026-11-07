@@ -5036,6 +5036,10 @@ void MLMTPR::Load(const string& filename)
 		else
 			ERROR("Wrong radial basis type");
 
+    if(p_RadialBasis->angular_max_dist != p_RadialBasis->max_dist) {
+        if(!is_sh_potential_ || (rbasis_type!="RBChebyshev_sss" && rbasis_type!="RBLaguerre_log1p"))
+            ERROR("angular_max_dist currently supports SUS2-SH RBChebyshev_sss and RBLaguerre_log1p only");
+    }
 	if (p_RadialBasis->radial_cutoff_type != "legacy") {
 		if (!is_sh_potential_)
 			ERROR("radial_cutoff_type is supported only by SUS2-SH models");
@@ -6586,10 +6590,10 @@ void MLMTPR::Load(const string& filename)
 							k_ = mu_to_K[mu];
 							const int basis_k = RadialBasisKForMu(mu);
 
-								p_RadialBasis->RB_Calc(dr * n,
+								p_RadialBasis->RB_CalcForCutoff(dr * n,
 									regression_coeffs[C + 2 * k_ * C * C + C * i + j],
 									1.0 * regression_coeffs[C + 2 * k_ * C * C + C * C + C * i + j],
-									basis_k);
+									basis_k, RadialCutoffForMu(mu), 2);
 								const bool decoupled_gate_scaling =
 									is_sh_potential_ && TwoLayerGateUsesDecoupledScaling();
 								if (decoupled_gate_scaling) {
@@ -6597,11 +6601,11 @@ void MLMTPR::Load(const string& filename)
 										base_rb_vals[xi] = p_RadialBasis->rb_vals[xi];
 										base_rb_ders[xi] = p_RadialBasis->rb_ders[xi];
 									}
-									p_RadialBasis->RB_Calc(
+									p_RadialBasis->RB_CalcForCutoff(
 										dr * n,
 										TwoLayerGateScalingSlope(k_, i, j),
 										TwoLayerGateScalingShift(k_, i, j),
-										basis_k);
+										basis_k, RadialCutoffForMu(mu), 2);
 								}
 							for (int xi = 0; xi < R; xi++)
 							{
@@ -11811,11 +11815,11 @@ void MLMTPR::CalcBasisFuncs(const Neighborhood& Neighborhood, double* bf_vals)
 			{
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					Neighborhood.dists[j],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < p_RadialBasis->rb_size; xi++)
 					val_[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 			}
@@ -11922,11 +11926,11 @@ void MLMTPR::CalcBasisFuncsDers(const Neighborhood& Neighborhood)
 				const int radial_base = checked_eval_base(eval_block, "buffer fill");
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					Neighborhood.dists[j],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < p_RadialBasis->rb_size; xi++) {
 					val_[radial_base + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 					der_[radial_base + xi] = p_RadialBasis->rb_ders[xi] * scaling;
@@ -12052,6 +12056,10 @@ int MLMTPR::RadialBasisKForMu(int mu) const
 {
 	if (mu < 0 || mu >= radial_func_count)
 		ERROR("Radial-basis mu index is out of range");
+    // Both admitted split-cutoff bases are independent of k. Their raw
+    // polynomial recurrence shares an owner whenever sigma/shift share one.
+    if (p_RadialBasis->angular_max_dist != p_RadialBasis->max_dist)
+        return 0;
 	if (UsesJacobiIndexedBasis())
 		return JacobiIndexedBlockForMu(mu);
 	if (mu >= static_cast<int>(mu_to_sigma.size()))
@@ -12102,17 +12110,20 @@ void MLMTPR::MemAlloc()
 	mu_to_radial_eval_block_.resize(radial_func_count);
 	radial_eval_to_scaling_block_.clear();
 	radial_eval_to_basis_k_.clear();
+	radial_eval_positive_l_.clear();
 	std::map<std::pair<int, int>, int> radial_eval_lookup;
 	for (int mu = 0; mu < radial_func_count; ++mu) {
 		const int scaling_block = mu_to_K[mu];
 		const int basis_k = RadialBasisKForMu(mu);
-		const std::pair<int, int> eval_key(scaling_block, basis_k);
+		const int positive_l = p_RadialBasis->angular_max_dist != p_RadialBasis->max_dist && mu % (sh_l_max_+1) != 0;
+		const std::pair<int, int> eval_key(scaling_block, 2*basis_k+positive_l);
 		auto insert_result = radial_eval_lookup.emplace(eval_key, static_cast<int>(radial_eval_lookup.size()));
 		const int eval_block = insert_result.first->second;
 		mu_to_radial_eval_block_[mu] = eval_block;
 		if (insert_result.second) {
 			radial_eval_to_scaling_block_.push_back(scaling_block);
 			radial_eval_to_basis_k_.push_back(basis_k);
+			radial_eval_positive_l_.push_back(positive_l);
 		}
 	}
 	const int radial_eval_block_count = static_cast<int>(radial_eval_to_scaling_block_.size());
@@ -12994,11 +13005,11 @@ void MLMTPR::CalcSiteEnergyDers(const Neighborhood& nbh)
 			{
 				const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 				const int basis_k = radial_eval_to_basis_k_[eval_block];
-				p_RadialBasis->RB_Calc(
+				p_RadialBasis->RB_CalcForCutoff(
 					nbh.dists[j],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 					1.0 * regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-					basis_k);
+					basis_k, RadialCutoffForEval(eval_block), 2);
 				for (int xi = 0; xi < p_RadialBasis->rb_size; xi++)
 					val_[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 				for (int xi = 0; xi < p_RadialBasis->rb_size * 5; xi++)
@@ -13254,11 +13265,11 @@ void MLMTPR::AccumulateCombinationGrad(	const Neighborhood& nbh,
 				for (int eval_block = 0; eval_block < static_cast<int>(radial_eval_to_scaling_block_.size()); ++eval_block) {
 					const int scaling_block = radial_eval_to_scaling_block_[eval_block];
 					const int basis_k = radial_eval_to_basis_k_[eval_block];
-					p_RadialBasis->RB_Calc(
+					p_RadialBasis->RB_CalcForCutoff(
 						r,
 						regression_coeffs[C + 2 * scaling_block * C * C + C * type_central + type_outer],
 						regression_coeffs[C + 2 * scaling_block * C * C + C * C + C * type_central + type_outer],
-						basis_k);
+						basis_k, RadialCutoffForEval(eval_block), 2);
 					for (int xi = 0; xi < R; xi++)
 						cache.radial_vals[eval_block * R + xi] = p_RadialBasis->rb_vals[xi] * scaling;
 					for (int xi = 0; xi < R * 5; xi++)
@@ -13817,6 +13828,8 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 					const double r = cutoff * (static_cast<double>(q) + 0.5)
 						/ static_cast<double>(grid_size);
 					for (int l = 0; l <= sh_l_max_; ++l) {
+                        const double r = RadialCutoffForMu(l)*(q+0.5)/grid_size;
+                        const double local_matrix_weight = l>0 && AngularCutoffActive()>0 ? matrix_weight*RadialCutoffForMu(l)/cutoff : matrix_weight;
 						for (int k = 0; k < sh_k_max_; ++k) {
 							const int mu = k * (sh_l_max_ + 1) + l;
 							const int scaling_block = mu_to_K[mu];
@@ -13824,9 +13837,9 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 								scaling_block, type_central, type_outer);
 							const int shift_offset = ScalingShiftOffset(
 								scaling_block, type_central, type_outer);
-							p_RadialBasis->RB_Calc(r,
+							p_RadialBasis->RB_CalcForCutoff(r,
 								regression_coeffs[slope_offset],
-								regression_coeffs[shift_offset], RadialBasisKForMu(mu));
+								regression_coeffs[shift_offset], RadialBasisKForMu(mu), RadialCutoffForMu(mu), 2);
 							// All O entries share the basis/scaling of this input
 							// (k,l). Evaluate it once, accumulate every output's
 							// chain-rule contribution to the shared scal/s slots.
@@ -13844,10 +13857,10 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 										w_der_shift += c * p_RadialBasis->rb_ders[4 * R + b];
 									}
 								}
-								out_penalty_accumulator += matrix_weight * w_der * w_der;
+								out_penalty_accumulator += local_matrix_weight * w_der * w_der;
 								if (out_penalty_grad_accumulator == nullptr)
 									continue;
-								const double common_grad = 2.0 * matrix_weight * w_der;
+								const double common_grad = 2.0 * local_matrix_weight * w_der;
 								for (int b = 0; b < R; ++b)
 									(*out_penalty_grad_accumulator)[row_begin + b] +=
 										common_grad * p_RadialBasis->rb_ders[b] * scaling;
@@ -13874,16 +13887,18 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 				const double r = cutoff * (static_cast<double>(q) + 0.5)
 				               / static_cast<double>(grid_size);
 				for (int mu = 0; mu < radial_func_count; ++mu) {
+                    const double r = RadialCutoffForMu(mu)*(q+0.5)/grid_size;
+                    const double local_weight = mu%(sh_l_max_+1)>0 && AngularCutoffActive()>0 ? weight*RadialCutoffForMu(mu)/cutoff : weight;
 					const int scaling_block = mu_to_K[mu];
 					const int basis_k = RadialBasisKForMu(mu);
 					const int slope_offset = ScalingSlopeOffset(scaling_block, type_central, type_outer);
 					const int shift_offset = ScalingShiftOffset(scaling_block, type_central, type_outer);
 					const int radial_offset = radial_begin + mu * block_size;
 
-					p_RadialBasis->RB_Calc(r,
+					p_RadialBasis->RB_CalcForCutoff(r,
 						regression_coeffs[slope_offset],
 						regression_coeffs[shift_offset],
-						basis_k);
+						basis_k, RadialCutoffForMu(mu), 2);
 
 					double dot_der = 0.0;
 					double dot_der_slope = 0.0;
@@ -13901,11 +13916,11 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 						const double type_scale = center_type_coeff * outer_type_coeff;
 						const double radial_der = type_scale * dot_der;
 
-					out_penalty_accumulator += weight * radial_der * radial_der;
+					out_penalty_accumulator += local_weight * radial_der * radial_der;
 					if (out_penalty_grad_accumulator == nullptr)
 						continue;
 
-					const double common_grad = 2.0 * weight * radial_der;
+					const double common_grad = 2.0 * local_weight * radial_der;
 					for (int xi = 0; xi < R; ++xi)
 						(*out_penalty_grad_accumulator)[radial_offset + xi] +=
 							common_grad * type_scale * p_RadialBasis->rb_ders[xi] * scaling;
