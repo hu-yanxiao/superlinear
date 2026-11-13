@@ -261,13 +261,28 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  typedef std::chrono::steady_clock Clock;Clock::time_point stamp;
  if(profile_enabled_){outer_profile_.fill(0);stamp=Clock::now();}
  const auto stage=[&](int index){if(profile_enabled_){const auto now=Clock::now();outer_profile_[index]=std::chrono::duration<double>(now-stamp).count();stamp=now;}};
+ // Project only receiving slots referenced by this rank's edges. Retain scratch
+ // capacity across MD steps, but rebuild values after forward communication.
+ const int PW=adaptive_?adaptive_->projection_width():0;
+ auto& projected=adaptive_projected_;
+ auto& projected_adj=adaptive_projected_adj_;
+ auto& active=adaptive_active_;
+ if(PW){
+  projected.resize(types_.size()*PW);
+  projected_adj.assign(types_.size()*PW,0);
+  active.assign(types_.size(),0);
+  for(const auto& edge:edges_)active[edge.j]=1;
+  for(std::size_t i=0;i<types_.size();++i){
+   if(active[i])adaptive_->project(gate_.data()+i*feature_width_,projected.data()+i*PW);
+  }
+ }
  auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;for(const auto&e:edges_){if(!pure_&&!adaptive_mode_){edge_basis<Frozen,false>(e,false,v,d);prepare_edge_coefficients<false>(e);for(std::size_t b=0;b<v.size();++b){int mu=basic_mu_[b];
   outer_moments_[e.i*M+b]+=edge_coeff_scratch_[mu][0]*edge_coeff_scratch_[mu][3]*v[b];}}}
  const auto&species=species_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
  stage(0);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,false>(e,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
+ if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,false,nullptr,nullptr,PW?projected.data()+e.j*PW:nullptr);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
  stage(1);
  for(int i=0;i<owned_;++i){double*row=outer_moments_.data()+i*M;double*a=outer_adj_.data()+i*M;graph(row,false);
   std::fill(a,a+M,0);for(int q=0;q<m.scalar_count;++q)a[m.scalar_mapping[q]]+=(sp?1:at(species,types_[i]))*linear_[(sp?types_[i]*m.scalar_count:0)+q];if(joint_)extra_energy_[i]=joint_->evaluate(types_[i],at(species,types_[i]),row,gate_moments_.data()+i*M,a,local_gate_adj_.data()+i*M);graph(a,false,true,row);contract(a,false,true);}
@@ -276,7 +291,13 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  if(!pure_&&!adaptive_mode_){if(reverse_stream_)coordinate_reverse<Frozen,true,false>(outer_adj_,partial_);else coordinate_reverse<Frozen,false,false>(outer_adj_,partial_);}
  stage(3);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,true>(e,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];if(gated_)for(int mu=0;mu<F;++mu)gate_adj_[e.j*F+mu]+=adj*s[b*F+mu];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<feature_width_;++q)gate_adj_[e.j*feature_width_+q]+=adj*s[b*feature_width_+q];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+ if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,true,outer_adj_.data()+e.i*M+outer_begin_,gate_adj_.data()+e.j*feature_width_,PW?projected.data()+e.j*PW:nullptr,PW?projected_adj.data()+e.j*PW:nullptr);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+ // Reduce to the original q-width signal before the existing reverse MPI exchange.
+ if(PW){
+  for(std::size_t i=0;i<types_.size();++i){
+   if(active[i])adaptive_->project_reverse(projected_adj.data()+i*PW,gate_adj_.data()+i*feature_width_);
+  }
+ }
  stage(4);
 }
 void Kernel::add_force(Result&r,const Edge&e,const std::array<double,3>&g)const {for(int a=0;a<3;++a){r.force[e.i][a]+=g[a];r.force[e.j][a]-=g[a];}

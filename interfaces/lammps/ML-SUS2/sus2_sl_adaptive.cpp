@@ -31,6 +31,8 @@ Adaptive::Adaptive(const Model&m):model_(m),q_(m.integer("two_layer_gate_scalar_
  gate_nodes_=m.integers("two_layer_gate_scalar_moment_indices");
  if(gate_nodes_.empty())for(int q:m.integers("two_layer_gate_scalar_indices"))gate_nodes_.push_back(m.scalar_mapping.at(q));
 }
+void Adaptive::project(const double* s,double* p)const{for(int r=0;r<rows_;++r){double z=0;for(int q=0;q<q_;++q)z+=weight_[r*q_+q]*s[q];p[r]=z;}}
+void Adaptive::project_reverse(const double* p,double* s)const{for(int r=0;r<rows_;++r)for(int q=0;q<q_;++q)s[q]+=p[r]*weight_[r*q_+q];}
 int Adaptive::signal_width()const{return width_;}
 int Adaptive::feature_moment_index(int f)const{
  if(f<0 || f>=width_)throw std::runtime_error("adaptive feature index out of range");
@@ -38,27 +40,45 @@ int Adaptive::feature_moment_index(int f)const{
  f-=q_;for(int l=1;l<=tl_;++l){int n=g_*(2*l+1);if(f<n){int g=f/(2*l+1),m=f%(2*l+1)-l;return model_.integer("two_layer_gate_k_rank_basic_begin")+node(g_,(model_.lmax+1)*(model_.lmax+1),l,g,m);}f-=n;}
  throw std::runtime_error("adaptive tensor feature index out of range");
 }
-void Adaptive::edge(Radial&radial,const std::array<double,3>&d,int ti,int tj,const double*signal,std::vector<double>&value,std::vector<double>&coord,std::vector<double>&signal_der)const{
+void Adaptive::edge(Radial&radial,const std::array<double,3>&d,int ti,int tj,const double*signal,std::vector<double>&value,std::vector<double>&coord,std::vector<double>&signal_der,bool derivatives,const double* adj,double* signal_adj,const double* projected,double* projected_adj)const{
  const Model&m=model_;const int L=m.lmax+1,H=L*L,R=m.radial_size,C=m.species_count,N=o_*H;
  if(ti<0||ti>=C||tj<0||tj>=C)throw std::runtime_error("adaptive species out of range");
- value.assign(N,0);coord.assign(3*N,0);signal_der.assign(static_cast<size_t>(N)*width_,0);
+ const bool factored=adj && !shared_n_ && !tanh_ && tl_==0;
+ std::vector<double> projection_adj(factored&&!projected_adj?rows_:0,0);
+ double* pa=projected_adj?projected_adj:projection_adj.data();
+ value.assign(N,0);if(derivatives){coord.assign(3*N,0);if(!factored)signal_der.assign(static_cast<size_t>(N)*width_,0);}
  double r2=0;for(double x:d)r2+=x*x;double r=std::sqrt(r2);if(r>=m.max_dist)return;
  auto&y=y_;auto&dy=dy_;auto&rb=rb_;auto&dr=dr_;harmonics(d,m.lmax,harmonic_norm_,y,dy);
  const int P=shared_n_?L*o_*latent_:rows_;
  auto&phi=phi_;auto&first=first_;
- for(int p=0;p<P;++p){double z=0;for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
+ for(int p=0;p<P;++p){double z=0;if(projected)z=projected[p];else for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
+ // With K sharing, slope/shift and channel depend only on o and pair.
+ // Reuse identical basis evaluations across l without changing summation order.
+ auto& basis_cache=basis_cache_;
+ auto& derivative_cache=derivative_cache_;
+ if(scaling_map_==2){basis_cache.resize(o_);derivative_cache.resize(o_);}
  for(int l=0;l<L;++l)for(int o=0;o<o_;++o){
   const int mu=o*L+l,row=(l*o_+o)*R;
   const int sb=scaling_map_==0?0:scaling_map_==1?l:scaling_map_==2?o:mu,pair=ti*C+tj,sc=2*sb*C*C+pair;
-  radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr);
-  double rv=0,rd=0;auto&rq=rq_;rq.assign(q_,0);
-  for(int n=0;n<R;++n){double coeff=m.radial_coeffs[mu*(R+C)+n];for(int t=0;t<latent_;++t){int p=shared_n_?(l*o_+o)*latent_+t:row+n;double a=amplitude_[((species_?tj*rows_:0)+row+n)*latent_+t];coeff+=a*phi[p];for(int q=0;q<q_;++q)rq[q]+=rb[n]*a*first[p]*weight_[p*q_+q];}rv+=coeff*rb[n];rd+=coeff*dr[n];}
-  double species=m.radial_coeffs[mu*(R+C)+R+ti]*m.radial_coeffs[mu*(R+C)+R+tj];
-  for(int mm=-l;mm<=l;++mm){const int at=node(o_,H,l,o,mm),h=harmonic(l,mm);double angular=y[h];
-   if(l>=1&&l<=tl_)for(int g=0;g<g_;++g){const int feature=q_+(l*l-1)*g_+g*(2*l+1)+mm+l;const double w=tensor_[((l-1)*o_+o)*g_+g];angular+=w*signal[feature];signal_der[static_cast<size_t>(at)*width_+feature]+=species*rv*w;}
-   value[at]=species*rv*angular;for(int a=0;a<3;++a)coord[3*at+a]=species*(rd*d[a]/r*angular+rv*dy[3*h+a]);
-   for(int q=0;q<q_;++q)signal_der[static_cast<size_t>(at)*width_+q]+=species*rq[q]*angular;
+  if(scaling_map_==2 && l>0){
+   rb=basis_cache[o];
+   dr=derivative_cache[o];
+  }else{
+   radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr);
+   if(scaling_map_==2){basis_cache[o]=rb;derivative_cache[o]=dr;}
   }
+  double rv=0,rd=0;auto&rq=rq_;rq.assign(q_,0);
+  for(int n=0;n<R;++n){double coeff=m.radial_coeffs[mu*(R+C)+n];for(int t=0;t<latent_;++t){int p=shared_n_?(l*o_+o)*latent_+t:row+n;double a=amplitude_[((species_?tj*rows_:0)+row+n)*latent_+t];coeff+=a*phi[p];if(derivatives&&!factored)for(int q=0;q<q_;++q)rq[q]+=rb[n]*a*first[p]*weight_[p*q_+q];}rv+=coeff*rb[n];rd+=coeff*dr[n];}
+  double species=m.radial_coeffs[mu*(R+C)+R+ti]*m.radial_coeffs[mu*(R+C)+R+tj];
+  double contraction=0;
+  for(int mm=-l;mm<=l;++mm){const int at=node(o_,H,l,o,mm),h=harmonic(l,mm);double angular=y[h];if(factored)contraction+=adj[at]*angular;
+   if(l>=1&&l<=tl_)for(int g=0;g<g_;++g){const int feature=q_+(l*l-1)*g_+g*(2*l+1)+mm+l;const double w=tensor_[((l-1)*o_+o)*g_+g];angular+=w*signal[feature];if(derivatives)signal_der[static_cast<size_t>(at)*width_+feature]+=species*rv*w;}
+   value[at]=species*rv*angular;if(derivatives)for(int a=0;a<3;++a)coord[3*at+a]=species*(rd*d[a]/r*angular+rv*dy[3*h+a]);
+   if(derivatives&&!factored)for(int q=0;q<q_;++q)signal_der[static_cast<size_t>(at)*width_+q]+=species*rq[q]*angular;
+  }
+  if(factored)for(int n=0;n<R;++n)pa[row+n]+=species*contraction*rb[n]*amplitude_[((species_?tj*rows_:0)+row+n)];
  }
+ if(factored){if(!projected_adj)project_reverse(pa,signal_adj);}
+ else if(adj)for(int b=0;b<N;++b)for(int q=0;q<width_;++q)signal_adj[q]+=adj[b]*signal_der[b*width_+q];
 }
 } }
