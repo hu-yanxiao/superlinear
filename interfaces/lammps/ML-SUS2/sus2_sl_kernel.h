@@ -58,6 +58,9 @@ class Kernel {
   bool gated_=false;
   bool pure_=false,mixing_=false;
   bool adaptive_mode_=false;
+  // Scratch capacities survive timesteps; contents are rebuilt after ghost forward.
+  std::vector<double> adaptive_projected_,adaptive_projected_adj_;
+  std::vector<unsigned char> adaptive_active_;
   int feature_width_=0;
   std::vector<int> feature_nodes_;
   int scaling_mode_=3,gate_product_begin_=0,gate_product_end_=0,body_count_=0;
