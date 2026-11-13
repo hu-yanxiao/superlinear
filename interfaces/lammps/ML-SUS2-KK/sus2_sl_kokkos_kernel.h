@@ -674,7 +674,10 @@ template<class DeviceType> class KokkosKernel {
 
  public:
   explicit KokkosKernel(const Model&m):d_(m),model_(m) {
-    m.validate();d_.C=m.species_count;d_.L=m.lmax+1;d_.H=d_.L*d_.L;d_.K=m.kmax;d_.F=m.radial_funcs;d_.B=m.radial_size;
+    m.validate();
+    if (m.lmax > 0 && m.angular_max_dist != m.max_dist)
+      throw std::runtime_error("Dual-cutoff models require the CPU sus2/embedded pair style");
+    d_.C=m.species_count;d_.L=m.lmax+1;d_.H=d_.L*d_.L;d_.K=m.kmax;d_.F=m.radial_funcs;d_.B=m.radial_size;
     generic_reference_=environment_switch("SUS2_SL_KOKKOS_GENERIC");
     const bool forward_tile=environment_switch("SUS2_SL_KOKKOS_FORWARD_RADIAL_TILE");
     const bool reverse_reduce=environment_switch("SUS2_SL_KOKKOS_REVERSE_CENTER_REDUCE");

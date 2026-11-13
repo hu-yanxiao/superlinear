@@ -1,0 +1,11 @@
+{
+  "geometries.cfg": "38a95258f614fa295579a7c236972b718c6005fc1766b199d883956e7075a05d",
+  "static.mtp": "c5cf638192c4d322205d6a4be710df2a7c4dcd2ef8434547120fda1bb61d1aaa",
+  "static.efs.json": "c0091a267d84ca0d44516bbd3e49013ef0b2a922cabe56746c16c594a2fef4f3",
+  "effect.mtp": "03acc59289f8011b365e6422159c17a77fea75df1a59a3f0022d4dfb21b2f4e0",
+  "effect.efs.json": "758e0e3db7df344cf975ef631281b62a40b75f008b6b1cf7f195734c3ec2bd8e",
+  "adaptive_full.mtp": "c03ebcca5c855921789d6a23dfefa77ff79c174e5942ae5e62d81260359fe257",
+  "adaptive_full.efs.json": "0a7e90e93f8567467e49a3b9b2a6120a76afeb88ff72811079c9802d02955f6d",
+  "adaptive_shared-n.mtp": "c34771c3ca05d7a9fd05bea07ed5d099d29e00e0ddde717a62211da563da5aba",
+  "adaptive_shared-n.efs.json": "db2a5fe23be797f7437945c4aa578a53de68731bafeeb722f6693b57d6312459"
+}

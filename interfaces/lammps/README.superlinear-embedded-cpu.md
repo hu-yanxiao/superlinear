@@ -169,6 +169,15 @@ run 1000                          # 0.5 ps; a short check, not equilibration
 
 ## Direct and table evaluation
 
+The CPU pair style reads both cutoffs from the model. For Chebyshev SSS and
+log1p Laguerre models with a shorter `angular_max_dist`, the inner and outer
+moments use `max_dist` for `l=0` and `angular_max_dist` for `l>=1`. The
+two shells share the underlying radial basis and apply their respective smooth
+envelopes. Both direct and tabulated evaluation use these cutoffs for energy,
+force and virial. Omitting `angular_max_dist` selects the single-cutoff model.
+Use the CPU `sus2/embedded` pair style for models with distinct cutoffs and
+nonzero angular order.
+
 `radial_mode` accepts `direct`, `table`, or `auto`; the default is `direct`.
 For an explicit analytical reference use:
 

@@ -48,23 +48,25 @@ void Adaptive::edge(Radial&radial,const std::array<double,3>&d,int ti,int tj,con
  double* pa=projected_adj?projected_adj:projection_adj.data();
  value.assign(N,0);if(derivatives){coord.assign(3*N,0);if(!factored)signal_der.assign(static_cast<size_t>(N)*width_,0);}
  double r2=0;for(double x:d)r2+=x*x;double r=std::sqrt(r2);if(r>=m.max_dist)return;
- auto&y=y_;auto&dy=dy_;auto&rb=rb_;auto&dr=dr_;harmonics(d,m.lmax,harmonic_norm_,y,dy);
+ const int active_L=r>=m.angular_max_dist?1:L;
+ auto&y=y_;auto&dy=dy_;auto&rb=rb_;auto&dr=dr_;harmonics(d,active_L-1,harmonic_norm_,y,dy);
  const int P=shared_n_?L*o_*latent_:rows_;
  auto&phi=phi_;auto&first=first_;
- for(int p=0;p<P;++p){double z=0;if(projected)z=projected[p];else for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
+ for(int p=0;p<(active_L==1?P/L:P);++p){double z=0;if(projected)z=projected[p];else for(int q=0;q<q_;++q)z+=weight_[p*q_+q]*signal[q];phi[p]=tanh_?std::tanh(z):z;first[p]=tanh_?1.-phi[p]*phi[p]:1.;}
  // With K sharing, slope/shift and channel depend only on o and pair.
- // Reuse identical basis evaluations across l without changing summation order.
+ // Refresh at l=1 when angular and scalar shells have different cutoffs;
+ // later angular channels can then reuse that shell without reordering sums.
  auto& basis_cache=basis_cache_;
  auto& derivative_cache=derivative_cache_;
  if(scaling_map_==2){basis_cache.resize(o_);derivative_cache.resize(o_);}
- for(int l=0;l<L;++l)for(int o=0;o<o_;++o){
+ for(int l=0;l<active_L;++l)for(int o=0;o<o_;++o){
   const int mu=o*L+l,row=(l*o_+o)*R;
   const int sb=scaling_map_==0?0:scaling_map_==1?l:scaling_map_==2?o:mu,pair=ti*C+tj,sc=2*sb*C*C+pair;
-  if(scaling_map_==2 && l>0){
+  if(scaling_map_==2 && l>0 && (l>1 || m.angular_max_dist==m.max_dist)){
    rb=basis_cache[o];
    dr=derivative_cache[o];
   }else{
-   radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr);
+   radial.eval(r,scale_.at(sc),scale_.at(sc+C*C),o,rb,dr,true,l>0);
    if(scaling_map_==2){basis_cache[o]=rb;derivative_cache[o]=dr;}
   }
   double rv=0,rd=0;auto&rq=rq_;rq.assign(q_,0);
