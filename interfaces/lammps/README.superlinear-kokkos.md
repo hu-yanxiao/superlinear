@@ -14,6 +14,8 @@ none/tanh activation, shared/species amplitudes and the supported tensor
 signal channels. It rejects unsupported historical multi-layer/residual/
 edge-L1 gate extensions at setup. Global virial and per-atom energy are
 implemented; per-atom/centroid virial is unavailable.
+This GPU backend supports single-cutoff models. Unequal radial/angular
+cutoffs are rejected; use the CPU `sus2/embedded` interface for dual cutoffs.
 
 ## Build and run target
 
@@ -71,12 +73,12 @@ communication; the framework's staged communication path is also implemented
 for feature/adjoint payloads. Executed multi-rank coverage is listed below;
 it is not a claim for arbitrary MPI configurations.
 
-## Official GPU entry (2026-10-25)
+## Official GPU entry (2026-11-15)
 
 The maintained cluster entry is `/work/phy-weigw/app/superlinear/lmp-kokkos`.
 It uses the accepted A100 executable with SHA256
-`87c5eee68d0ae2fabdc7add0bc6c8f99a782e7ba3d054da0df71b0614e2f47e1`,
-built from implementation commit `1f8ed740b6d941cc902d1779370e7a963813e236`.
+`24b1b89820ad8e5a7c26ca4e5842041b50ec68373dc3ab9a18e178fa7700aa1e`,
+built from implementation commit `400e1acdf8c9291ea4170e1f8d1218efc9118e42`.
 The CPU entry remains `/work/phy-weigw/app/superlinear/lmp`.
 
 ```bash
@@ -87,7 +89,8 @@ mpirun -n 1 /work/phy-weigw/app/superlinear/lmp-kokkos -k on g 1 -sf kk \
 
 The [launcher](scripts/run_superlinear_kokkos.sh) defaults to
 `TABLE_CONTEXT=1`, `TABLE_PACKED=1`, `FORWARD_ROLE_SPECIALIZE=1`,
-`FORWARD_RADIAL_TILE=0`, `REVERSE_CENTER_REDUCE=0`, `GENERIC=0`.
+`FORWARD_RADIAL_TILE=0`, `REVERSE_CENTER_REDUCE=0`, `GENERIC=0`,
+`EFFECT_SEED_ROWS=1`.
 Each variable has the `SUS2_SL_KOKKOS_` prefix and accepts an explicit override.
 Carbon's measured configuration uses `FORWARD_RADIAL_TILE=1`; FeCN6 uses `0`.
 The input still selects `radial_mode direct` or `radial_mode table`.
@@ -97,6 +100,37 @@ and invoke the launcher with the usual LAMMPS arguments. An optional adjacent
 `env-kokkos.sh` can supply cluster runtime library paths. The installed
 `lmp-kokkos.bin` is the unchanged tested binary; its compiled switches still
 default to zero. The official launcher supplies the accepted execution policy.
+
+The Effect seed update schedules independent atom/destination rows instead
+of serializing all scalar destinations within one atom thread. Duplicate
+destinations retain their original q/mu accumulation order; model parameters,
+cutoffs and double precision are unchanged. Generic, gate-readout, Static,
+Pure-W and Adaptive paths retain the previous seed implementation. Set
+`SUS2_SL_KOKKOS_EFFECT_SEED_ROWS=0` to disable the new schedule.
+
+On one A100, three interleaved NPT repeats compared the prior official binary,
+the candidate disabled and the candidate enabled. Whole-loop milliseconds
+per step exclude 100 warmup steps and time the following 100 steps:
+
+| Atoms | Radial mode | Prior official | Candidate off | Candidate on | Speed increase |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1,736 | Direct | 17.16860 | 17.17057 | 16.18260 | 6.09% |
+| 1,736 | Table | 15.46867 | 15.47810 | 14.44930 | 7.05% |
+| 13,888 | Direct | 111.64233 | 111.73967 | 111.21600 | 0.38% |
+| 13,888 | Table | 102.85167 | 102.85567 | 102.38233 | 0.46% |
+
+These are frozen FeCN6 Effect single-cutoff results, not universal gains.
+CUDA qualification covers 30 helper cases and 96 complete-engine executions
+against the native evaluator, including L=1..4, Direct/Table, duplicate
+destinations, Generic and gate-readout fallback. The 36 real LAMMPS runs
+passed absolute 1e-9 initial E/F/site-energy/global-virial and final E/F/position
+comparisons. Another 24 single-rank CUDA runs check inactive Static, Pure-W,
+Adaptive full and shared-n modes, with 16 old/off/on comparisons passing
+the same absolute threshold. Their original comparator failure (padded thermo
+header parsing) is preserved alongside the corrected independent replay.
+The [seed evidence index](tests/kokkos_effect_seed_evidence_20261115.json)
+binds reports, source and binary hashes. This update does not rerun or inherit
+the older binary's full MPI 1/2/4 qualification; current update coverage is MPI 1.
 
 ## Optional execution variants
 
@@ -112,8 +146,9 @@ are listed above. They change execution layout, not model parameters.
 | `SUS2_SL_KOKKOS_GENERIC` | Use the generic device reference path; override the other three switches. |
 | `SUS2_SL_KOKKOS_TABLE_CONTEXT` | Reuse per-neighbor frozen-table routing and Hermite weights in the optimized raw forward/reverse paths. |
 | `SUS2_SL_KOKKOS_TABLE_PACKED` | Pack immutable frozen knots in unpadded tiles of up to four channels. |
+| `SUS2_SL_KOKKOS_EFFECT_SEED_ROWS` | Schedule non-generic Effect seed accumulation by atom and unique destination, except gate readout. |
 
-Startup prints the four effective `SUS2_KOKKOS_*` values. Role specialization
+Startup prints the effective `SUS2_KOKKOS_*` values. Role specialization
 coexists with atom-by-product-row graph scheduling and does not whitelist
 historical channel dimensions. Choose variants from matched measurements:
 a faster Carbon setting is not automatically a faster FeCN6 setting. No
