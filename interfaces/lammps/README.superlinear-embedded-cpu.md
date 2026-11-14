@@ -103,6 +103,14 @@ tensor and incompatible mixing modes retain the existing communication path.
 optimizations for comparison. The model, cutoff and precision are unchanged;
 MPI adjoint regrouping can change the last floating-point bits.
 
+Effect additionally packs immutable element factors and caches the current
+source modulation after ghost gates arrive. Its forward moment passes consume
+`radial * harmonic` directly, retaining the basic-term order and multiplication
+parentheses. The reverse accumulation and MPI payload are unchanged. These
+paths apply only to gated, non-Adaptive, non-pure-matrix models. For independent
+comparisons set `SUS2_SL_EFFECT_SOURCE_CACHE=0` or
+`SUS2_SL_EFFECT_FORWARD_STREAM=0`; both default to enabled for eligible models.
+
 `tests/embedded_cache_check.py` compares the default, disabled and zero-budget
 routes with an independently built reference engine using the bundled native/PT
 fixtures. Actual MPI and application throughput must also be qualified before

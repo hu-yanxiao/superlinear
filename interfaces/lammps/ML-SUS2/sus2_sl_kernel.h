@@ -70,6 +70,11 @@ class Kernel {
   std::vector<double> y_scratch_,dy_scratch_,rb_scratch_,dr_scratch_,rv_scratch_,rd_scratch_;
   std::vector<double> v_scratch_,d_scratch_,s_scratch_,gate_moment_adj_;
   std::vector<std::array<double,4>> edge_coeff_scratch_;
+  bool effect_source_cache_=false,effect_forward_stream_=false;
+  // Immutable type rows plus current-step source modulation. Ghost gates must
+  // be received before source rows are populated in outer().
+  std::vector<double> effect_outer_type_,effect_gate_type_,effect_gate_add_,effect_source_signal_;
+  std::vector<unsigned char> effect_source_ready_;
   std::vector<int> basic_mu_,basic_sh_,basic_all_,basic_l0_,basic_none_;
   const std::vector<int>* active_basic_=nullptr;
   struct Contraction { int src,dst; double coefficient; };
@@ -101,6 +106,7 @@ class Kernel {
   template<bool Frozen> void outer_impl();
   template<bool Frozen> const Result& finish_impl();
   template<bool Gate> void prepare_edge_coefficients(const Edge&);
+  template<bool Frozen,bool Gate,bool Stream> void forward_moments(std::vector<double>&);
   template<bool Frozen,bool Stream,bool Gate>
   void coordinate_reverse(const std::vector<double>&,Result&);
   void contract(double*,bool,bool reverse=false) const;

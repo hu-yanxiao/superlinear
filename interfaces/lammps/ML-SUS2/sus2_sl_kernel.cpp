@@ -54,6 +54,27 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  if(gate_type_.empty()){gate_type_.resize(m.species_count*m.radial_funcs);for(int t=0;t<m.species_count;++t)for(int mu=0;mu<m.radial_funcs;++mu)gate_type_[t*m.radial_funcs+mu]=at(m.radial_coeffs,mu*(m.radial_size+m.species_count)+m.radial_size+t);}
  pure_=m.text("outer_radial_mode")=="pure-matrix";mixing_=m.text("two_layer_gate_radial_mixing","none")=="full";
  adaptive_mode_=m.text("outer_radial_mode")=="adaptive-coefficients";feature_width_=gated_?m.radial_funcs:0;
+ const auto effect_option=[](const char* name){
+  const char* value=std::getenv(name);
+  if(value && std::string(value)!="0" && std::string(value)!="1")
+   throw std::runtime_error(std::string(name)+" must be 0 or 1");
+  return !value || std::string(value)=="1";
+ };
+ const bool effect=gated_ && !adaptive_mode_ && !pure_;
+ effect_source_cache_=effect_option("SUS2_SL_EFFECT_SOURCE_CACHE") && effect;
+ effect_forward_stream_=effect_option("SUS2_SL_EFFECT_FORWARD_STREAM") && effect;
+ if(effect_source_cache_){
+  const int C=m.species_count,F=m.radial_funcs,R=m.radial_size;
+  effect_outer_type_.resize(std::size_t(C)*F);
+  effect_gate_type_.resize(std::size_t(C)*F);
+  effect_gate_add_.resize(std::size_t(C)*F);
+  for(int t=0;t<C;++t)for(int mu=0;mu<F;++mu){
+   const std::size_t index=std::size_t(t)*F+mu;
+   effect_outer_type_[index]=at(m.radial_coeffs,mu*(R+C)+R+t);
+   effect_gate_type_[index]=at(gate_type_,t*F+mu,at(gate_type_,t,1));
+   effect_gate_add_[index]=at(gate_add_,t*F+mu,at(gate_add_,t,1));
+  }
+ }
  if(adaptive_mode_){adaptive_.reset(new Adaptive(m));feature_width_=adaptive_->signal_width();feature_nodes_.resize(feature_width_);for(int q=0;q<feature_width_;++q)feature_nodes_[q]=adaptive_->feature_moment_index(q);}
  const char* projected_comm=std::getenv("SUS2_SL_ADAPTIVE_PROJECTED_COMM");
  if(projected_comm && std::string(projected_comm)!="0" && std::string(projected_comm)!="1")
@@ -224,12 +245,38 @@ template<bool Gate>
 void Kernel::prepare_edge_coefficients(const Edge&e){
  const Model&m=model_;const int F=m.radial_funcs,R=m.radial_size,C=m.species_count,ti=types_[e.i],tj=types_[e.j];
  edge_coeff_scratch_.resize(F);
+ if(effect_source_cache_ && (Gate || effect_source_ready_[e.j])){
+  const std::size_t center=std::size_t(ti)*F,source=std::size_t(tj)*F;
+  for(int mu=0;mu<F;++mu){auto&x=edge_coeff_scratch_[mu];
+   if(Gate){x[0]=effect_gate_type_[center+mu];x[1]=effect_gate_type_[source+mu];}
+   else {x[0]=effect_outer_type_[center+mu];x[2]=effect_gate_add_[source+mu];
+    // Outer consumers need x0/x2/x3; x1 is only used by the uncached formula.
+    x[3]=effect_source_signal_[std::size_t(e.j)*F+mu];}
+  }
+  return;
+ }
  for(int mu=0;mu<F;++mu){auto&x=edge_coeff_scratch_[mu];
   if(Gate){x[0]=at(gate_type_,ti*F+mu,at(gate_type_,ti,1));x[1]=at(gate_type_,tj*F+mu,at(gate_type_,tj,1));}
   else {x[0]=at(m.radial_coeffs,mu*(R+C)+R+ti);x[1]=at(m.radial_coeffs,mu*(R+C)+R+tj);x[2]=at(gate_add_,tj*F+mu,at(gate_add_,tj,1));
    // Only this already-parenthesized inner signal is hoisted. In particular,
    // adj*c*a*v and adj*c*signal are not reassociated or premultiplied.
    x[3]=x[1]+(gated_?x[2]*gate_[e.j*F+mu]:0);}}
+}
+template<bool Frozen,bool Gate,bool Stream>
+void Kernel::forward_moments(std::vector<double>& moments){
+ const int M=model_.moments;
+ auto&v=v_scratch_;auto&d=d_scratch_;
+ for(const auto&e:edges_){
+  edge_basis<Frozen,false,!Stream>(e,Gate,v,d);
+  prepare_edge_coefficients<Gate>(e);
+  // The active set is empty outside the outer cutoff. Scratch values outside
+  // that set may be stale and must never be read or accumulated.
+  for(int b:*active_basic_){
+   const int mu=basic_mu_[b];const auto&x=edge_coeff_scratch_[mu];
+   const double basis=Stream?rv_scratch_[mu]*y_scratch_[basic_sh_[b]]:v[b];
+   moments[e.i*M+b]+=x[0]*x[Gate?1:3]*basis;
+  }
+ }
 }
 template<bool Frozen,bool Stream,bool Gate>
 void Kernel::coordinate_reverse(const std::vector<double>&moment_adj,Result&result){
@@ -271,6 +318,10 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  if(static_cast<std::size_t>(n)*M>limit || static_cast<std::size_t>(all)*W>limit || (adaptive_projected_comm_ && static_cast<std::size_t>(all)*adaptive_->projection_width()>limit))
   throw std::runtime_error("SUS2 embedded: atom graph/communication layout exceeds int index capacity; use more MPI ranks");
  owned_=n;all_=all;types_=t;edges_=e;
+ if(effect_source_cache_){
+  effect_source_signal_.resize(std::size_t(all)*F);
+  effect_source_ready_.assign(all,0);
+ }
  step_fixed_radial_.clear();
  step_adaptive_radial_.clear();
  step_fixed_ready_.clear();
@@ -320,8 +371,8 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  // finish() assigns every owned site energy before gate-readout/ZBL additions.
  partial_.energy=0;partial_.virial.fill(0);partial_.force.assign(all,std::array<double,3>{{0,0,0}});partial_.site_energy.resize(n);
  if(!gated_)return;gate_moments_.assign(n*M,0);
- auto&v=v_scratch_;auto&d=d_scratch_;for(const auto&x:edges_){edge_basis<Frozen,false>(x,true,v,d);prepare_edge_coefficients<true>(x);for(int b:*active_basic_){int mu=basic_mu_[b];
-  gate_moments_[x.i*M+b]+=edge_coeff_scratch_[mu][0]*edge_coeff_scratch_[mu][1]*v[b];}}
+ if(effect_forward_stream_)forward_moments<Frozen,true,true>(gate_moments_);
+ else forward_moments<Frozen,true,false>(gate_moments_);
  for(int i=0;i<n;++i){double*a=gate_moments_.data()+i*M;contract(a,true);graph(a,true);
   if(adaptive_mode_)for(int q=0;q<W;++q)gate_[i*W+q]=a[feature_nodes_[q]];
   else for(int mu=0;mu<F;++mu)for(std::size_t q=0;q<gate_nodes_.size();++q)gate_[i*F+mu]+=gate_weight(mu,q)*a[gate_nodes_[q]];}
@@ -375,8 +426,19 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
    if(active[i]){adaptive_->project(gate_.data()+i*feature_width_,projected.data()+i*PW);adaptive_->prepare_coefficients(projected.data()+i*PW,types_[i]);}
   }
  }
- auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;for(const auto&e:edges_){if(!pure_&&!adaptive_mode_){edge_basis<Frozen,false>(e,false,v,d);prepare_edge_coefficients<false>(e);for(int b:*active_basic_){int mu=basic_mu_[b];
-  outer_moments_[e.i*M+b]+=edge_coeff_scratch_[mu][0]*edge_coeff_scratch_[mu][3]*v[b];}}}
+ if(effect_source_cache_){
+  for(const auto&e:edges_)if(!effect_source_ready_[e.j]){
+   const std::size_t row=std::size_t(e.j)*F,type=std::size_t(types_[e.j])*F;
+   for(int mu=0;mu<F;++mu)
+    effect_source_signal_[row+mu]=effect_outer_type_[type+mu]+effect_gate_add_[type+mu]*gate_[row+mu];
+   effect_source_ready_[e.j]=1;
+  }
+ }
+ if(!pure_&&!adaptive_mode_){
+  if(effect_forward_stream_)forward_moments<Frozen,false,true>(outer_moments_);
+  else forward_moments<Frozen,false,false>(outer_moments_);
+ }
+ auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;
  const auto&species=species_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
  stage(0);
@@ -427,6 +489,8 @@ double Kernel::memory_usage() const {
  bytes+=sizeof(double)*(step_fixed_radial_.capacity()+step_adaptive_radial_.capacity());
  bytes+=sizeof(unsigned char)*step_fixed_ready_.capacity();
  bytes+=sizeof(unsigned char)*adaptive_active_.capacity();
+ bytes+=sizeof(double)*(effect_outer_type_.capacity()+effect_gate_type_.capacity()+effect_gate_add_.capacity()+effect_source_signal_.capacity());
+ bytes+=sizeof(unsigned char)*effect_source_ready_.capacity();
  bytes+=sizeof(std::array<double,4>)*edge_coeff_scratch_.capacity();
  for(const auto*v:arrays)bytes+=sizeof(double)*v->capacity();
  // Include the immutable model's principal numeric storage; strings/maps are

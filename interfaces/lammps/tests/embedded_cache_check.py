@@ -12,7 +12,8 @@ from pathlib import Path
 import subprocess
 
 FLAGS = ("SUS2_SL_STEP_RADIAL_CACHE", "SUS2_SL_ADAPTIVE_PROJECTED_COMM",
-         "SUS2_SL_ADAPTIVE_COEFFICIENT_CACHE", "SUS2_SL_STEP_RADIAL_CACHE_MB")
+         "SUS2_SL_ADAPTIVE_COEFFICIENT_CACHE", "SUS2_SL_STEP_RADIAL_CACHE_MB",
+         "SUS2_SL_EFFECT_SOURCE_CACHE", "SUS2_SL_EFFECT_FORWARD_STREAM")
 
 
 def flatten(value):
@@ -26,7 +27,7 @@ def evaluate(binary, model, cfg, domains, mode, route, log):
     for key in FLAGS:
         env.pop(key, None)
     if route == "off":
-        env.update({key: "0" for key in FLAGS[:3]})
+        env.update({key: "0" for key in FLAGS if key != "SUS2_SL_STEP_RADIAL_CACHE_MB"})
     if route == "zero-budget":
         env[FLAGS[3]] = "0"
     result = subprocess.run([str(binary), str(model), str(cfg), str(domains), mode],
