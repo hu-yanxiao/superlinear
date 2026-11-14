@@ -85,10 +85,13 @@ does not imply updating unrelated training sources in an older server checkout.
 ## Exact CPU caches
 
 The CPU engine caches edge radial values and derivatives within one force
-evaluation. The cache is invalidated at every `begin()`, including `run 0`,
+evaluation for gated models and direct radial evaluation. Static frozen tables
+already hold contracted radial values, so their extra edge cache is disabled
+by default. The cache is invalidated at every `begin()`, including `run 0`,
 neighbor rebuilds and atom migration. Its default storage budget is 128 MiB
 per MPI rank; uncached edges use the ordinary evaluation path. Set
 `SUS2_SL_STEP_RADIAL_CACHE_MB=0` or `SUS2_SL_STEP_RADIAL_CACHE=0` to disable it.
+`SUS2_SL_STEP_RADIAL_CACHE=1` explicitly enables it even for Static tables.
 
 For Adaptive full, linear, scalar projections, the source owner computes
 `U s` once, forwards the projected values, and applies `U^T` after reverse

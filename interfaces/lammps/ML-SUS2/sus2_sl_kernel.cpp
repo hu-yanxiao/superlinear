@@ -90,6 +90,7 @@ void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
  if(step_cache && std::string(step_cache)!="0" && std::string(step_cache)!="1")
   throw std::runtime_error("SUS2_SL_STEP_RADIAL_CACHE must be 0 or 1");
  step_radial_cache_enabled_=!step_cache || std::string(step_cache)=="1";
+ step_radial_cache_auto_=!step_cache;
  step_radial_budget_=128*1024*1024;
  if(const char* budget=std::getenv("SUS2_SL_STEP_RADIAL_CACHE_MB")){
   char* end=nullptr;
@@ -108,6 +109,10 @@ void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
   else radial_.freeze(model_);
  }
  frozen_enabled_=radial_.frozen_available();
+ // Static frozen tables already store contracted radial values. Caching them
+ // again adds edge traffic; retain step caching for gated models and direct
+ // fallback, while an explicit 0/1 setting always overrides this default.
+ if(step_radial_cache_auto_)step_radial_cache_enabled_=gated_ || !frozen_enabled_;
  metadata_cache_enabled_=enabled&&frozen_enabled_&&(gated_||(!pure_&&!adaptive_mode_));
 }
 void Kernel::configure_species(std::vector<int> species){
@@ -120,6 +125,7 @@ void Kernel::configure_species(std::vector<int> species){
  std::vector<EdgeMetadata>().swap(edge_metadata_);
  if(radial_mode_!=RadialTableMode::Direct)radial_.freeze(model_,active_species_);
  frozen_enabled_=radial_.frozen_available();
+ if(step_radial_cache_auto_)step_radial_cache_enabled_=gated_ || !frozen_enabled_;
  metadata_cache_enabled_=edge_metadata_requested_&&frozen_enabled_&&(gated_||(!pure_&&!adaptive_mode_));
 }
 int Kernel::communication_width()const{return adaptive_projected_comm_?adaptive_->projection_width():feature_width_;}

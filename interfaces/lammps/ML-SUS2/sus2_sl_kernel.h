@@ -85,7 +85,7 @@ class Kernel {
   RadialTableMode radial_mode_=RadialTableMode::Direct;
   bool reverse_stream_=true;
   // These values belong to one force evaluation. begin() invalidates all slots.
-  bool step_radial_cache_enabled_=false;
+  bool step_radial_cache_enabled_=false,step_radial_cache_auto_=true;
   std::size_t step_radial_budget_=0;
   std::vector<double> step_fixed_radial_,step_adaptive_radial_;
   std::vector<unsigned char> step_fixed_ready_;
