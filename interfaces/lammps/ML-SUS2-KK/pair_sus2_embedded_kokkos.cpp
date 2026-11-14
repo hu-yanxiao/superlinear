@@ -3,6 +3,8 @@
    selected Kokkos execution space. No native training runtime is linked. */
 #include "pair_sus2_embedded_kokkos.h"
 #include "sus2_sl_kokkos_kernel.h"
+#include "sus2_sl_kokkos_tally.h"
+#include <cstdlib>
 #include "atom_kokkos.h"
 #include "atom_masks.h"
 #include "comm.h"
@@ -34,7 +36,7 @@ struct PairSUS2EmbeddedKokkos<DeviceType>::DeviceState {
   std::vector<int> active_flags;
   std::size_t table_budget=0;
   unsigned long long calls=0,counted_calls=0,signal_reverse=0,force_exports=0;
-  bool reported=false,comm_reported=false;
+  bool reported=false,comm_reported=false,fused_tally=false;
 };
 
 template<class DeviceType>
@@ -56,6 +58,11 @@ void PairSUS2EmbeddedKokkos<DeviceType>::coeff(int narg,char** arg)
   PairSUS2Embedded::coeff(narg,arg);
   try {
     auto next=std::make_unique<DeviceState>();
+    const char* tally_setting=std::getenv("SUS2_SL_KOKKOS_FUSED_TALLY");
+    if(tally_setting && std::string(tally_setting)!="0" && std::string(tally_setting)!="1")
+      throw std::runtime_error("SUS2_SL_KOKKOS_FUSED_TALLY must be 0 or 1");
+    next->fused_tally=tally_setting && std::string(tally_setting)=="1";
+
     next->kernel=std::make_unique<typename DeviceState::Engine>(model_data());
     next->mapping=typename DeviceState::I("sus2_type_mapping",type_map_.size());
     auto h=Kokkos::create_mirror_view(next->mapping);
@@ -272,10 +279,16 @@ void PairSUS2EmbeddedKokkos<DeviceType>::compute(int eflag,int vflag)
     ak->modified(execution_space,F_MASK);
     const auto energy=d.kernel->site_energy;
     const auto vir=d.kernel->virial;
-    if(eflag_global){double sum=0.;Kokkos::parallel_reduce("sus2_energy",Range(0,d.owned),
-      KOKKOS_LAMBDA(int i,double& value){value+=energy(i);},sum);eng_vdwl+=sum;}
-    if(vflag_global)for(int q=0;q<6;++q){double sum=0.;Kokkos::parallel_reduce("sus2_virial",Range(0,d.owned),
-      KOKKOS_LAMBDA(int i,double& value){value+=vir(i,q);},sum);virial[q]+=sum;}
+    if(d.fused_tally){
+      const auto tally=SUS2SL::global_tally<typename DeviceType::execution_space>(d.owned,energy,vir,eflag_global,vflag_global);
+      if(eflag_global)eng_vdwl+=tally.energy;
+      if(vflag_global)for(int q=0;q<6;++q)virial[q]+=tally.virial[q];
+    }else{
+      if(eflag_global){double sum=0.;Kokkos::parallel_reduce("sus2_energy",Range(0,d.owned),
+        KOKKOS_LAMBDA(int i,double& value){value+=energy(i);},sum);eng_vdwl+=sum;}
+      if(vflag_global)for(int q=0;q<6;++q){double sum=0.;Kokkos::parallel_reduce("sus2_virial",Range(0,d.owned),
+        KOKKOS_LAMBDA(int i,double& value){value+=vir(i,q);},sum);virial[q]+=sum;}
+    }
     if(eflag_atom){auto h=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),energy);
       for(int i=0;i<d.owned;++i)eatom[i]+=h(i);}
     // Coordinates/forces never stage through the host. This is only the
