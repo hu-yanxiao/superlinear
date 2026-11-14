@@ -2,6 +2,7 @@
 #define LMP_SUS2_SL_KOKKOS_KERNEL_H
 
 #include "sus2_sl_kokkos_radial.h"
+#include "sus2_sl_kokkos_seed.h"
 #include "sus2_sl_kokkos_math.h"
 #include "sus2_sl_zbl.h"
 #include <algorithm>
@@ -135,6 +136,8 @@ template<class DeviceType> class KokkosKernel {
   };
  private:
   State d_;
+  I seedDestination_,seedOffsets_,seedQ_;
+  bool effect_seed_rows_=false;
   Model model_;
   Stage gate_,outer_,joint_;
   int owned_=0,all_=0,edges_=0;
@@ -716,6 +719,14 @@ template<class DeviceType> class KokkosKernel {
     for(std::size_t b=0;b<m.basic.size();++b){const auto&t=m.basic[b];const int pos=(t[0]*d_.L+t[1])*9+t[2]+t[1];if(d_.gated)ib[pos]=gate_.map[b];if(d_.mode<2)obasic[pos]=outer_.map[b];}
     for(int l=0;l<d_.L;++l)for(int o=0;o<d_.O;++o)for(int mm=-l;mm<=l;++mm)rankmap[(l*d_.O+o)*9+mm+l]=outer_.map[ob+kokkos_detail::ranked(d_.O,d_.H,l,o,mm)];
     for(int q:gfeatures)features.push_back(d_.gated?gate_.map[q]:-1);for(int q:gscalar)gs.push_back(d_.gated?gate_.map[q]:-1);
+    effect_seed_rows_=environment_switch("SUS2_SL_KOKKOS_EFFECT_SEED_ROWS") && !generic_reference_ && d_.mode==1 && !d_.gate_readout;
+    if(effect_seed_rows_){
+      std::map<int,std::vector<int>> grouped;
+      for(std::size_t q=0;q<gs.size();++q)grouped[gs[q]].push_back(static_cast<int>(q));
+      std::vector<int> destination,offsets(1,0),qs;
+      for(const auto& row:grouped){destination.push_back(row.first);qs.insert(qs.end(),row.second.begin(),row.second.end());offsets.push_back(static_cast<int>(qs.size()));}
+      seedDestination_=parameter("sus2_seed_destinations",destination);seedOffsets_=parameter("sus2_seed_offsets",offsets);seedQ_=parameter("sus2_seed_q",qs);
+    }
     std::vector<int>os;for(int q:m.scalar_mapping)os.push_back(outer_.map[q]);
     d_.inner_basic=parameter("sus2_inner_basic",ib);d_.outer_basic=parameter("sus2_outer_basic",obasic);d_.outer_rank=parameter("sus2_outer_rank",rankmap);d_.gate_feature=parameter("sus2_gate_features",features);d_.gate_scalar=parameter("sus2_gate_scalars",gs);d_.outer_scalar=parameter("sus2_outer_scalars",os);
     std::vector<double>norm(25,0.);const double pi=acos(-1.);for(int l=0;l<d_.L;++l)for(int mm=0;mm<=l;++mm){double ratio=1.;for(int a=l-mm+1;a<=l+mm;++a)ratio/=a;norm[kokkos_detail::harmonic(l,mm)]=sqrt((2*l+1)*ratio/(4*pi))*(mm?sqrt(2.)*(mm%2?-1:1):1.);}
@@ -739,6 +750,8 @@ template<class DeviceType> class KokkosKernel {
     error_flag=I("sus2_error",1);d_.error=error_flag;
   }
   int communication_width()const{return d_.W;}
+  bool uses_effect_seed_rows()const{return effect_seed_rows_;}
+  std::size_t effect_seed_row_count()const{return seedDestination_.size();}
   bool uses_generic_reference()const{return generic_reference_;}
   bool uses_forward_radial_tile()const{return forward_radial_tile_;}
   bool uses_table_context()const{return table_context_;}
@@ -785,9 +798,12 @@ template<class DeviceType> class KokkosKernel {
     if(d_.gated){
       // These are owned-node seeds AFTER the caller has completed reverse
       // signal communication. Joint local primitive seeds already live in ga.
+      if(effect_seed_rows_)effect_seed_rows<typename DeviceType::execution_space>(owned_,d.F,qcount,d.ga,d.sa,d.gate_weights,seedDestination_,seedOffsets_,seedQ_,d.type,d.error,d.C);
+      else {
       Kokkos::parallel_for("sus2_inner_adjoint_seeds",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii);if(!d.valid_type(i))return;if(d.mode==3){for(int q=0;q<d.W;++q)d.ga(i,d.gate_feature(q))+=d.sa(i,q);}else for(int q=0;q<qcount;++q){double z=0.;for(int mu=0;mu<d.F;++mu)z+=d.sa(i,mu)*d.gate_weights(mu*qcount+q);d.ga(i,d.gate_scalar(q))+=z;}
         if(d.gate_readout){const double center=d.species_readout?1.:d.species(d.type(i));double energy=0.;for(int q=0;q<qcount;++q){const double c=center*d.gate_head(q);d.ga(i,d.gate_scalar(q))+=c;energy+=c*d.gv(i,d.gate_scalar(q));}d.energy(i)+=energy;}
       });
+      }
       execute(gate_.reverse,d_.gv,d_.ga,true,false);execute(gate_.transpose,d_.gv,d_.ga,true,true);raw_reverse(true);
     }
     if(d_.zbl)Kokkos::parallel_for("sus2_ZBL",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii);int lo,hi;if(!d.edge_range(i,lo,hi))return;double energy=0.;for(int e=lo;e<hi;++e){const int j=d.nbr(e);double delta[3],r;if(!d.geometry(i,j,delta,r))continue;const auto p=sus2_sl_zbl::ComputePairKokkos<double>(d.atomic_number(d.type(i)),d.atomic_number(d.type(j)),r,d.zbl_inner,d.zbl_outer,d.zbl_factor);energy+=.5*p.energy;double g[3];for(int q=0;q<3;++q)g[q]=.5*p.dEdr*delta[q]/r;d.add_edge(i,j,delta,g);}d.energy(i)+=energy;});

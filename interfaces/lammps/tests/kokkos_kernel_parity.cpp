@@ -18,11 +18,19 @@ double dense_compare(const Model&m,bool table){
   for(int step=0;step<2;++step){reference.begin(n,n,types,edges);reference.outer();const auto&r=reference.finish();device.begin();device.outer();device.finish();if(device.error_code())throw std::runtime_error("dense device error");auto e=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.site_energy);auto f=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.force);auto v=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.virial);for(int i=0;i<n;++i){compare(e(i),r.site_energy[i]);for(int q=0;q<3;++q)compare(f(i,q),r.force[i][q]);}for(int q=0;q<6;++q){double z=0.;for(int i=0;i<n;++i)z+=v(i,q);compare(z,r.virial[q]);}}
   std::cout<<"dense atoms "<<n<<" maximum_neighbors "<<maximum<<" relative_max "<<error<<'\n';return error;
 }
-int main(int argc,char**argv){if(argc<2){std::cerr<<"Usage: kokkos-kernel-parity MODEL [direct|table] [zbl|gate-readout]\n";return 1;}Kokkos::initialize(argc,argv);int code=0;try{
+int main(int argc,char**argv){if(argc<2){std::cerr<<"Usage: kokkos-kernel-parity MODEL [direct|table] [zbl|gate-readout|duplicate-gate]\n";return 1;}Kokkos::initialize(argc,argv);int code=0;try{
   const int device_arch=sus2_device_arch();
   Model m;m.load(argv[1]);const bool table=argc>2&&std::string(argv[2])=="table";
   if(argc>3&&std::string(argv[3])=="zbl"){m.fields["zbl_enabled"]="true";std::string z="{";for(int t=0;t<m.species_count;++t){if(t)z+=",";z+=std::to_string(t?8:1);}m.fields["zbl_atomic_numbers"]=z+"}";m.fields["zbl_inner"]="1.2";m.fields["zbl_outer"]="3.0";m.fields["zbl_typewise_cutoff_enabled"]="false";m.validate();}
   if(argc>3&&std::string(argv[3])=="gate-readout"){m.fields["two_layer_gate_readout_enabled"]="true";const int q=m.integer("two_layer_gate_scalar_count");std::string w="{";for(int i=0;i<q;++i){if(i)w+=",";w+=std::to_string(.03*(i+1));}m.fields["two_layer_gate_readout_coeffs"]=w+"}";m.fields["two_layer_gate_readout_coeff_count"]=std::to_string(q);m.validate();}
+  if(argc>3&&std::string(argv[3])=="duplicate-gate"){
+    if(!m.boolean("two_layer_gate_enabled")||m.text("outer_radial_mode","legacy-plus-mixer")!="legacy-plus-mixer")throw std::runtime_error("duplicate-gate probe requires Effect");
+    auto nodes=m.integers("two_layer_gate_scalar_moment_indices");
+    if(nodes.empty())for(int q:m.integers("two_layer_gate_scalar_indices"))nodes.push_back(m.scalar_mapping.at(q));
+    if(nodes.size()<2)throw std::runtime_error("duplicate-gate probe requires at least two scalars");
+    nodes[1]=nodes[0];std::string ids="{";for(std::size_t q=0;q<nodes.size();++q){if(q)ids+=",";ids+=std::to_string(nodes[q]);}
+    m.fields["two_layer_gate_scalar_moment_indices"]=ids+"}";m.validate();
+  }
   std::cout<<"model "<<argv[1]<<" radial "<<(table?"table":"direct")<<'\n';
   std::vector<std::array<double,3>>x={{{0.,0.,0.}},{{1.7,.3,.2}},{{.2,1.9,.5}},{{1.5,1.8,.9}},{{.5,.6,2.1}}};
   std::vector<int>types;for(int i=0;i<5;++i)types.push_back(i%m.species_count);
@@ -54,7 +62,7 @@ int main(int argc,char**argv){if(argc<2){std::cerr<<"Usage: kokkos-kernel-parity
   KK invalid(m);invalid.prepare(1,1,0);auto it=Kokkos::create_mirror_view(invalid.types);it(0)=m.species_count;Kokkos::deep_copy(invalid.types,it);Kokkos::deep_copy(invalid.offsets,0);Kokkos::deep_copy(invalid.positions,0.);invalid.begin();if(invalid.error_code()!=3)throw std::runtime_error("isolated type was not validated during begin");invalid.outer();invalid.finish();if(invalid.error_code()!=3)throw std::runtime_error("invalid type status lost");
   error=std::max(error,dense_compare(m,table));
   const auto stats=gpu.radial_stats();if(std::getenv("SUS2_TEST_NO_RADIAL_COUNTS")&&(stats.hits||stats.direct_fallbacks))throw std::runtime_error("disabled radial counters changed");
-  std::cout<<"KOKKOS_EXECUTION_JSON {\"execution_space\":\""<<Kokkos::DefaultExecutionSpace::name()<<"\",\"device_cuda_arch\":"<<device_arch<<",\"requested_context\":"<<gpu.uses_table_context()<<",\"active_context\":"<<gpu.table_context_active()<<",\"requested_packed\":"<<gpu.uses_table_packed()<<",\"active_packed\":"<<gpu.table_packed_active()<<",\"role\":"<<gpu.uses_forward_role_specialize()<<",\"tile\":"<<gpu.uses_forward_radial_tile()<<"}\n";
+  std::cout<<"KOKKOS_EXECUTION_JSON {\"execution_space\":\""<<Kokkos::DefaultExecutionSpace::name()<<"\",\"device_cuda_arch\":"<<device_arch<<",\"requested_context\":"<<gpu.uses_table_context()<<",\"active_context\":"<<gpu.table_context_active()<<",\"requested_packed\":"<<gpu.uses_table_packed()<<",\"active_packed\":"<<gpu.table_packed_active()<<",\"role\":"<<gpu.uses_forward_role_specialize()<<",\"tile\":"<<gpu.uses_forward_radial_tile()<<",\"seed_rows\":"<<gpu.uses_effect_seed_rows()<<",\"seed_row_count\":"<<gpu.effect_seed_row_count()<<"}\n";
   std::cout<<"KOKKOS_PARITY_JSON {\"model\":\""<<argv[1]<<"\",\"radial\":\""<<(table?"table":"direct")<<"\",\"generic_reference\":"<<(gpu.uses_generic_reference()?"true":"false")<<",\"normalized_error\":"<<error<<",\"comparisons\":6,\"status\":\""<<(error>2e-10?"FAIL":"PASS")<<"\"}\n";
   if(error>2e-10)code=2;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';code=1;}Kokkos::finalize();return code;}

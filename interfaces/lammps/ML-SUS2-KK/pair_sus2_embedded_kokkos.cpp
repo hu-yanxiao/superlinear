@@ -114,6 +114,8 @@ void PairSUS2EmbeddedKokkos<DeviceType>::init_style()
     int(device_->kernel->uses_forward_role_specialize()),
     int(device_->kernel->uses_table_context()),
     int(device_->kernel->uses_table_packed()));
+  if(comm->me==0)utils::logmesg(lmp,"SUS2_KOKKOS_EFFECT_SEED_ROWS {} rows={}\n",
+    int(device_->kernel->uses_effect_seed_rows()),device_->kernel->effect_seed_row_count());
 #ifdef KOKKOS_ENABLE_CUDA
   if constexpr(std::is_same_v<Exec,Kokkos::Cuda>) {
     int selected=-1,visible=0;
