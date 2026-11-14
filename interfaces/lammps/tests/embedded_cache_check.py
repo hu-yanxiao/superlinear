@@ -13,7 +13,8 @@ import subprocess
 
 FLAGS = ("SUS2_SL_STEP_RADIAL_CACHE", "SUS2_SL_ADAPTIVE_PROJECTED_COMM",
          "SUS2_SL_ADAPTIVE_COEFFICIENT_CACHE", "SUS2_SL_STEP_RADIAL_CACHE_MB",
-         "SUS2_SL_EFFECT_SOURCE_CACHE", "SUS2_SL_EFFECT_FORWARD_STREAM")
+         "SUS2_SL_EFFECT_SOURCE_CACHE", "SUS2_SL_EFFECT_FORWARD_STREAM",
+         "SUS2_SL_STEP_ANGULAR_CACHE", "SUS2_SL_STEP_ANGULAR_CACHE_MB")
 
 
 def flatten(value):
@@ -27,9 +28,14 @@ def evaluate(binary, model, cfg, domains, mode, route, log):
     for key in FLAGS:
         env.pop(key, None)
     if route == "off":
-        env.update({key: "0" for key in FLAGS if key != "SUS2_SL_STEP_RADIAL_CACHE_MB"})
+        env.update({key: "0" for key in FLAGS if not key.endswith("_MB")})
     if route == "zero-budget":
         env[FLAGS[3]] = "0"
+        env["SUS2_SL_STEP_ANGULAR_CACHE_MB"] = "0"
+    if route == "angular-off":
+        env["SUS2_SL_STEP_ANGULAR_CACHE"] = "0"
+    if route == "angular-only":
+        env["SUS2_SL_STEP_RADIAL_CACHE"] = "0"
     result = subprocess.run([str(binary), str(model), str(cfg), str(domains), mode],
                             env=env, text=True, capture_output=True, timeout=60)
     log.write_text(result.stdout + result.stderr)
@@ -60,7 +66,7 @@ def main():
                     model, cfg = fixtures / (family + ".mtp"), fixtures / "geometries.cfg"
                     ref = evaluate(args.reference, model, cfg, domains, mode, "off",
                                    args.out / (label + "-reference.log"))
-                    for route in ("default", "off", "zero-budget"):
+                    for route in ("default", "off", "zero-budget", "angular-off", "angular-only"):
                         actual = evaluate(args.candidate, model, cfg, domains, mode, route,
                                           args.out / (label + "-" + route + ".log"))
                         errors = {}

@@ -71,6 +71,14 @@ class Kernel {
   std::vector<double> v_scratch_,d_scratch_,s_scratch_,gate_moment_adj_;
   std::vector<std::array<double,4>> edge_coeff_scratch_;
   bool effect_source_cache_=false,effect_forward_stream_=false;
+  // Geometry-only values live for one begin/outer/finish force evaluation.
+  // A bounded prefix reuses Y/dY across both layers; other edges use scratch.
+  bool step_angular_cache_enabled_=false;
+  std::size_t step_angular_budget_=0;
+  std::vector<double> step_angular_;
+  std::vector<unsigned char> step_angular_ready_;
+  const double* edge_y_=nullptr;
+  const double* edge_dy_=nullptr;
   // Immutable type rows plus current-step source modulation. Ghost gates must
   // be received before source rows are populated in outer().
   std::vector<double> effect_outer_type_,effect_gate_type_,effect_gate_add_,effect_source_signal_;

@@ -63,6 +63,15 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  const bool effect=gated_ && !adaptive_mode_ && !pure_;
  effect_source_cache_=effect_option("SUS2_SL_EFFECT_SOURCE_CACHE") && effect;
  effect_forward_stream_=effect_option("SUS2_SL_EFFECT_FORWARD_STREAM") && effect;
+ step_angular_cache_enabled_=effect_option("SUS2_SL_STEP_ANGULAR_CACHE") && effect;
+ step_angular_budget_=64*1024*1024;
+ if(const char* budget=std::getenv("SUS2_SL_STEP_ANGULAR_CACHE_MB")){
+  char* end=nullptr;
+  const unsigned long long mb=std::strtoull(budget,&end,10);
+  if(!*budget || *end || *budget=='-' || mb>std::numeric_limits<std::size_t>::max()/1024/1024)
+   throw std::runtime_error("Invalid SUS2_SL_STEP_ANGULAR_CACHE_MB");
+  step_angular_budget_=std::size_t(mb)*1024*1024;
+ }
  if(effect_source_cache_){
   const int C=m.species_count,F=m.radial_funcs,R=m.radial_size;
   effect_outer_type_.resize(std::size_t(C)*F);
@@ -171,12 +180,27 @@ double Kernel::edge_basis(const Edge& e,bool gate,std::vector<double>& v,std::ve
   return r;
  }
  const int active_L=r>=m.angular_max_dist?1:L;
- harmonics<Derivatives>(e.d,active_L-1,y,dy);
+ const std::size_t edge_index=std::size_t(&e-edges_.data());
+ const std::size_t H=std::size_t(L)*L;
+ if(edge_index<step_angular_ready_.size()){
+  double* slot=step_angular_.data()+edge_index*4*H;
+  if(!step_angular_ready_[edge_index]){
+   // The geometry and active L are identical in all four edge passes. Compute
+   // derivatives once, using the original recurrence and evaluation order.
+   harmonics<true>(e.d,active_L-1,y,dy);
+   std::copy(y.begin(),y.end(),slot);
+   std::copy(dy.begin(),dy.end(),slot+H);
+   step_angular_ready_[edge_index]=1;
+  }
+  edge_y_=slot;edge_dy_=slot+H;
+ }else{
+  harmonics<Derivatives>(e.d,active_L-1,y,dy);
+  edge_y_=y.data();edge_dy_=Derivatives?dy.data():nullptr;
+ }
  if(Materialize&&active_L<L){std::fill(v.begin(),v.end(),0.);if(Derivatives)std::fill(d.begin(),d.end(),0.);}
  const auto&scale=(gate&&!gate_scal_.empty())?gate_scal_:scal_;
  const auto& coeff=(gate&&!gate_radial_.empty())?gate_radial_:m.radial_coeffs;
  auto&rv=rv_scratch_;auto&rd=rd_scratch_;rv.resize(m.radial_funcs);rd.resize(m.radial_funcs);
- const std::size_t edge_index=std::size_t(&e-edges_.data());
  const std::size_t cache_slot=2*edge_index+std::size_t(gate);
  const bool cache_admitted=cache_slot<step_fixed_ready_.size();
  const bool cached=cache_admitted && step_fixed_ready_[cache_slot];
@@ -205,7 +229,7 @@ double Kernel::edge_basis(const Edge& e,bool gate,std::vector<double>& v,std::ve
   step_fixed_ready_[cache_slot]=1;
  }
  }
- if(Materialize)for(int b:*active_basic_){int mu=basic_mu_[b],sh=basic_sh_[b];v[b]=rv[mu]*y[sh];if(Derivatives)for(int q=0;q<3;++q)d[3*b+q]=rd[mu]*e.d[q]/r*y[sh]+rv[mu]*dy[3*sh+q];}
+ if(Materialize)for(int b:*active_basic_){int mu=basic_mu_[b],sh=basic_sh_[b];v[b]=rv[mu]*edge_y_[sh];if(Derivatives)for(int q=0;q<3;++q)d[3*b+q]=rd[mu]*e.d[q]/r*edge_y_[sh]+rv[mu]*edge_dy_[3*sh+q];}
  return r;
 }
 void Kernel::contract(double* v,bool gate,bool reverse)const {
@@ -273,7 +297,7 @@ void Kernel::forward_moments(std::vector<double>& moments){
   // that set may be stale and must never be read or accumulated.
   for(int b:*active_basic_){
    const int mu=basic_mu_[b];const auto&x=edge_coeff_scratch_[mu];
-   const double basis=Stream?rv_scratch_[mu]*y_scratch_[basic_sh_[b]]:v[b];
+   const double basis=Stream?rv_scratch_[mu]*edge_y_[basic_sh_[b]]:v[b];
    moments[e.i*M+b]+=x[0]*x[Gate?1:3]*basis;
   }
  }
@@ -290,14 +314,14 @@ void Kernel::coordinate_reverse(const std::vector<double>&moment_adj,Result&resu
    double adj;
    if(Gate)adj=moment_adj[e.i*M+b]*x[0]*x[1];
    else {
-    const double basis=Stream?(within?rv_scratch_[mu]*y_scratch_[sh]:0.):v[b];
+    const double basis=Stream?(within?rv_scratch_[mu]*edge_y_[sh]:0.):v[b];
     if(gated_)gate_adj_[e.j*F+mu]+=moment_adj[e.i*M+b]*x[0]*x[2]*basis;
     adj=moment_adj[e.i*M+b]*x[0]*x[3];
    }
    for(int q=0;q<3;++q){
     // Keep each original gradient expression and the b/q accumulation order.
     // Outside cutoff, materialized edge_basis supplied positive-zero entries.
-    const double gradient=Stream?(within?rd_scratch_[mu]*e.d[q]/r*y_scratch_[sh]+rv_scratch_[mu]*dy_scratch_[3*sh+q]:0.):d[3*b+q];
+    const double gradient=Stream?(within?rd_scratch_[mu]*e.d[q]/r*edge_y_[sh]+rv_scratch_[mu]*edge_dy_[3*sh+q]:0.):d[3*b+q];
     g[q]+=adj*gradient;
    }
   }
@@ -318,6 +342,23 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  if(static_cast<std::size_t>(n)*M>limit || static_cast<std::size_t>(all)*W>limit || (adaptive_projected_comm_ && static_cast<std::size_t>(all)*adaptive_->projection_width()>limit))
   throw std::runtime_error("SUS2 embedded: atom graph/communication layout exceeds int index capacity; use more MPI ranks");
  owned_=n;all_=all;types_=t;edges_=e;
+ edge_y_=nullptr;edge_dy_=nullptr;
+ step_angular_.clear();step_angular_ready_.clear();
+ if(step_angular_cache_enabled_ && !edges_.empty()){
+  const std::size_t width=4*std::size_t(m.lmax+1)*(m.lmax+1);
+  const std::size_t cached_edges=std::min(edges_.size(),step_angular_budget_/(width*sizeof(double)+1));
+  try{
+   if(cached_edges*width>step_angular_.capacity())std::vector<double>(cached_edges*width).swap(step_angular_);
+   else step_angular_.resize(cached_edges*width);
+   // Replace rather than geometrically grow ready storage: the whole cache,
+   // including this bitmap, must remain within its configured byte budget.
+   if(cached_edges>step_angular_ready_.capacity())std::vector<unsigned char>(cached_edges,0).swap(step_angular_ready_);
+   else step_angular_ready_.assign(cached_edges,0);
+  }catch(const std::bad_alloc&){
+   std::vector<double>().swap(step_angular_);
+   std::vector<unsigned char>().swap(step_angular_ready_);
+  }
+ }
  if(effect_source_cache_){
   effect_source_signal_.resize(std::size_t(all)*F);
   effect_source_ready_.assign(all,0);
@@ -488,6 +529,7 @@ double Kernel::memory_usage() const {
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
  bytes+=sizeof(double)*(step_fixed_radial_.capacity()+step_adaptive_radial_.capacity());
  bytes+=sizeof(unsigned char)*step_fixed_ready_.capacity();
+ bytes+=sizeof(double)*step_angular_.capacity()+sizeof(unsigned char)*step_angular_ready_.capacity();
  bytes+=sizeof(unsigned char)*adaptive_active_.capacity();
  bytes+=sizeof(double)*(effect_outer_type_.capacity()+effect_gate_type_.capacity()+effect_gate_add_.capacity()+effect_source_signal_.capacity());
  bytes+=sizeof(unsigned char)*effect_source_ready_.capacity();

@@ -111,6 +111,17 @@ paths apply only to gated, non-Adaptive, non-pure-matrix models. For independent
 comparisons set `SUS2_SL_EFFECT_SOURCE_CACHE=0` or
 `SUS2_SL_EFFECT_FORWARD_STREAM=0`; both default to enabled for eligible models.
 
+Effect also reuses spherical harmonics and their Cartesian derivatives across
+the two layers within a single force evaluation. The original recurrence and
+basic-term accumulation order are retained. Geometry is discarded at every
+`begin()`, so no value survives a coordinate change, neighbor rebuild or atom
+migration. The cache admits complete edge slots up to 64 MiB per MPI rank,
+including ready flags; remaining edges and allocation failures use the original
+calculation. Set `SUS2_SL_STEP_ANGULAR_CACHE=0` or
+`SUS2_SL_STEP_ANGULAR_CACHE_MB=0` to disable it. The latter accepts a nonnegative
+integer MiB budget. Static and Adaptive retain their existing paths. An
+additional radial-mixer pass still evaluates its own harmonics.
+
 `tests/embedded_cache_check.py` compares the default, disabled and zero-budget
 routes with an independently built reference engine using the bundled native/PT
 fixtures. Actual MPI and application throughput must also be qualified before
