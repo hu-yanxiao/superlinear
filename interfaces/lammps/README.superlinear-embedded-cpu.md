@@ -82,6 +82,29 @@ This is a separate superlinear entry: the historical
 GPUMD executables are not replaced by this workflow. Interface/docs synchronization
 does not imply updating unrelated training sources in an older server checkout.
 
+## Exact CPU caches
+
+The CPU engine caches edge radial values and derivatives within one force
+evaluation. The cache is invalidated at every `begin()`, including `run 0`,
+neighbor rebuilds and atom migration. Its default storage budget is 128 MiB
+per MPI rank; uncached edges use the ordinary evaluation path. Set
+`SUS2_SL_STEP_RADIAL_CACHE_MB=0` or `SUS2_SL_STEP_RADIAL_CACHE=0` to disable it.
+
+For Adaptive full, linear, scalar projections, the source owner computes
+`U s` once, forwards the projected values, and applies `U^T` after reverse
+adjoint communication. Effective source radial coefficients reuse that same
+buffer. These paths are enabled by default where applicable. Shared-n, tanh,
+tensor and incompatible mixing modes retain the existing communication path.
+`SUS2_SL_ADAPTIVE_PROJECTED_COMM=0` and
+`SUS2_SL_ADAPTIVE_COEFFICIENT_CACHE=0` independently disable the two Adaptive
+optimizations for comparison. The model, cutoff and precision are unchanged;
+MPI adjoint regrouping can change the last floating-point bits.
+
+`tests/embedded_cache_check.py` compares the default, disabled and zero-budget
+routes with an independently built reference engine using the bundled native/PT
+fixtures. Actual MPI and application throughput must also be qualified before
+publication. Performance depends on model shape and the owned/ghost ratio.
+
 ## Static carbon example
 
 For a native-exported one-species carbon Static model named `model.sus2`

@@ -55,6 +55,13 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  pure_=m.text("outer_radial_mode")=="pure-matrix";mixing_=m.text("two_layer_gate_radial_mixing","none")=="full";
  adaptive_mode_=m.text("outer_radial_mode")=="adaptive-coefficients";feature_width_=gated_?m.radial_funcs:0;
  if(adaptive_mode_){adaptive_.reset(new Adaptive(m));feature_width_=adaptive_->signal_width();feature_nodes_.resize(feature_width_);for(int q=0;q<feature_width_;++q)feature_nodes_[q]=adaptive_->feature_moment_index(q);}
+ const char* projected_comm=std::getenv("SUS2_SL_ADAPTIVE_PROJECTED_COMM");
+ if(projected_comm && std::string(projected_comm)!="0" && std::string(projected_comm)!="1")
+  throw std::runtime_error("SUS2_SL_ADAPTIVE_PROJECTED_COMM must be 0 or 1");
+ // Owners perform the linear projection and its transpose once per atom.
+ // Nonlinear/shared-n/tensor projections retain raw-signal communication.
+ adaptive_projected_comm_=(!projected_comm || std::string(projected_comm)=="1") && adaptive_ && !mixing_ && adaptive_->projection_width()>0;
+
  mixer_=m.numbers("two_layer_gate_radial_mixing_coeffs");
  std::string sm=m.text("scaling_map","LK");scaling_mode_=sm=="pair"?0:(sm=="L"?1:(sm=="K"?2:3));
  species_readout_=m.text("readout_mode")=="species";body_combo_=m.text("two_layer_gate_mode")=="mu-body-linear-combo";
@@ -79,6 +86,18 @@ void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
  const char*setting=std::getenv("SUS2_SL_EDGE_METADATA");
  if(setting&&std::string(setting)!="0"&&std::string(setting)!="1")
   throw std::runtime_error("SUS2_SL_EDGE_METADATA must be 0 or 1");
+ const char* step_cache=std::getenv("SUS2_SL_STEP_RADIAL_CACHE");
+ if(step_cache && std::string(step_cache)!="0" && std::string(step_cache)!="1")
+  throw std::runtime_error("SUS2_SL_STEP_RADIAL_CACHE must be 0 or 1");
+ step_radial_cache_enabled_=!step_cache || std::string(step_cache)=="1";
+ step_radial_budget_=128*1024*1024;
+ if(const char* budget=std::getenv("SUS2_SL_STEP_RADIAL_CACHE_MB")){
+  char* end=nullptr;
+  const unsigned long long mb=std::strtoull(budget,&end,10);
+  if(!*budget || *end || *budget=='-' || mb>std::numeric_limits<std::size_t>::max()/1024/1024)
+   throw std::runtime_error("Invalid SUS2_SL_STEP_RADIAL_CACHE_MB");
+  step_radial_budget_=std::size_t(mb)*1024*1024;
+ }
  const bool enabled=setting&&std::string(setting)=="1";
  reverse_stream_=!reverse||std::string(reverse)=="1";
  std::vector<EdgeMetadata>().swap(edge_metadata_);
@@ -103,7 +122,7 @@ void Kernel::configure_species(std::vector<int> species){
  frozen_enabled_=radial_.frozen_available();
  metadata_cache_enabled_=edge_metadata_requested_&&frozen_enabled_&&(gated_||(!pure_&&!adaptive_mode_));
 }
-int Kernel::communication_width()const{return feature_width_;}
+int Kernel::communication_width()const{return adaptive_projected_comm_?adaptive_->projection_width():feature_width_;}
 Kernel::EdgeMetadata* Kernel::edge_metadata(const Edge&e){
  if(edge_metadata_.empty())return nullptr;
  // All callers traverse the owned edges_ copy, including begin's gate pass.
@@ -130,17 +149,34 @@ double Kernel::edge_basis(const Edge& e,bool gate,std::vector<double>& v,std::ve
  const auto&scale=(gate&&!gate_scal_.empty())?gate_scal_:scal_;
  const auto& coeff=(gate&&!gate_radial_.empty())?gate_radial_:m.radial_coeffs;
  auto&rv=rv_scratch_;auto&rd=rd_scratch_;rv.resize(m.radial_funcs);rd.resize(m.radial_funcs);
- if(!Frozen||!radial_.eval_frozen(r,pair,gate,rv,rd,metadata?&metadata->interpolation:nullptr,Derivatives))for(int k=0;k<m.kmax;++k)for(int l=0;l<active_L;++l) {
+ const std::size_t edge_index=std::size_t(&e-edges_.data());
+ const std::size_t cache_slot=2*edge_index+std::size_t(gate);
+ const bool cache_admitted=cache_slot<step_fixed_ready_.size();
+ const bool cached=cache_admitted && step_fixed_ready_[cache_slot];
+ const bool radial_derivatives=Derivatives || cache_admitted;
+ double* cached_values=cache_admitted?step_fixed_radial_.data()+cache_slot*2*std::size_t(m.radial_funcs):nullptr;
+ if(cached){
+  std::copy(cached_values,cached_values+m.radial_funcs,rv.begin());
+  if(Derivatives)std::copy(cached_values+m.radial_funcs,cached_values+2*m.radial_funcs,rd.begin());
+ }else{
+ if(active_L<L){std::fill(rv.begin(),rv.end(),0.);std::fill(rd.begin(),rd.end(),0.);}
+ if(!Frozen||!radial_.eval_frozen(r,pair,gate,rv,rd,metadata?&metadata->interpolation:nullptr,radial_derivatives))for(int k=0;k<m.kmax;++k)for(int l=0;l<active_L;++l) {
   const int mu=k*L+l;
   int sb=scaling_mode_==2?k:(scaling_mode_==1?l:(scaling_mode_==0?0:mu));
   int sc=2*sb*C*C+pair;
   double slope=at(scale,sc,1),shift=at(scale,sc+C*C,0);
   // K/pair maps share exactly the same warp and basis k across all l.
-  if(l==0||(l==1&&m.angular_max_dist!=m.max_dist)||scaling_mode_==1||scaling_mode_==3)radial_.eval(r,slope,shift,k,rb,dr,Derivatives,l>0);
+  if(l==0||(l==1&&m.angular_max_dist!=m.max_dist)||scaling_mode_==1||scaling_mode_==3)radial_.eval(r,slope,shift,k,rb,dr,radial_derivatives,l>0);
   int stride=(gate&&!gate_radial_.empty())?R:R+C;int off=mu*stride;
   // Native radial coefficients are shared across center species.
-  double a=0,da=0;for(int q=0;q<R;++q){a+=at(coeff,off+q)*rb[q];if(Derivatives)da+=at(coeff,off+q)*dr[q];}
+  double a=0,da=0;for(int q=0;q<R;++q){a+=at(coeff,off+q)*rb[q];if(radial_derivatives)da+=at(coeff,off+q)*dr[q];}
   rv[mu]=a;rd[mu]=da;
+ }
+ if(cache_admitted){
+  std::copy(rv.begin(),rv.end(),cached_values);
+  std::copy(rd.begin(),rd.end(),cached_values+m.radial_funcs);
+  step_fixed_ready_[cache_slot]=1;
+ }
  }
  if(Materialize)for(int b:*active_basic_){int mu=basic_mu_[b],sh=basic_sh_[b];v[b]=rv[mu]*y[sh];if(Derivatives)for(int q=0;q<3;++q)d[3*b+q]=rd[mu]*e.d[q]/r*y[sh]+rv[mu]*dy[3*sh+q];}
  return r;
@@ -220,15 +256,38 @@ void Kernel::begin(int n,int all,const std::vector<int>&t,const std::vector<Edge
 }
 template<bool Frozen>
 void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vector<Edge>& e){
- const Model&m=model_;int M=m.moments,F=m.radial_funcs,W=communication_width();
+ const Model&m=model_;int M=m.moments,F=m.radial_funcs,W=feature_width_;
  if(n<0||all<n||t.size()!=static_cast<std::size_t>(all))throw std::runtime_error("SUS2 embedded: invalid atom layout");
  // Graph and communication offsets below intentionally use LAMMPS int indices.
  // Check before multiplying or allocating; a huge layout must fail clearly,
  // not wrap into a small allocation. Empty ranks remain legal.
  const auto limit=static_cast<std::size_t>(std::numeric_limits<int>::max());
- if(static_cast<std::size_t>(n)*M>limit || static_cast<std::size_t>(all)*W>limit)
+ if(static_cast<std::size_t>(n)*M>limit || static_cast<std::size_t>(all)*W>limit || (adaptive_projected_comm_ && static_cast<std::size_t>(all)*adaptive_->projection_width()>limit))
   throw std::runtime_error("SUS2 embedded: atom graph/communication layout exceeds int index capacity; use more MPI ranks");
  owned_=n;all_=all;types_=t;edges_=e;
+ step_fixed_radial_.clear();
+ step_adaptive_radial_.clear();
+ step_fixed_ready_.clear();
+ step_adaptive_width_=adaptive_?adaptive_->cached_radial_width():0;
+ if(step_radial_cache_enabled_ && !edges_.empty()){
+  // Retain complete slots for a bounded prefix; all other edges evaluate normally.
+  const std::size_t fixed_width=4*std::size_t(F);
+  const std::size_t bytes_per_edge=(fixed_width+step_adaptive_width_)*sizeof(double)+2;
+  const std::size_t cached_edges=std::min(edges_.size(),step_radial_budget_/bytes_per_edge);
+  const auto resize_exact=[](std::vector<double>& values,std::size_t size){
+   if(size>values.capacity())std::vector<double>(size).swap(values);
+   else values.resize(size);
+  };
+  try{
+   resize_exact(step_fixed_radial_,cached_edges*fixed_width);
+   resize_exact(step_adaptive_radial_,cached_edges*step_adaptive_width_);
+   step_fixed_ready_.assign(2*cached_edges,0);
+  }catch(const std::bad_alloc&){
+   std::vector<double>().swap(step_fixed_radial_);
+   std::vector<double>().swap(step_adaptive_radial_);
+   std::vector<unsigned char>().swap(step_fixed_ready_);
+  }
+ }
  for(int a:t)if(a<0||a>=m.species_count)throw std::runtime_error("SUS2 embedded: atom species index out of range");
  // This separate 64 MiB cap is not the configured radial knot-storage budget.
  // Bound metadata independently of model shape and table capacity. Uncached
@@ -245,6 +304,11 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  for(std::size_t k=0;k<edges_.size();++k){const auto&x=edges_[k];double r2=0;for(double a:x.d)r2+=a*a;if(x.i<0||x.i>=n||x.j<0||x.j>=all||!(r2>0)||!std::isfinite(r2))throw std::runtime_error("distributed EFS neighborhood contains an invalid source or distance");
   if(Frozen&&k<edge_metadata_.size()){auto&meta=edge_metadata_[k];meta.distance=std::sqrt(r2);meta.pair=t[x.i]*m.species_count+t[x.j];meta.interpolation.shell[0].ready=false;meta.interpolation.shell[1].ready=false;}}
  // outer() initializes each complete adjoint row before seeding/backpropagation.
+ if(adaptive_projected_comm_){
+  const std::size_t width=adaptive_->projection_width();
+  adaptive_projected_.assign(std::size_t(all)*width,0);
+  adaptive_projected_adj_.assign(std::size_t(all)*width,0);
+ }
  gate_.assign(all*W,0);gate_adj_.assign(all*W,0);outer_moments_.assign(n*M,0);outer_adj_.resize(n*M);
  local_gate_adj_.assign(joint_?n*M:0,0);extra_energy_.assign(n,0);
  // finish() assigns every owned site energy before gate-readout/ZBL additions.
@@ -255,11 +319,35 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  for(int i=0;i<n;++i){double*a=gate_moments_.data()+i*M;contract(a,true);graph(a,true);
   if(adaptive_mode_)for(int q=0;q<W;++q)gate_[i*W+q]=a[feature_nodes_[q]];
   else for(int mu=0;mu<F;++mu)for(std::size_t q=0;q<gate_nodes_.size();++q)gate_[i*F+mu]+=gate_weight(mu,q)*a[gate_nodes_[q]];}
+ if(adaptive_projected_comm_){
+  const std::size_t width=adaptive_->projection_width();
+  for(int i=0;i<n;++i){
+   double* projected=adaptive_projected_.data()+std::size_t(i)*width;
+   adaptive_->project(gate_.data()+i*W,projected);
+   adaptive_->prepare_coefficients(projected,types_[i]);
+  }
+ }
 }
-void Kernel::pack_forward(int i,double*p)const {std::copy(gate_.begin()+i*communication_width(),gate_.begin()+(i+1)*communication_width(),p);}
-void Kernel::unpack_forward(int i,const double*p){std::copy(p,p+communication_width(),gate_.begin()+i*communication_width());}
-void Kernel::pack_reverse(int i,double*p)const{std::copy(gate_adj_.begin()+i*communication_width(),gate_adj_.begin()+(i+1)*communication_width(),p);}
-void Kernel::add_reverse(int i,const double*p){for(int q=0;q<communication_width();++q)gate_adj_[i*communication_width()+q]+=p[q];}
+void Kernel::pack_forward(int atom,double* output)const {
+ const auto& values=adaptive_projected_comm_?adaptive_projected_:gate_;
+ const std::size_t width=communication_width();
+ std::copy(values.begin()+atom*width,values.begin()+(atom+1)*width,output);
+}
+void Kernel::unpack_forward(int atom,const double* input) {
+ auto& values=adaptive_projected_comm_?adaptive_projected_:gate_;
+ const std::size_t width=communication_width();
+ std::copy(input,input+width,values.begin()+atom*width);
+}
+void Kernel::pack_reverse(int atom,double* output)const {
+ const auto& values=adaptive_projected_comm_?adaptive_projected_adj_:gate_adj_;
+ const std::size_t width=communication_width();
+ std::copy(values.begin()+atom*width,values.begin()+(atom+1)*width,output);
+}
+void Kernel::add_reverse(int atom,const double* input) {
+ auto& values=adaptive_projected_comm_?adaptive_projected_adj_:gate_adj_;
+ const std::size_t width=communication_width();
+ for(std::size_t q=0;q<width;++q)values[atom*width+q]+=input[q];
+}
 void Kernel::outer(){if(frozen_enabled_)outer_impl<true>();else outer_impl<false>();}
 template<bool Frozen>
 void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
@@ -272,13 +360,13 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  auto& projected=adaptive_projected_;
  auto& projected_adj=adaptive_projected_adj_;
  auto& active=adaptive_active_;
- if(PW){
+ if(PW && !adaptive_projected_comm_){
   projected.resize(types_.size()*PW);
   projected_adj.assign(types_.size()*PW,0);
   active.assign(types_.size(),0);
   for(const auto& edge:edges_)active[edge.j]=1;
   for(std::size_t i=0;i<types_.size();++i){
-   if(active[i])adaptive_->project(gate_.data()+i*feature_width_,projected.data()+i*PW);
+   if(active[i]){adaptive_->project(gate_.data()+i*feature_width_,projected.data()+i*PW);adaptive_->prepare_coefficients(projected.data()+i*PW,types_[i]);}
   }
  }
  auto&v=v_scratch_;auto&d=d_scratch_;auto&s=s_scratch_;for(const auto&e:edges_){if(!pure_&&!adaptive_mode_){edge_basis<Frozen,false>(e,false,v,d);prepare_edge_coefficients<false>(e);for(int b:*active_basic_){int mu=basic_mu_[b];
@@ -287,7 +375,8 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
  stage(0);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,false>(e,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,false,nullptr,nullptr,PW?projected.data()+e.j*PW:nullptr);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
+ if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,false,nullptr,nullptr,PW?projected.data()+e.j*PW:nullptr,nullptr,
+      std::size_t(&e-edges_.data())<step_fixed_ready_.size()/2?step_adaptive_radial_.data()+std::size_t(&e-edges_.data())*step_adaptive_width_:nullptr,false);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
  stage(1);
  for(int i=0;i<owned_;++i){double*row=outer_moments_.data()+i*M;double*a=outer_adj_.data()+i*M;graph(row,false);
   std::fill(a,a+M,0);for(int q=0;q<m.scalar_count;++q)a[m.scalar_mapping[q]]+=(sp?1:at(species,types_[i]))*linear_[(sp?types_[i]*m.scalar_count:0)+q];if(joint_)extra_energy_[i]=joint_->evaluate(types_[i],at(species,types_[i]),row,gate_moments_.data()+i*M,a,local_gate_adj_.data()+i*M);graph(a,false,true,row);contract(a,false,true);}
@@ -296,9 +385,10 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  if(!pure_&&!adaptive_mode_){if(reverse_stream_)coordinate_reverse<Frozen,true,false>(outer_adj_,partial_);else coordinate_reverse<Frozen,false,false>(outer_adj_,partial_);}
  stage(3);
  if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,true>(e,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];if(gated_)for(int mu=0;mu<F;++mu)gate_adj_[e.j*F+mu]+=adj*s[b*F+mu];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
- if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,true,outer_adj_.data()+e.i*M+outer_begin_,gate_adj_.data()+e.j*feature_width_,PW?projected.data()+e.j*PW:nullptr,PW?projected_adj.data()+e.j*PW:nullptr);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+ if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,true,outer_adj_.data()+e.i*M+outer_begin_,gate_adj_.data()+e.j*feature_width_,PW?projected.data()+e.j*PW:nullptr,PW?projected_adj.data()+e.j*PW:nullptr,
+      std::size_t(&e-edges_.data())<step_fixed_ready_.size()/2?step_adaptive_radial_.data()+std::size_t(&e-edges_.data())*step_adaptive_width_:nullptr,true);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
  // Reduce to the original q-width signal before the existing reverse MPI exchange.
- if(PW){
+ if(PW && !adaptive_projected_comm_){
   for(std::size_t i=0;i<types_.size();++i){
    if(active[i])adaptive_->project_reverse(projected_adj.data()+i*PW,gate_adj_.data()+i*feature_width_);
   }
@@ -310,6 +400,11 @@ void Kernel::add_force(Result&r,const Edge&e,const std::array<double,3>&g)const 
 const Result& Kernel::finish(){return frozen_enabled_?finish_impl<true>():finish_impl<false>();}
 template<bool Frozen>
 const Result& Kernel::finish_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;Result&out=partial_;
+ if(adaptive_projected_comm_){
+  const std::size_t width=adaptive_->projection_width();
+  for(int i=0;i<owned_;++i)
+   adaptive_->project_reverse(adaptive_projected_adj_.data()+i*width,gate_adj_.data()+i*feature_width_);
+ }
  const auto&species=species_;const auto&bias=bias_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i){double E=at(species,types_[i])+at(bias,types_[i])+extra_energy_[i];for(int q=0;q<m.scalar_count;++q)E+=(sp?1:at(species,types_[i]))*linear_[(sp?types_[i]*m.scalar_count:0)+q]*outer_moments_[i*M+m.scalar_mapping[q]];out.site_energy[i]=E;out.energy+=E;}
  const auto&gate_readout=gate_readout_;if(gate_readout_enabled_)for(int i=0;i<owned_;++i){double E=0;for(std::size_t q=0;q<gate_nodes_.size();++q)E+=(sp?1:at(species,types_[i]))*gate_readout.at(q)*gate_moments_[i*M+gate_nodes_[q]];out.site_energy[i]+=E;out.energy+=E;}
@@ -319,10 +414,13 @@ const Result& Kernel::finish_impl(){const Model&m=model_;int M=m.moments,F=m.rad
  return out;
 }
 double Kernel::memory_usage() const {
- const std::vector<double>* arrays[]={&gate_moments_,&gate_,&gate_adj_,&outer_moments_,&outer_adj_,&local_gate_adj_,&extra_energy_,&weights_,&linear_,&mult_,&gate_type_,&gate_add_,&gate_radial_,&scal_,&gate_scal_,&gate_rank_weights_,&outer_rank_weights_,&species_,&bias_,&body_mix_,&mixer_,&y_scratch_,&dy_scratch_,&rb_scratch_,&dr_scratch_,&rv_scratch_,&rd_scratch_,&v_scratch_,&d_scratch_,&s_scratch_,&gate_moment_adj_,&partial_.site_energy};
+ const std::vector<double>* arrays[]={&gate_moments_,&gate_,&gate_adj_,&outer_moments_,&outer_adj_,&local_gate_adj_,&extra_energy_,&weights_,&linear_,&mult_,&gate_type_,&gate_add_,&gate_radial_,&scal_,&gate_scal_,&gate_rank_weights_,&outer_rank_weights_,&species_,&bias_,&body_mix_,&mixer_,&y_scratch_,&dy_scratch_,&rb_scratch_,&dr_scratch_,&rv_scratch_,&rd_scratch_,&v_scratch_,&d_scratch_,&s_scratch_,&gate_moment_adj_,&adaptive_projected_,&adaptive_projected_adj_,&partial_.site_energy};
  std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity()+basic_all_.capacity()+basic_l0_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_.stats().bytes;
  if(joint_)bytes+=joint_->memory_usage();
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
+ bytes+=sizeof(double)*(step_fixed_radial_.capacity()+step_adaptive_radial_.capacity());
+ bytes+=sizeof(unsigned char)*step_fixed_ready_.capacity();
+ bytes+=sizeof(unsigned char)*adaptive_active_.capacity();
  bytes+=sizeof(std::array<double,4>)*edge_coeff_scratch_.capacity();
  for(const auto*v:arrays)bytes+=sizeof(double)*v->capacity();
  // Include the immutable model's principal numeric storage; strings/maps are

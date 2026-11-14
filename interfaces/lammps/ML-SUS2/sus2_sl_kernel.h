@@ -60,6 +60,7 @@ class Kernel {
   bool pure_=false,mixing_=false;
   bool adaptive_mode_=false;
   // Scratch capacities survive timesteps; contents are rebuilt after ghost forward.
+  bool adaptive_projected_comm_=false;
   std::vector<double> adaptive_projected_,adaptive_projected_adj_;
   std::vector<unsigned char> adaptive_active_;
   int feature_width_=0;
@@ -83,6 +84,12 @@ class Kernel {
   std::vector<int> active_species_;
   RadialTableMode radial_mode_=RadialTableMode::Direct;
   bool reverse_stream_=true;
+  // These values belong to one force evaluation. begin() invalidates all slots.
+  bool step_radial_cache_enabled_=false;
+  std::size_t step_radial_budget_=0;
+  std::vector<double> step_fixed_radial_,step_adaptive_radial_;
+  std::vector<unsigned char> step_fixed_ready_;
+  int step_adaptive_width_=0;
   bool profile_enabled_=false;
   std::array<double,5> outer_profile_{};
   EdgeMetadata* edge_metadata(const Edge&);
