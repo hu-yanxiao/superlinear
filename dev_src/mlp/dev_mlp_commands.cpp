@@ -2607,7 +2607,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 
 			BEGIN_COMMAND("init-sh",
 				"writes an untrained SUS2-SH model",
-				"mlp-sus2 init-sh output.sus2 --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
+				"mlp-sus2 init-sh output.sus2 --elements=H,O --scaling-init=auto|legacy|element-radii --species-count=2 --l-max=3 --k-max=3 --body-order=6 --body-l-max=3,3,2,2,2 --cutoff=7.5 --radial-basis-size=10 --radial-basis-type=RBChebyshev_sss\n"
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --scaling-map=K|L|LK|pair (default=LK),\n"
 				"         --effect-gate-projection=linear|tanh-gate (coordination-effect only; default=linear),\n"

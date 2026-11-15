@@ -4,6 +4,7 @@
  *   See the LICENSE file for details.
  */
 
+#include "../../src/scaling_initialization.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -2272,6 +2273,42 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 			std::cout << exp.What() << std::endl;
 			end = 10;
 		}
+	}
+	const bool elements_provided = opts.count("elements") != 0;
+	const auto requested_elements = ScalingInitialization::Elements(
+		elements_provided ? opts.at("elements") : "", elements_provided);
+	if (!requested_elements.empty() && !mtpr.scaling_elements_.empty() && requested_elements != mtpr.scaling_elements_)
+		ERROR("--elements conflicts with the saved type order");
+	if (!requested_elements.empty() && static_cast<int>(requested_elements.size()) != mtpr.species_count)
+		ERROR("--elements count must match saved species_count");
+	ScalingInitialization::CheckZBL(requested_elements.empty() ? mtpr.scaling_elements_ : requested_elements,
+		zbl_options.atomic_numbers);
+	const bool explicit_scaling_initialization = elements_provided || !opts["scaling-init"].empty();
+	if (mtpr.HasCompleteParameters()) {
+		if (!opts["scaling-init"].empty() && opts["scaling-init"] != "auto" && opts["scaling-init"] != mtpr.scaling_init_mode_)
+			ERROR("Continuation cannot change the saved scaling-init policy; warp coefficients are inherited");
+		if (!requested_elements.empty() && mtpr.scaling_elements_.empty())
+			mtpr.ConfigureScalingInitialization(requested_elements, mtpr.scaling_init_mode_);
+	} else if (explicit_scaling_initialization || custom_scal_range || custom_s_range) {
+		auto initialization_options = opts;
+		if (initialization_options["elements"].empty() && !mtpr.scaling_elements_.empty()) {
+			std::string symbols;
+			for (const auto& symbol : mtpr.scaling_elements_) {
+				if (!symbols.empty()) symbols += ",";
+				symbols += symbol;
+			}
+			initialization_options["elements"] = symbols;
+			if (initialization_options["scaling-init"].empty() && !custom_scal_range && !custom_s_range)
+				initialization_options["scaling-init"] = mtpr.scaling_init_mode_;
+		}
+		if (!elements_provided && initialization_options["elements"].empty())
+			initialization_options.erase("elements");
+		const auto initialization = ScalingInitialization::Resolve(initialization_options);
+		mtpr.ConfigureScalingInitialization(initialization.elements, initialization.mode);
+		mtpr.InitializeDefaultScalingCoeffs();
+		if (prank == 0)
+			std::cout << "new-model scaling initialization: " << initialization.mode
+				<< ((custom_scal_range || custom_s_range) ? " (explicit manual ranges select legacy)" : "") << std::endl;
 	}
 	if (zbl_options.enabled) {
 		if (static_cast<int>(zbl_options.atomic_numbers.size()) != mtpr.species_count)

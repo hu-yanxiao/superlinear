@@ -2043,6 +2043,10 @@ public:
 	int alpha_scalar_moments;						//!< = alpha_count-1 (MTP-basis except constant function)
 		int radial_func_count;							//!< number of radial basis functions used
 		int species_count;							//!< number of components present in the potential
+		std::string scaling_init_mode_ = "legacy";
+		std::vector<std::string> scaling_elements_;
+		std::vector<double> scaling_pair_covalent_, scaling_pair_vdw_;
+		void ConfigureScalingInitialization(const std::vector<std::string>& elements, const std::string& mode);
 		bool custom_scaling_slope_range = false;
 		bool custom_scaling_shift_range = false;
 		double scaling_slope_range_start = 0.0;

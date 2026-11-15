@@ -1,5 +1,6 @@
 #include "sh_model_init.h"
 #include "../src/model_path.h"
+#include "../src/scaling_initialization.h"
 
 #include "../src/common/stdafx.h"
 #include "../src/common/utils.h"
@@ -216,41 +217,34 @@ double DefaultScalingSlopeStart(const std::string& rbasis)
 	return rbasis == "RBLaguerre_log1p" ? 3.0 : 4.0;
 }
 
-void WriteDefaultScalingCoeffList(std::ofstream& ofs,
-                                  int species_count,
-                                  int kmax,
-                                  const std::string& rbasis)
+void WriteScalingCoeffList(std::ofstream& ofs, int species_count, int block_count,
+						   const std::string& rbasis, const std::string& sharing,
+						   int raw_k, int angular_channels,
+						   const std::map<std::string,std::string>& options)
 {
-	const double scal_start = DefaultScalingSlopeStart(rbasis);
-	const double scal_end = 2.0;
-	const double shift_start = 1.5;
-	const double shift_end = 2.5;
-	const int pair_count = species_count * species_count;
-	for (int scaling_block = 0; scaling_block < kmax; ++scaling_block) {
-		if (scaling_block != 0)
-			ofs << ", ";
-		for (int pair = 0; pair < pair_count; ++pair) {
-			if (pair != 0)
-				ofs << ", ";
-			const int type_central = pair / species_count;
-			const int type_outer = pair % species_count;
-			const double strength =
-				NormalizedOrderedPairStrengthLocal(
-					type_central,
-					type_outer,
-					species_count);
-			ofs << LerpLocal(scal_start, scal_end, strength);
-		}
-		for (int pair = 0; pair < pair_count; ++pair) {
-			ofs << ", ";
-			const int type_central = pair / species_count;
-			const int type_outer = pair % species_count;
-			const double strength =
-				NormalizedOrderedPairStrengthLocal(
-					type_central,
-					type_outer,
-					species_count);
-			ofs << LerpLocal(shift_start, shift_end, strength);
+	const auto initialization = ScalingInitialization::Resolve(options);
+	const auto radii = ScalingInitialization::Radii(initialization.elements);
+	const auto slopes = ScalingInitialization::Range(options, "scal-range", DefaultScalingSlopeStart(rbasis), 2.0);
+	const auto shifts = ScalingInitialization::Range(options, "s-range", 1.5, 2.5);
+	bool first = true;
+	for (int block = 0; block < block_count; ++block) {
+		const double t = ScalingInitialization::Fraction(sharing, block, raw_k, angular_channels);
+		for (int component = 0; component < 2; ++component) {
+			for (int i = 0; i < species_count; ++i) {
+				for (int j = 0; j < species_count; ++j) {
+					if (!first) ofs << ", ";
+					first = false;
+					if (initialization.mode == "element-radii") {
+						const double covalent = radii[i].first + radii[j].first;
+						const double vdw = radii[i].second + radii[j].second;
+						ofs << (component == 0 ? 3.0 - 2.0 * t : LerpLocal(covalent, vdw, t));
+					} else {
+						const double strength = NormalizedOrderedPairStrengthLocal(i, j, species_count);
+						const auto range = component == 0 ? slopes : shifts;
+						ofs << LerpLocal(range.first, range.second, strength);
+					}
+				}
+			}
 		}
 	}
 }
@@ -1230,7 +1224,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const int lmax = IntOpt(opts, "l-max", 3);
 	const int kmax = IntOpt(opts, "k-max", 3);
 	const int body_order = IntOpt(opts, "body-order", 5);
-	const int species_count = IntOpt(opts, "species-count", 2);
+	const auto scaling_initialization = ScalingInitialization::Resolve(opts);
+	const int species_count = IntOpt(opts, "species-count", scaling_initialization.elements.empty() ? 2 : scaling_initialization.elements.size());
+	if (HasOpt(opts, "zbl-elements"))
+		ScalingInitialization::CheckZBL(scaling_initialization.elements, ParseZBLAtomicNumbers(opts.at("zbl-elements")));
+	if (!scaling_initialization.elements.empty() && static_cast<int>(scaling_initialization.elements.size()) != species_count)
+		ERROR("--elements count must match --species-count");
 	const int rb_size = IntOpt(opts, "radial-basis-size", 10);
 	const double min_dist = DoubleOpt(opts, "min-dist", 1.5);
 	const double max_dist = DoubleOpt(opts, "cutoff", DoubleOpt(opts, "max-dist", 7.5));
@@ -1661,6 +1660,12 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		: (scaling_map == "L") ? (lmax + 1)
 		: radial_func_count;
 	ofs << "\tradial_funcs_count = " << radial_func_count << "\n";
+	if (scaling_initialization.mode == "element-radii" || HasOpt(opts, "scal-range") || HasOpt(opts, "s-range")) {
+		ofs << "scal_coeffs = {";
+		WriteScalingCoeffList(ofs, species_count, scaling_block_count, rbasis, scaling_map, kmax, lmax + 1, opts);
+		ofs << "}\n";
+	}
+
 
 	const SHGraphBuilder& energy_graph =
 		outer_k_rank_enabled ? outer_rank_graph : graph;
@@ -1910,8 +1915,15 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				ofs << "two_layer_gate_scaling_coeff_count = "
 				    << gate_scaling_count << "\n";
 				ofs << "two_layer_gate_scaling_coeffs = {";
-				WriteDefaultScalingCoeffList(
-					ofs, species_count, scaling_block_count, rbasis);
+				auto gate_scaling_options = opts;
+				if (scaling_initialization.mode == "legacy") {
+					// Keep the historical independent-gate defaults in legacy mode.
+					gate_scaling_options.erase("scal-range");
+					gate_scaling_options.erase("s-range");
+					gate_scaling_options["scaling-init"] = "legacy";
+				}
+				WriteScalingCoeffList(ofs, species_count, scaling_block_count,
+					rbasis, scaling_map, kmax, lmax + 1, gate_scaling_options);
 				ofs << "}\n";
 			}
 			if (!radial_coefficient_gate) {
@@ -2259,4 +2271,6 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "}\n";
 		}
 	}
+	ScalingInitialization::Write(ofs, scaling_initialization.elements, scaling_initialization.mode);
+
 	}

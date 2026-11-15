@@ -15,6 +15,7 @@
 #include <sstream>
 #include "mtpr.h"
 #include "../src/model_path.h"
+#include "../src/scaling_initialization.h"
 
 #ifdef MLIP_INTEL_MKL
 #	include <mkl_cblas.h>
@@ -4169,6 +4170,25 @@ void MLMTPR::SetScalingShiftRange(double start, double end)
 	scaling_shift_range_end = end;
 }
 
+void MLMTPR::ConfigureScalingInitialization(const std::vector<std::string>& elements, const std::string& mode)
+{
+	ScalingInitialization::Validate(elements, mode);
+	if (!elements.empty() && static_cast<int>(elements.size()) != species_count)
+		ERROR("scaling elements count must match species_count");
+	if (HasZBL()) ScalingInitialization::CheckZBL(elements, ZBL().AtomicNumbers());
+	scaling_elements_ = elements;
+	scaling_init_mode_ = mode;
+	scaling_pair_covalent_.clear();
+	scaling_pair_vdw_.clear();
+	if (mode == "element-radii") {
+		const auto radii = ScalingInitialization::Radii(elements);
+		for (const auto& first : radii) for (const auto& second : radii) {
+			scaling_pair_covalent_.push_back(first.first + second.first);
+			scaling_pair_vdw_.push_back(first.second + second.second);
+		}
+	}
+}
+
 void MLMTPR::InitializeDefaultScalingCoeffs()
 {
 	const double scal_start = ScalingSlopeRangeStart(*this);
@@ -4178,6 +4198,14 @@ void MLMTPR::InitializeDefaultScalingCoeffs()
 	for (int type_central = 0; type_central < species_count; ++type_central) {
 		for (int type_outer = 0; type_outer < species_count; ++type_outer) {
 			for (int scaling_block = 0; scaling_block < K_; ++scaling_block) {
+				if (scaling_init_mode_ == "element-radii" && !custom_scaling_slope_range && !custom_scaling_shift_range) {
+					const double t = ScalingInitialization::Fraction(scaling_map, scaling_block, sh_k_max_, L);
+					regression_coeffs[ScalingSlopeOffset(scaling_block, type_central, type_outer)] = 3.0 - 2.0*t;
+					const int pair = type_central * species_count + type_outer;
+					regression_coeffs[ScalingShiftOffset(scaling_block, type_central, type_outer)] =
+						scaling_pair_covalent_[pair] + t * (scaling_pair_vdw_[pair] - scaling_pair_covalent_[pair]);
+					continue;
+				}
 				const double strength = NormalizedOrderedPairStrength(type_central, type_outer);
 				regression_coeffs[ScalingSlopeOffset(scaling_block, type_central, type_outer)] =
 					Lerp(scal_start, scal_end, strength);
@@ -4186,10 +4214,20 @@ void MLMTPR::InitializeDefaultScalingCoeffs()
 			}
 		}
 	}
+	if (scaling_init_mode_ == "element-radii" && TwoLayerGateUsesDecoupledScaling()) {
+		InitializeTwoLayerGateScalingCoeffsFromBase();
+		const int offset = TwoLayerGateScalingCoeffOffset(), count = TwoLayerGateScalingCoeffCount();
+		if (offset + count <= static_cast<int>(regression_coeffs.size()))
+			std::copy(two_layer_gate_scaling_coeffs_.begin(), two_layer_gate_scaling_coeffs_.end(), regression_coeffs.begin() + offset);
+	}
 }
 
 void MLMTPR::RandomizeScalingCoeffs(std::mt19937_64& generator, double strength_jitter)
 {
+	if (scaling_init_mode_ == "element-radii") {
+		InitializeDefaultScalingCoeffs();
+		return;
+	}
 	const double scal_start = ScalingSlopeRangeStart(*this);
 	const double scal_end = ScalingSlopeRangeEnd(*this);
 	const double shift_start = ScalingShiftRangeStart(*this);
@@ -4572,7 +4610,20 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 			old_coeffs[old_linear_offset + old_species_count + moment];
 	}
 
+	if (!scaling_elements_.empty()) {
+		if (HasZBL()) {
+			std::vector<int> kept_atomic_numbers;
+			for (int index : old_species_indices)
+				kept_atomic_numbers.push_back(ZBL().AtomicNumbers()[index]);
+			ConfigureZBL(kept_atomic_numbers, ZBL().InnerCutoff(), ZBL().OuterCutoff(),
+				ZBL().TypewiseCutoffEnabled(), ZBL().TypewiseCutoffFactor());
+		}
+		std::vector<std::string> kept;
+		for (int index : old_species_indices) kept.push_back(scaling_elements_[index]);
+		scaling_elements_.swap(kept);
+	}
 	species_count = new_species_count;
+	ConfigureScalingInitialization(scaling_elements_, scaling_init_mode_);
 	regression_coeffs.swap(new_coeffs);
 	linear_coeffs.assign(new_linear_count, 0.0);
 	for (int i = 0; i < new_linear_count; ++i)
@@ -4630,6 +4681,8 @@ void MLMTPR::PruneSpecies(const std::vector<int>& old_species_indices)
 
 void MLMTPR::Load(const string& filename)
 {
+	scaling_init_mode_ = "legacy";
+	scaling_elements_.clear();
 	alpha_count = 0;
 	energy_cmpnts = NULL;
 	stress_cmpnts = NULL;
@@ -4715,11 +4768,21 @@ void MLMTPR::Load(const string& filename)
 	std::map<std::string,int> adaptive_fields;
 	std::map<std::string,int> joint_fields;
 	std::string metadata_line;
+	int scaling_init_fields=0, scaling_element_fields=0;
 	int legacy_outer_channel_fields = 0, legacy_outer_radial_fields = 0, grouped_block_fields=0;
 	while (std::getline(ifs, metadata_line)) {
 		const size_t equals = metadata_line.find('=');
 		if (equals == std::string::npos) continue;
 		const std::string key = TrimCopy(metadata_line.substr(0, equals));
+		if (key == "scaling_elements") {
+			if (++scaling_element_fields != 1) ERROR("Duplicate scaling_elements metadata");
+			scaling_elements_ = ScalingInitialization::Elements(metadata_line.substr(equals+1), true);
+		}
+		if (key == "scaling_init") {
+			if (++scaling_init_fields != 1) ERROR("Duplicate scaling_init metadata");
+			scaling_init_mode_ = TrimCopy(metadata_line.substr(equals+1));
+		}
+
         if (key=="outer_channel_block_size") {
             if(!grouped_v19 || ++grouped_block_fields!=1) ERROR("Grouped block metadata requires unique version 1.9.0 field");
         }
@@ -4763,6 +4826,8 @@ void MLMTPR::Load(const string& filename)
 		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
 		else ERROR("SUS2-SH model contains an unknown tensor message field");
 	}
+	if (scaling_init_fields != scaling_element_fields) ERROR("scaling_init and scaling_elements metadata must occur together");
+	ScalingInitialization::Validate(scaling_elements_, scaling_init_mode_);
 	if (model_file_version == "1.9.0" && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
 	if (effect_v111 && (effect_projection_fields != 1 || effect_scalar_count_fields != 1))
 		ERROR("Version 1.11.0 requires explicit effect projection and gate scalar count");
@@ -5234,6 +5299,8 @@ void MLMTPR::Load(const string& filename)
 	}
 
 
+
+	ConfigureScalingInitialization(scaling_elements_, scaling_init_mode_);
 
 	//Radial coeffs initialization
 	int pairs_count = species_count*species_count;           //number of species pairs
@@ -7775,6 +7842,7 @@ ofs << "two_layer_gate_readout_enabled = true\n";
 	}
 	ofs << '}';
 
+	ScalingInitialization::Write(ofs, scaling_elements_, scaling_init_mode_);
 	ofs.flush();
 	if (!ofs.good())
 		ERROR("MLMTPR::Save(): Failed while writing file \"" + filename + "\"");

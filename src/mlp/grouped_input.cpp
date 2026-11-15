@@ -55,6 +55,8 @@ const Rule rules[] = {
     {"initialization.inner_readout_linear", "inner-readout-linear-init", "bool"},
     {"initialization.parameters", "init-params", "same=same|random=random"},
     {"initialization.seed", "init-random-seed", "seed"},
+    {"initialization.scaling_init", "scaling-init", "auto=auto|legacy=legacy|element-radii=element-radii"},
+    {"model.scaling_init", "scaling-init", "auto=auto|legacy=legacy|element-radii=element-radii"},
     {"initialization.warp_slope_endpoints", "scal-range", "pair"},
     {"initialization.warp_shift_endpoints", "s-range", "pair"},
     {"training.iterations", "max-iter", "int"},
@@ -348,7 +350,7 @@ void ValidateLegacyOptions(const Values& opts, bool static_profile, bool legacy_
     // Grouped input is deliberately narrower than the historical CLI. Do not
     // let a typo, an Adam flag or a legacy-only control be silently ignored.
     std::set<std::string> allowed = {"init-sh", "max-dist", "bfgs-conv-tol", "bfgs-trace-file",
-        "body-l-max", "std-weight", "stdd-weight"};
+        "body-l-max", "std-weight", "stdd-weight", "elements"};
     for (const Rule& r : rules) if (r.option[0] != '@') allowed.insert(r.option);
     if (static_profile || legacy_profile)
         for (const char* key : {"radial-smooth", "radial-smooth-grid", "scalar-head-l2"}) allowed.insert(key);
@@ -394,7 +396,7 @@ std::vector<std::string> NormalizeArguments(int argc, char* argv[]) {
         if (token == "--") break;
         if (Starts(token, "--")) {
             const std::string key = token.substr(2, token.find('=') == std::string::npos ? std::string::npos : token.find('=')-2);
-            if (key == "config" || KnownKey(key) || Aliases().count(key) || key.find('.') != std::string::npos) grouped = true;
+            if (key == "config" || (KnownKey(key) && key != "elements") || Aliases().count(key) || key.find('.') != std::string::npos) grouped = true;
         } else if ((token.size() >= 5 && token.substr(token.size()-5) == ".yaml") ||
                    (token.size() >= 4 && token.substr(token.size()-4) == ".yml")) grouped = true;
     }
@@ -451,6 +453,13 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     Values settings = config.empty() ? Values() : ReadConfig(config);
     std::set<std::string> cli_paths;
     bool active = !config.empty();
+    for (const auto& option : opts)
+        if ((KnownKey(option.first) && option.first != "elements") || option.first.find('.') != std::string::npos)
+            active = true;
+    if (!active) {
+        if (opts.count("check-config")) Fail("--check-config requires grouped settings or a YAML configuration");
+        return false;
+    }
     for (auto it = opts.begin(); it != opts.end();) {
         if (KnownKey(it->first) || it->first.find('.') != std::string::npos) {
             active = true; const auto old = settings.find(it->first);
@@ -511,7 +520,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             static const std::string symbols = " H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og ";
             std::set<std::string> seen; const auto items = SplitFlow(list);
             for (const std::string& item : items) if (symbols.find(" " + item + " ") == std::string::npos || !seen.insert(item).second) Fail("unknown/duplicate element symbol: " + item);
-            Put(opts, "species-count", std::to_string(items.size())); continue;
+            Put(opts, "species-count", std::to_string(items.size())); Put(opts, "elements", list); continue;
         }
         if (Starts(value.first, "model.angular_limit_by_body_order.")) continue;
         for (const Rule& r : rules) if (value.first == r.key) {
@@ -547,9 +556,10 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     if ((paths.count("@train") || paths.count("@model") || paths.count("@output")) && !args.empty())
         Fail("do not mix positional model/data/output paths with grouped data/output.model paths");
     if (continuation) {
-        for (const auto& value : settings) if (Starts(value.first, "model.") || value.first == "elements")
+        if (!elements.empty() && !settings.count("model.species_count")) opts.erase("species-count");
+        for (const auto& value : settings) if (Starts(value.first, "model.") && value.first != "model.elements" && value.first != "model.scaling_init")
             Fail("continuation inherits the saved architecture; omit " + value.first + " and use data.model");
-        for (const Rule& r : rules) if (Starts(r.key, "model.") && opts.count(r.option))
+        for (const Rule& r : rules) if (Starts(r.key, "model.") && std::string(r.option) != "scaling-init" && opts.count(r.option))
             Fail("continuation inherits the saved architecture; omit --" + std::string(r.option));
         if (opts.count("init-sh")) Fail("continuation cannot use --init-sh");
         Put(opts, "init-params", "same");
@@ -678,7 +688,7 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         if (paths.count("@train") || paths.count("@model") || settings.count("data.valid")) Fail("init-sh does not consume training/validation/model inputs");
         for (const auto& value : settings) if (Starts(value.first, "training.") || Starts(value.first, "loss.") || Starts(value.first, "regularization.") || Starts(value.first, "initialization."))
             Fail("init-sh only writes topology; use train for " + value.first);
-        std::set<std::string> model_options = {"body-l-max", "max-dist"};
+        std::set<std::string> model_options = {"body-l-max", "max-dist", "elements"};
         for (const Rule& r : rules) if (Starts(r.key, "model.")) model_options.insert(r.option);
         if (legacy_kind && coordination_enabled)
             for (const char* key : {"two-layer-gate", "two-layer-gate-mode", "two-layer-gate-site-mode", "two-layer-gate-radial-mode"})

@@ -39,7 +39,8 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 |---|---|---|
 | `model.kind` | `superlinear-mode` | 默认 `coordination-adaptive`；`coordination-effect`（可简写 `effect`）选择 Effect；`static-radial` 默认关闭配位层；显式 `coordination.enabled: false` 也可选择静态模型 |
 | `model.name` | `potential-name` | 模型名称；原生默认名称 |
-| `model.elements` 或顶层 `elements` | `species-count` | 按 CFG type 顺序的元素列表；推导元素数，不启用 ZBL、不改 CFG 类型 |
+| `model.elements` 或顶层 `elements` | `elements` | 按 CFG type 0,1,… 顺序指定元素，用于推导元素数和初始化径向 scaling |
+| `model.scaling_init` | `scaling-init` | `auto`（默认）、`element-radii` 或 `legacy` |
 | `model.species_count` | `species-count` | 不提供元素表时可单独指定；默认 2；和元素表冲突时报错 |
 | `model.l_max` | `l-max` | 最大角动量 L；C++ 支持 0..6；默认 3 |
 | `model.radial_channels` | `k-max` | K；默认 3 |
@@ -109,6 +110,18 @@ model:
 
 跨 n 共享不删除径向基 n。`latent_channels` 增大也不自动变成 `full`，
 两者仍是不同参数布局。以上结构在新模型初始化时确定；续训继承 checkpoint。
+
+## 按元素对初始化径向 scaling
+
+在新模型的 YAML 中写 `model.elements: [H, O]`，即指定 CFG type 0 对应 H、type 1 对应 O。默认 `auto` 在给定元素且未手动指定半径或斜率区间时启动元素半径初始化。平面 CLI 的对应参数是 `--elements=H,O`。
+
+对 `scal × (r − s)`，令 `C` 为两个元素的共价半径之和，`V` 为自由原子 vdW 半径之和，单位均为 Å。对于共享方式 `K` 或 `LK`，当 `K > 1` 时令 `t = k/(K−1)`，其中 k 从零起算。每个通道取 `scal = 3−2t`，`s = (1−t)C+tV`。同一 k 的各个 l 使用相同初值。`L`、`pair` 和 `K=1` 取 `t=0`。新模型的独立内层 scaling 也采用同一规则。训练可以继续更新这些初值，径向截断仍由模型的截断参数决定。
+
+例如 H–O 在 `K=6` 下的 `scal` 为 3、2.6、2.2、1.8、1.4、1；`s` 从 0.95 Å 等距增至 3.38922 Å。改动 CFG type 顺序时，相应调整输入元素列表。
+
+若只给 `species_count`，`auto` 沿用原初始化。提供已有的 `--scal-range` 或 `--s-range` 时，`auto` 采用旧式自定义区间；显式 `element-radii` 与这两个选项冲突。`legacy` 可显式选择原有行为。续训直接使用模型保存的系数。
+
+两端内置同一份 H–Og 共 118 元素的数据。共价半径取单键值，vdW 半径取自由原子平衡值；Lv 用后续文献的中性原子极化率 76.0 a.u. 按 vdW 论文式 (9) 换算。[共价半径](https://doi.org/10.1002/chem.200800987) · [vdW 半径，补充表 S1](https://doi.org/10.1021/acs.jctc.4c00784) · [Lv 极化率，表 X](https://doi.org/10.1103/7nqz-3ddv)
 
 ## Effect 配位模型
 
@@ -339,7 +352,7 @@ YAML 路径相对 YAML 所在目录解析；仅通过 CLI 新添的路径相对�
 广播，所有进程使用同一目录；用户仍可显式指定 `output.directory`。
 新模型输出（包括初始化、检查点、临时原子写入和归档）必须以 `.sus2` 结尾；
 历史模型文件仍可读取，不修改内部模型格式或已有文件。
-续训配置中不再写 `model.*` / `elements`，直接继承 checkpoint 架构。
+续训从 checkpoint 继承架构和系数。可选的 `model.elements` 用于核对已保存的 type 顺序，`model.scaling_init` 可用于核对已保存的策略。其余架构字段只在新建模型时指定。
 实际执行前拒绝复用或覆盖已存在的输出文件，拒绝输出互相重名或等于输入。
 该检查用于避免意外覆盖，不是并发作业锁；两个作业应使用不同输出目录。
 MPI 启动时，所有进程完成这些检查后才开始执行命令，避免较慢进程把
