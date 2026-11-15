@@ -6168,7 +6168,7 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 	std::vector<double> gate_body_adjoint_scratch(TwoLayerGateBodyOrderCount(), 0.0);
 	const int body_count = TwoLayerGateBodyOrderCount();
 	const bool full_gate_weight_blas =
-		TwoLayerGateUsesFullScalarWeights()
+		TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 		&& two_layer_gate_scalar_values_cache_.size()
 			== static_cast<size_t>(cfg.size()) * gate_count;
 	const bool body_combo_gate_weight_blas =
@@ -6311,6 +6311,10 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 						out_grad_accumulator[gate_weight_offset + q] +=
 							body_adjoint * scalar_values[q];
 				}
+			} else if (EffectGateTanhProjection()) {
+				AccumulateEffectGateProjectionGrad(scalar_values, gate_adjoints_by_mu,
+					out_grad_accumulator.data() + TwoLayerGateWeightOffset(), nullptr, nullptr, nullptr,
+					effect_gate_hidden_values_cache_.data() + static_cast<size_t>(ind) * EffectGateHiddenCount());
 			} else if (TwoLayerGateUsesFullScalarWeights()) {
 				for (int mu = 0; mu < radial_func_count; ++mu) {
 					const double gate_adjoint = gate_adjoints_by_mu[mu];
@@ -6340,7 +6344,7 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 	std::vector<double>& body_combo_gate_seed_cache =
 		two_layer_body_combo_seed_scratch_;
 	const bool full_seed_blas =
-		TwoLayerGateUsesFullScalarWeights()
+		TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 		&& two_layer_gate_adjoints_.size()
 			== static_cast<size_t>(cfg.size()) * radial_func_count;
 	const bool body_combo_seed_blas =
@@ -6409,7 +6413,7 @@ void MLMTPR::AccumulateTwoLayerGateValueParamGradFromAdjoints(
 			AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 				gate_adjoints_by_mu,
 				scalar_gate_seeds.data(),
-				scalar_seed_body_scratch);
+				scalar_seed_body_scratch, ind);
 		}
 			AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 				neighborhoods[ind],

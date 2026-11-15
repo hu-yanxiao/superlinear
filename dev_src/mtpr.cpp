@@ -1627,12 +1627,60 @@ int MLMTPR::TwoLayerGateScalingCoeffOffset() const
 	return TwoLayerGateRadialCoeffOffset() + TwoLayerGateRadialCoeffCount();
 }
 
+void MLMTPR::ValidateEffectTanhGate() const
+{
+	if (!two_layer_gate_enabled_ || !TwoLayerGateUsesFullScalarWeights()
+	    || two_layer_gate_scale_mode_ != "additive-node" || !TwoLayerGateKRankEnabled()
+	    || !OuterKRankEnabled() || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()
+	    || two_layer_gate_site_mode_ != "neighbor" || multi_layer_gate_enabled_
+	    || two_layer_residual_enabled_ || TwoLayerGateReadoutEnabled() || TwoLayerGateEdgeL1Enabled())
+		ERROR("tanh-gate requires ranked neighbor additive-node Effect");
+}
+
+// If tangents are supplied, differentiate the directional derivative J(S)*Sdot.
+// curvature_seeds receives (dJ/dS*Sdot)^T*adjoints, required by force training.
+void MLMTPR::AccumulateEffectGateProjectionGrad(const double* scalars,
+	const double* adjoints, double* gradient, const double* tangents,
+	double* values, double* curvature_seeds, const double* hidden) const
+{
+	const int Q = TwoLayerGateScalarCount(), K = EffectGateHiddenCount();
+	const double* w = TwoLayerGateFullWeightMatrixData();
+	if (values) std::fill(values, values + radial_func_count, 0.0);
+	if (curvature_seeds) std::fill(curvature_seeds, curvature_seeds + Q, 0.0);
+	for (int k = 0; k < K; ++k) {
+		double zdot = 0.0, a = 0.0;
+		if (tangents)
+			for (int q = 0; q < Q; ++q)
+				zdot += w[k * Q + q] * tangents[q];
+		const double h = hidden[k];
+		const double d = 1.0 - h * h, dd = -2.0 * h * d;
+		for (int mu = 0; mu < radial_func_count; ++mu) {
+			const double u = w[K * Q + mu * K + k];
+			a += adjoints[mu] * u;
+			if (gradient)
+				gradient[K * Q + mu * K + k] += adjoints[mu] * (tangents ? d * zdot : h);
+			if (values)
+				values[mu] += u * (tangents ? d * zdot : h);
+		}
+		for (int q = 0; q < Q; ++q) {
+			if (gradient)
+				gradient[k * Q + q] += a * (tangents
+					? dd * zdot * scalars[q] + d * tangents[q] : d * scalars[q]);
+			if (curvature_seeds)
+				curvature_seeds[q] += a * dd * zdot * w[k * Q + q];
+		}
+	}
+}
+
 int MLMTPR::TwoLayerGateWeightCount() const
 {
 	if (!two_layer_gate_enabled_)
 		return 0;
 	if (OuterUsesAdaptiveRadialCoefficients())
 		return 0;
+	if (EffectGateTanhProjection())
+		return CheckedIntProduct(static_cast<size_t>(EffectGateHiddenCount()),
+			static_cast<size_t>(TwoLayerGateScalarCount()) + radial_func_count, "Effect tanh-gate weights");
 	if (two_layer_gate_mode_ == "mu-scalar-full")
 		return radial_func_count * TwoLayerGateScalarCount();
 	if (two_layer_gate_mode_ == "mu-body-linear-combo")
@@ -2891,6 +2939,8 @@ int MLMTPR::TwoLayerGateWeightIndex(int scalar_weight_index) const
 
 int MLMTPR::TwoLayerGateWeightIndex(int mu, int scalar_weight_index) const
 {
+	if (EffectGateTanhProjection())
+		ERROR("tanh-gate has down/up matrices; use flat gate parameter indices");
 	if (!two_layer_gate_enabled_)
 		return -1;
 	if (scalar_weight_index < 0 || scalar_weight_index >= TwoLayerGateScalarCount())
@@ -3192,6 +3242,20 @@ void MLMTPR::ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count)
 	    || two_layer_gate_values_.size() != gate_size)
 		ERROR("SUS2-SH full gate projection cache has inconsistent sizes");
 	const double* weights = TwoLayerGateFullWeightMatrixData();
+	if (EffectGateTanhProjection()) {
+		const int K = EffectGateHiddenCount();
+		effect_gate_hidden_values_cache_.resize(static_cast<size_t>(atom_count) * K);
+		double* hidden = effect_gate_hidden_values_cache_.data();
+		cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, atom_count, K, gate_count,
+		            1.0, two_layer_gate_scalar_values_cache_.data(), gate_count, weights, gate_count,
+		            0.0, hidden, K);
+		for (double& value : effect_gate_hidden_values_cache_)
+			value = std::tanh(value);
+		const double* up = weights + static_cast<size_t>(K) * gate_count;
+		cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, atom_count, radial_func_count, K,
+		            1.0, hidden, K, up, K, 0.0, two_layer_gate_values_.data(), radial_func_count);
+		return;
+	}
 	cblas_dgemm(CblasRowMajor,
 	            CblasNoTrans,
 	            CblasTrans,
@@ -3211,10 +3275,30 @@ void MLMTPR::ComputeTwoLayerGateFullMuSignalsForAtoms(int atom_count)
 void MLMTPR::AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 	const double* mu_adjoints,
 	double* scalar_seeds,
-	std::vector<double>& body_scratch) const
+	std::vector<double>& body_scratch, int atom_index) const
 {
 	const int gate_count = TwoLayerGateScalarCount();
 	std::fill(scalar_seeds, scalar_seeds + gate_count, 0.0);
+	if (EffectGateTanhProjection()) {
+		if (atom_index < 0 || (static_cast<size_t>(atom_index) + 1) * gate_count > two_layer_gate_scalar_values_cache_.size())
+			ERROR("tanh-gate projection requires the atom scalar cache");
+		const int K = EffectGateHiddenCount();
+		if ((static_cast<size_t>(atom_index) + 1) * K > effect_gate_hidden_values_cache_.size())
+			ERROR("tanh-gate projection requires the atom hidden cache");
+		const double* hidden = effect_gate_hidden_values_cache_.data() + static_cast<size_t>(atom_index) * K;
+		const double* weights = TwoLayerGateFullWeightMatrixData();
+		// VJP: Wdown^T * diag(tanh'(z)) * Wup^T * mu_adjoints.
+		// The scratch is K-wide; no dense D by Q Jacobian is materialized.
+		body_scratch.assign(K, 0.0);
+		for (int k = 0; k < K; ++k) {
+			for (int mu = 0; mu < radial_func_count; ++mu)
+				body_scratch[k] += weights[K * gate_count + mu * K + k] * mu_adjoints[mu];
+			body_scratch[k] *= 1.0 - hidden[k] * hidden[k];
+			for (int q = 0; q < gate_count; ++q)
+				scalar_seeds[q] += weights[k * gate_count + q] * body_scratch[k];
+		}
+		return;
+	}
 	if (TwoLayerGateUsesBodyLinearCombo()) {
 		const int body_count = TwoLayerGateBodyOrderCount();
 		const double* body_mix_weights = TwoLayerGateBodyMixWeightMatrixData();
@@ -4596,16 +4680,21 @@ void MLMTPR::Load(const string& filename)
 	if (((string)tmpline).compare(0, 10, "version = ") != 0)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
+	const bool effect_v111 = model_file_version == "1.11.0";
+	effect_tanh_gate_ = false;
+	effect_gate_hidden_values_cache_.clear();
+	bool effect_projection_seen = false;
+	int effect_projection_fields = 0, effect_scalar_count_fields = 0;
 	const bool shared_o_v110 = model_file_version == "1.10.0";
-	const bool grouped_v19 = model_file_version == "1.9.0" || shared_o_v110;
+	const bool grouped_v19 = model_file_version == "1.9.0" || shared_o_v110 || effect_v111;
     bool grouped_adaptive=false;
-    if (grouped_v19) {
+    if (grouped_v19 && !effect_v111) {
         const std::streampos here=ifs.tellg();std::string line;
         while(std::getline(ifs,line)) if(line.find("adaptive_radial_projection")!=std::string::npos) grouped_adaptive=true;
         ifs.clear();ifs.seekg(here);
     }
 	if (shared_o_v110 && !grouped_adaptive) ERROR("Version 1.10.0 requires Adaptive shared-o metadata");
-    const bool legacy_v18 = model_file_version == "1.8.0" || (grouped_v19 && !grouped_adaptive);
+    const bool legacy_v18 = model_file_version == "1.8.0" || effect_v111 || (grouped_v19 && !grouped_adaptive);
 	const bool adaptive_v17 = model_file_version == "1.7.0" || (grouped_v19 && grouped_adaptive);
 	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;
 	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
@@ -4634,6 +4723,11 @@ void MLMTPR::Load(const string& filename)
         if (key=="outer_channel_block_size") {
             if(!grouped_v19 || ++grouped_block_fields!=1) ERROR("Grouped block metadata requires unique version 1.9.0 field");
         }
+		if (key == "effect_gate_projection") {
+			if (!effect_v111 || ++effect_projection_fields != 1)
+				ERROR("effect_gate_projection requires unique metadata and version 1.11.0");
+		}
+		if (key == "two_layer_gate_scalar_count") ++effect_scalar_count_fields;
 		if (legacy_v18) {
 			if (key == "outer_channel_mode") ++legacy_outer_channel_fields;
 			if (key == "outer_radial_mode") ++legacy_outer_radial_fields;
@@ -4669,7 +4763,9 @@ void MLMTPR::Load(const string& filename)
 		else if (key == "tensor_message_optimizer_scales") ++tensor_scale_fields;
 		else ERROR("SUS2-SH model contains an unknown tensor message field");
 	}
-	if (grouped_v19 && !shared_o_v110 && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
+	if (model_file_version == "1.9.0" && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
+	if (effect_v111 && (effect_projection_fields != 1 || effect_scalar_count_fields != 1))
+		ERROR("Version 1.11.0 requires explicit effect projection and gate scalar count");
 	if (legacy_v18 && (readout_fields != 1 || legacy_outer_channel_fields != 1 || legacy_outer_radial_fields != 1))
 		ERROR("Version 1.8.0 requires unique readout and outer mode fields");
 	if (model_file_version == "1.4.0"
@@ -4932,6 +5028,15 @@ void MLMTPR::Load(const string& filename)
 		ifs.ignore(2);
 		ifs >> sh_k_max_;
 		ifs >> tmpstr;
+		if (tmpstr == "effect_gate_projection") {
+			ifs.ignore(2);
+			ifs >> tmpstr;
+			effect_projection_seen = true;
+			if (!effect_v111 || tmpstr != "tanh-gate")
+				ERROR("Version 1.11.0 requires effect_gate_projection = tanh-gate");
+			effect_tanh_gate_ = true;
+			ifs >> tmpstr;
+		}
 		if (tmpstr != "sh_body_order")
 			ERROR("SUS2-SH model is missing sh_body_order");
 		ifs.ignore(2);
@@ -5866,8 +5971,8 @@ void MLMTPR::Load(const string& filename)
 				}
 				int explicit_gate_scalar_count = -1;
 				if (tmpstr == "two_layer_gate_scalar_count") {
-					if (!OuterUsesAdaptiveRadialCoefficients())
-						ERROR("SUS2-SH two_layer_gate_scalar_count is only valid for adaptive radial models");
+					if (!OuterUsesAdaptiveRadialCoefficients() && !EffectGateTanhProjection())
+						ERROR("two_layer_gate_scalar_count requires adaptive or tanh-gate projection");
 					ifs.ignore(2);
 					ifs >> explicit_gate_scalar_count;
 					if (explicit_gate_scalar_count <= 0)
@@ -5890,7 +5995,7 @@ void MLMTPR::Load(const string& filename)
 				int gate_scalar_count =
 					explicit_gate_scalar_count >= 0
 						? explicit_gate_scalar_count : gate_weight_count;
-				if (TwoLayerGateUsesFullScalarWeights()) {
+				if (TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()) {
 					if (!OuterUsesAdaptiveRadialCoefficients()
 					    && (radial_func_count <= 0
 					        || gate_weight_count % radial_func_count != 0))
@@ -5955,7 +6060,13 @@ void MLMTPR::Load(const string& filename)
 		}
 		if (tmpstr != "two_layer_gate_weights")
 			ERROR("SUS2-SH two-layer gate is missing two_layer_gate_weights");
-		ReadDoubleList(ifs, two_layer_gate_weights_, gate_weight_count);
+		if (EffectGateTanhProjection()) {
+			if (explicit_gate_scalar_count <= 0 || gate_weight_count != TwoLayerGateWeightCount())
+				ERROR("tanh-gate weights must be Wdown[K,Q] followed by Wup[D,K]");
+			ReadDoubleListExact(ifs, two_layer_gate_weights_, gate_weight_count, "two_layer_gate_weights");
+			for (double value : two_layer_gate_weights_) if (!std::isfinite(value))
+				ERROR("tanh-gate projection weights must be finite");
+		} else ReadDoubleList(ifs, two_layer_gate_weights_, gate_weight_count);
 		ifs.ignore(1000, '\n');
 
 			if (!(ifs >> tmpstr))
@@ -6651,6 +6762,11 @@ void MLMTPR::Load(const string& filename)
 			    || tensor_scales_seen != (tensor_scale_fields == 1))
 				ERROR("SUS2-SH version 1.5.0 has misplaced optimizer-scale metadata");
 		}
+		if (effect_v111) {
+			if (!is_sh_potential_ || !effect_projection_seen)
+				ERROR("Version 1.11.0 requires ordered tanh-gate metadata");
+			ValidateEffectTanhGate();
+		}
 		MemAlloc();
 		if (adaptive_v17 && (!latent_rank_seen || !activation_seen || !joint_enabled_seen))
 			ERROR("SUS2-SH version 1.7.0 rank/activation/joint metadata is misplaced");
@@ -7019,7 +7135,7 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (AdaptiveRadialSharedO() ? "1.10.0" : outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
+	    << (EffectGateTanhProjection() ? "1.11.0" : AdaptiveRadialSharedO() ? "1.10.0" : outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
 	         && (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
 	        (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
 	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << '\n';
@@ -7052,6 +7168,7 @@ void MLMTPR::Save(const string& filename)
 		ofs << "potential_tag = SUS2-SH" << endl;
 		ofs << "sh_l_max = " << sh_l_max_ << endl;
 		ofs << "sh_k_max = " << sh_k_max_ << endl;
+		if (EffectGateTanhProjection()) ofs << "effect_gate_projection = tanh-gate\n";
 		ofs << "sh_body_order = " << sh_body_order_ << endl;
 		ofs << "sh_parity = " << sh_parity_ << endl;
 		std::vector<int> body_lmax = sh_body_l_max_;
@@ -7190,11 +7307,11 @@ void MLMTPR::Save(const string& filename)
 		// original rank-1 experimental binary.
 		if (outer_k_rank_ != 1)
 			ofs << "outer_k_rank = " << outer_k_rank_ << '\n';
-			if (outer_channel_mode_=="grouped-cross" || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
+			if (EffectGateTanhProjection() || outer_channel_mode_=="grouped-cross" || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients() || UsesSpeciesReadout() || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k")) {
 			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
             if (outer_channel_mode_=="grouped-cross") ofs << "outer_channel_block_size = " << outer_channel_block_size_ << '\n';
 				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-				if (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
+				if (EffectGateTanhProjection() || UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "readout_mode = " << readout_mode_ << '\n';
 				if (AdaptiveRadialExtendedLayout() || JointReadoutEnabled()) {
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
@@ -7362,7 +7479,7 @@ void MLMTPR::Save(const string& filename)
 			}
 			ofs << "}\n";
 		}
-		if (OuterUsesAdaptiveRadialCoefficients())
+		if (OuterUsesAdaptiveRadialCoefficients() || EffectGateTanhProjection())
 			ofs << "two_layer_gate_scalar_count = "
 			    << TwoLayerGateScalarCount() << '\n';
 		ofs << "two_layer_gate_weight_count = " << TwoLayerGateWeightCount() << '\n';
@@ -8667,7 +8784,7 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 	const int gate_count = TwoLayerGateScalarCount();
 	const int body_count = TwoLayerGateBodyOrderCount();
 	const bool full_seed_blas =
-		TwoLayerGateUsesFullScalarWeights()
+		TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 		&& gate_count > 0
 		&& two_layer_gate_adjoints_.size()
 			== static_cast<size_t>(cfg.size()) * radial_func_count;
@@ -8741,7 +8858,7 @@ void MLMTPR::AccumulateTwoLayerGateForceChain(Configuration& cfg, const Neighbor
 			}
 		} else {
 			AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
-				gate_adjoints, scalar_seeds.data(), body_seed_scratch);
+				gate_adjoints, scalar_seeds.data(), body_seed_scratch, ind);
 		}
 		if (has_readout_seed) {
 			const double center_linear = linear_coeffs[neighborhoods[ind].my_type];
@@ -9524,6 +9641,9 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 			if (multi_layer_gate_enabled_)
 				energy_second_gate_adjoints.assign(
 					static_cast<size_t>(cfg.size()) * radial_func_count, 0.0);
+			std::vector<double> effect_curvature_seed_cache;
+			if (EffectGateTanhProjection()) effect_curvature_seed_cache.assign(
+				static_cast<size_t>(cfg.size()) * TwoLayerGateScalarCount(), 0.0);
 			std::vector<double> gate_directional_moment_tangent_cache;
 		std::vector<char> gate_directional_moment_tangent_valid;
 		std::vector<double> second_gate_chain_directional_values;
@@ -9756,6 +9876,14 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 							out_grads_accumulator[directional_gate_weight_offset + q] +=
 								adjoint * tangent;
 					}
+				} else if (EffectGateTanhProjection()) {
+					AccumulateEffectGateProjectionGrad(
+						two_layer_gate_scalar_values_cache_.data() + static_cast<size_t>(ind) * directional_gate_count,
+						energy_gate_adjoint_by_mu,
+						out_grads_accumulator.data() + TwoLayerGateWeightOffset(),
+						gate_scalar_tangents.data(), directional_by_mu,
+						effect_curvature_seed_cache.data() + static_cast<size_t>(ind) * directional_gate_count,
+						effect_gate_hidden_values_cache_.data() + static_cast<size_t>(ind) * EffectGateHiddenCount());
 				} else if (TwoLayerGateUsesFullScalarWeights()) {
 					const int gate_count = TwoLayerGateScalarCount();
 					cblas_dgemv(CblasRowMajor,
@@ -9886,7 +10014,7 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 	const int gate_count_for_weights = TwoLayerGateScalarCount();
 	const int body_count_for_weights = TwoLayerGateBodyOrderCount();
 	const bool full_gate_weight_blas =
-		TwoLayerGateUsesFullScalarWeights()
+		TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 		&& gate_count_for_weights > 0
 		&& two_layer_gate_adjoints_.size()
 			== static_cast<size_t>(cfg.size()) * radial_func_count
@@ -10036,6 +10164,10 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 						out_grads_accumulator[gate_weight_offset + q] +=
 							body_adjoint * scalar_values[q];
 				}
+			} else if (EffectGateTanhProjection()) {
+				AccumulateEffectGateProjectionGrad(scalar_values, gate_adjoints_by_mu,
+					out_grads_accumulator.data() + TwoLayerGateWeightOffset(), nullptr, nullptr, nullptr,
+					effect_gate_hidden_values_cache_.data() + static_cast<size_t>(ind) * EffectGateHiddenCount());
 			} else if (TwoLayerGateUsesFullScalarWeights()) {
 				for (int mu = 0; mu < radial_func_count; ++mu) {
 					const double gate_adjoint = gate_adjoints_by_mu[mu];
@@ -10075,7 +10207,7 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 				const int gate_count = TwoLayerGateScalarCount();
 			const int body_count = TwoLayerGateBodyOrderCount();
 			const bool full_seed_blas =
-				TwoLayerGateUsesFullScalarWeights()
+				TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 				&& gate_count > 0
 				&& two_layer_gate_adjoints_.size()
 					== static_cast<size_t>(cfg.size()) * radial_func_count;
@@ -10199,7 +10331,7 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 					AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 						gate_adjoints_by_mu,
 						scalar_gate_seeds.data(),
-						scalar_seed_body_scratch);
+						scalar_seed_body_scratch, ind);
 					if (!energy_gate_adjoints.empty()) {
 						const double* energy_gate_adjoints_by_mu =
 							energy_gate_adjoints.data()
@@ -10207,13 +10339,17 @@ void MLMTPR::AccumulateEFSCombinationGrad(Configuration& cfg,
 						AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 							energy_gate_adjoints_by_mu,
 							scalar_energy_seeds.data(),
-							scalar_seed_body_scratch);
+							scalar_seed_body_scratch, ind);
 						scalar_energy_seed_values = scalar_energy_seeds.data();
 					} else {
 						std::fill(scalar_energy_seeds.begin(),
 						          scalar_energy_seeds.end(),
 						          0.0);
 					}
+				}
+				if (EffectGateTanhProjection() && !effect_curvature_seed_cache.empty()) {
+					const double* curvature = effect_curvature_seed_cache.data() + static_cast<size_t>(ind) * gate_count;
+					for (int q = 0; q < gate_count; ++q) scalar_gate_seeds[q] += curvature[q];
 				}
 				if (!full_seed_blas && !energy_gate_adjoints.empty()) {
 					scalar_energy_seed_values = scalar_energy_seeds.data();
@@ -10498,7 +10634,7 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 	const int energy_gate_count_for_weights = TwoLayerGateScalarCount();
 	const int energy_body_count_for_weights = TwoLayerGateBodyOrderCount();
 	const bool energy_full_gate_weight_blas =
-		TwoLayerGateUsesFullScalarWeights()
+		TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 		&& energy_gate_count_for_weights > 0
 		&& two_layer_gate_adjoints_.size()
 			== static_cast<size_t>(cfg.size()) * radial_func_count
@@ -10651,6 +10787,10 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 						out_grads_accumulator[gate_weight_offset + q] +=
 							body_adjoint * scalar_values[q];
 				}
+			} else if (EffectGateTanhProjection()) {
+				AccumulateEffectGateProjectionGrad(scalar_values, gate_adjoints_by_mu,
+					out_grads_accumulator.data() + TwoLayerGateWeightOffset(), nullptr, nullptr, nullptr,
+					effect_gate_hidden_values_cache_.data() + static_cast<size_t>(ind) * EffectGateHiddenCount());
 			} else if (TwoLayerGateUsesFullScalarWeights()) {
 				for (int mu = 0; mu < radial_func_count; ++mu) {
 					const double gate_adjoint = gate_adjoints_by_mu[mu];
@@ -10676,7 +10816,7 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 			const int gate_count = TwoLayerGateScalarCount();
 			const int body_count = TwoLayerGateBodyOrderCount();
 			const bool full_seed_blas =
-				TwoLayerGateUsesFullScalarWeights()
+				TwoLayerGateUsesFullScalarWeights() && !EffectGateTanhProjection()
 				&& gate_count > 0
 				&& two_layer_gate_adjoints_.size()
 					== static_cast<size_t>(cfg.size()) * radial_func_count;
@@ -10746,7 +10886,7 @@ void MLMTPR::AccumulateEnergyCombinationGrad(Configuration& cfg,
 					AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 						gate_adjoints_by_mu,
 						scalar_gate_seeds.data(),
-						scalar_seed_body_scratch);
+						scalar_seed_body_scratch, ind);
 				}
 					AccumulateTwoLayerGateScalarParamGradForScalarSeeds(
 					neighborhoods[ind],
@@ -11007,7 +11147,7 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 				AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 					gate_adjoints,
 					first_scalar_seeds.data(),
-					body_seed_scratch);
+					body_seed_scratch, ind);
 				const Neighborhood& nbh = neighborhoods[ind];
 				CalcTwoLayerGateWeightedScalarDersForScalarSeeds(
 					nbh,
@@ -11053,10 +11193,11 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 
 	// Evaluate A * W * D as A * (W * D). This avoids materializing the much
 	// wider ScalarReadoutCoeffCount() x gate_scalar_count intermediate.
-	sh_gate_linear_weight_matrix_.resize(
-		static_cast<size_t>(radial_func_count) * gate_scalar_count);
-	bool has_gate_weight = false;
-	for (int mu = 0; mu < radial_func_count; ++mu)
+	if (!EffectGateTanhProjection())
+		sh_gate_linear_weight_matrix_.resize(
+			static_cast<size_t>(radial_func_count) * gate_scalar_count);
+	bool has_gate_weight = EffectGateTanhProjection();
+	for (int mu = 0; !EffectGateTanhProjection() && mu < radial_func_count; ++mu)
 		for (int q = 0; q < gate_scalar_count; ++q) {
 			const double weight = TwoLayerGateWeight(mu, q);
 			sh_gate_linear_weight_matrix_[
@@ -11108,20 +11249,41 @@ void MLMTPR::ApplySHGateLinearComponentChain(
 
 			sh_gate_linear_mu_coord_ders_.resize(
 				static_cast<size_t>(radial_func_count) * coord_count);
-			cblas_dgemm(CblasRowMajor,
-			            CblasNoTrans,
-			            CblasNoTrans,
-			            radial_func_count,
-			            coord_count,
-			            gate_scalar_count,
-			            1.0,
-			            sh_gate_linear_weight_matrix_.data(),
-			            gate_scalar_count,
-			            sh_gate_scalar_ders_.data(),
-			            coord_count,
-			            0.0,
-			            sh_gate_linear_mu_coord_ders_.data(),
-			            coord_count);
+			if (EffectGateTanhProjection()) {
+				const int K = EffectGateHiddenCount();
+				const double* weights = TwoLayerGateFullWeightMatrixData();
+				const double* hidden = effect_gate_hidden_values_cache_.data() + static_cast<size_t>(ind) * K;
+				sh_gate_linear_weight_matrix_.resize(static_cast<size_t>(K) * coord_count);
+				// JVP: Wup * diag(tanh'(z)) * (Wdown * dS/dx).
+				cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+					K, coord_count, gate_scalar_count, 1.0, weights, gate_scalar_count,
+					sh_gate_scalar_ders_.data(), coord_count, 0.0,
+					sh_gate_linear_weight_matrix_.data(), coord_count);
+				for (int k = 0; k < K; ++k)
+					for (int c = 0; c < coord_count; ++c)
+						sh_gate_linear_weight_matrix_[static_cast<size_t>(k) * coord_count + c]
+							*= 1.0 - hidden[k] * hidden[k];
+				cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+					radial_func_count, coord_count, K, 1.0, weights + K * gate_scalar_count, K,
+					sh_gate_linear_weight_matrix_.data(), coord_count, 0.0,
+					sh_gate_linear_mu_coord_ders_.data(), coord_count);
+			} else {
+				cblas_dgemm(CblasRowMajor,
+				            CblasNoTrans,
+				            CblasNoTrans,
+				            radial_func_count,
+				            coord_count,
+				            gate_scalar_count,
+				            1.0,
+				            sh_gate_linear_weight_matrix_.data(),
+				            gate_scalar_count,
+				            sh_gate_scalar_ders_.data(),
+				            coord_count,
+				            0.0,
+				            sh_gate_linear_mu_coord_ders_.data(),
+				            coord_count);
+
+			}
 
 			sh_gate_linear_component_ders_.resize(
 				static_cast<size_t>(ScalarReadoutCoeffCount()) * coord_count);

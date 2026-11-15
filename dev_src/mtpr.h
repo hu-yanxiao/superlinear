@@ -95,6 +95,8 @@ protected:
 		int outer_channel_block_size_ = 0;
 		std::string outer_radial_mode_ = "legacy-plus-mixer";
 		std::string readout_mode_ = "shared";
+		bool effect_tanh_gate_ = false;
+		std::vector<double> effect_gate_hidden_values_cache_;
 		std::string adaptive_radial_projection_ = "full";
 		std::string adaptive_radial_amplitude_mode_ = "shared";
 		int adaptive_radial_shared_n_rank_ = 1;
@@ -1145,6 +1147,13 @@ public:
 			return two_layer_gate_scalar_moment_indices_[scalar_weight_index];
 		}
 		int TwoLayerGateScalarBodyOrder(int scalar_weight_index) const;
+			const char* EffectGateProjection() const { return effect_tanh_gate_ ? "tanh-gate" : "linear"; }
+			bool EffectGateTanhProjection() const { return effect_tanh_gate_; }
+			int EffectGateHiddenCount() const { return sh_k_max_; }
+			void ValidateEffectTanhGate() const;
+			void AccumulateEffectGateProjectionGrad(const double* scalars, const double* adjoints,
+				double* gradient, const double* tangents, double* values,
+				double* curvature_seeds, const double* hidden) const;
 			int TwoLayerGateWeightCount() const;
 			int TwoLayerGateWeightOffset() const;
 			int TwoLayerGateBodyMixWeightCount() const;
@@ -1295,7 +1304,7 @@ public:
 			void AccumulateTwoLayerGateScalarSeedsFromMuAdjoints(
 				const double* mu_adjoints,
 				double* scalar_seeds,
-				std::vector<double>& body_scratch) const;
+				std::vector<double>& body_scratch, int atom_index = -1) const;
 			double TwoLayerResidualE0Coeff(int scalar_index) const;
 			void InitializeTwoLayerGateRadialCoeffsFromBase();
 			void InitializeTwoLayerGateScalingCoeffsFromBase();

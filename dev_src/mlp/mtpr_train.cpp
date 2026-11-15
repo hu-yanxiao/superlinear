@@ -518,6 +518,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			"sh-factor-pruning",
 			"readout-mode",
 			"joint-readout",
+			"effect-gate-projection",
 			"adaptive-radial-projection",
 			"adaptive-radial-amplitude-mode",
 			"adaptive-radial-shared-n-rank",
@@ -2484,6 +2485,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	        || ((requested_superlinear_mode == "radial-coefficient-gate")
 	            != mtpr.OuterUsesAdaptiveRadialCoefficients())))
 		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
+	if (!opts["effect-gate-projection"].empty()
+	    && opts["effect-gate-projection"] != mtpr.EffectGateProjection())
+		ERROR("--effect-gate-projection must match the saved architecture; initialize a new model to change it");
 		if (!opts["readout-mode"].empty()) {
 			if (opts["readout-mode"] != "shared" && opts["readout-mode"] != "species")
 				ERROR("--readout-mode should be shared or species");

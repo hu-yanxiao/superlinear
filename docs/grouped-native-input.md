@@ -44,17 +44,20 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 | `model.l_max` | `l-max` | 最大角动量 L；C++ 支持 0..6；默认 3 |
 | `model.radial_channels` | `k-max` | K；默认 3 |
 | `model.neighbor_cutoff` | `cutoff` | 邻域截断，单位 Å；默认 7.5 |
+| `model.angular_cutoff` | `angular-cutoff` | l>0 截断；省略等于 neighbor_cutoff，须满足 0 < angular_cutoff <= neighbor_cutoff |
 | `model.radial.basis` | `radial-basis-type` | `chebyshev-sss`（默认）、`laguerre-log1p` |
 | `model.radial.basis_size` | `radial-basis-size` | 径向基函数数 N；默认 10 |
 | `model.radial.basis_scale` | `scaling` | 全局径向基缩放；默认 0.01 |
 | `model.radial.reference_min_distance` | `min-dist` | 径向基参考下界，单位 Å；默认 1.5；不是强制排斥或数据过滤阈值 |
 | `model.radial.warp_sharing` | `scaling-map` | `L`、`K`、`LK`（默认）；兼容 `angular`→L、`channel`→K、`channel-angular`→LK；只控制距离坐标变换的共享方式 |
 | `model.coordination.enabled` | 输入适配层开关 | 默认 true；false 选择无 gate 的静态径向模型，不是冻结已有 U |
+| `model.coordination.gate_projection` | `effect-gate-projection` | Effect 专用；`linear`（默认）或 `tanh-gate` |
 | `model.coordination.channels` | `two-layer-gate-k-rank` | R；默认 K |
 | `model.coordination.body_order` | `two-layer-gate-body-order` | 配位环境多体阶数，2..6；默认相互作用多体阶数 |
 | `model.coordination.channel_coupling` | `two-layer-gate-factor-pruning` | `cross`→q-total（默认），`diagonal`→same-k |
 | `model.coordination.distance_warp` | `two-layer-gate-decoupled-scaling` | `shared`（默认）或 `independent`；shared 时不传这个存在即启用的旧开关 |
 | `model.coordination.tensor_l_max` | `tensor-message-lmax` | 0（默认）、1、2，且不超过 L |
+| `model.interaction.channel_block_size` | `outer-channel-block-size` | 可选正整数，须整除 O；启用 grouped-cross 外层图，可允许 O>K |
 | `model.interaction.channels` | `outer-k-rank` | O；必须显式提供，避免误用旧架构的默认 0 |
 | `model.interaction.body_order` | `body-order` | 相互作用多体阶数，2..6；默认 5 |
 | `model.interaction.channel_coupling` | `sh-factor-pruning` | Adaptive / Effect 默认 `diagonal`→same-k，可选 `cross`→q-total；静态 ranked 模式仅 `cross`，也是该模式的默认值 |
@@ -150,6 +153,59 @@ per-element: E_i = s_Z + h_Z + sum_q d_Zq Phi_iq
 warmup，但不插入历史额外 75 步 pretraining。Effect 续训显式指定该 profile 并省略
 `model.*`；不会隐式改写 checkpoint 的结构。新模型支持 same / random 初始化。
 径向平滑及 readout/gate L2 可调，省略时保留原生默认；Adaptive 固定协议不变。
+
+### 可选的 tanh-gate 投影
+
+只在新 Effect 模型初始化时设置 `model.coordination.gate_projection: tanh-gate`。
+省略仍使用旧 `linear` 投影；续训继承保存的结构，不能用此选项切换已有模型。
+标准 neighbor / additive-node、单层 full scalar gate 使用无 bias 的公式：
+
+```text
+S_j ∈ R^Q
+h_j = tanh(Wdown S_j)                 Wdown: [K,Q]
+f_j = Wup h_j                         Wup:   [D,K]
+v_j = v0_j + alpha_j ⊙ f_j
+```
+
+Q 是配位图的标量数，K 是原始 `radial_channels`，不是配位投影 R；
+D 是径向信号宽度 `radial_funcs_count`。`v0_j` 与 `alpha_j` 是已有 additive-node
+元素系数；它们不属于 MLP bias。tanh 只作用于隐藏层。两矩阵均可训练，并以非零、
+打破隐藏通道对称性的 fan-in 缩放初始化。参数段顺序为 row-major Wdown 后 Wup，
+总数 KQ+DK；非默认模型显式写 `effect_gate_projection = tanh-gate` 和版本 1.11.0。
+
+以下可独立用于 `init-sh`；元素顺序仍需与之后的 CFG type 对应：
+
+```yaml
+schema_version: 1
+model:
+  kind: coordination-effect
+  elements: [H, O]
+  l_max: 1
+  radial_channels: 4
+  neighbor_cutoff: 6.5
+  angular_cutoff: 5.0             # 省略或设为 6.5 即单截断
+  radial:
+    basis_size: 4
+  coordination:
+    gate_projection: tanh-gate
+    channels: 2
+    body_order: 3
+  interaction:
+    channels: 4
+    channel_block_size: 2        # 可省略；此处启用真实 grouped-cross
+    body_order: 3
+    channel_coupling: cross
+  readout:
+    element_mode: per-element   # shared 也支持，只改变中心元素能量读出
+output:
+  model: effect-tanh.sus2
+```
+
+保存为 `effect-tanh.yaml` 后运行 `bin/mlp-sus2 init-sh effect-tanh.yaml`。
+双截断分别作用于 l=0 与全部 l>0，两层共用这对截断；它们与 gate 投影、
+shared/per-element 能量读出独立选择。原生旧 CLI 对应
+`--effect-gate-projection=tanh-gate --cutoff=6.5 --angular-cutoff=5.0 --readout-mode=species`，
+还需按原用法提供 ranked full scalar Effect 的其他初始化选项。
 
 ## 不使用配位效应层
 

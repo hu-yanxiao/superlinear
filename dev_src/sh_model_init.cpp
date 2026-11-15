@@ -15,6 +15,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -1250,6 +1251,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	    && superlinear_mode != "pure-w-channelwise"
 	    && superlinear_mode != "radial-coefficient-gate")
 		ERROR("--superlinear-mode should be legacy, pure-w-channelwise, or radial-coefficient-gate.");
+	const std::string effect_gate_projection = StringOpt(opts, "effect-gate-projection", "linear");
+	if (effect_gate_projection != "linear" && effect_gate_projection != "tanh-gate")
+		ERROR("--effect-gate-projection must be linear or tanh-gate.");
+	const bool effect_tanh = effect_gate_projection == "tanh-gate";
 	const bool pure_w_channelwise = superlinear_mode == "pure-w-channelwise";
 	const bool radial_coefficient_gate =
 		superlinear_mode == "radial-coefficient-gate";
@@ -1598,6 +1603,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ERROR("--outer-k-rank generated no outer scalar basis functions.");
 	}
 
+	if (effect_tanh && (superlinear_mode != "legacy" || !two_layer_gate
+	    || !outer_k_rank_enabled || !two_layer_gate_k_rank_enabled
+	    || two_layer_gate_mode != "mu-scalar-full" || two_layer_gate_site_mode != "neighbor"
+	    || multi_layer_gate || two_layer_residual || two_layer_gate_readout || two_layer_gate_edge_l1))
+		ERROR("tanh-gate requires ranked coordination-effect, full scalar neighbor gate without auxiliary heads.");
 	std::ofstream ofs(filename.c_str());
 	if (!ofs.is_open())
 		ERROR("Cannot open output model for writing: " + filename);
@@ -1616,7 +1626,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		    || (two_layer_gate_k_rank_enabled
 		        && two_layer_gate_factor_pruning == SHFactorPruning::SameK));
 	ofs << "version = "
-	    << (adaptive_projection == "shared-o" ? "1.10.0" : grouped_outer ? "1.9.0" : (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	    << (effect_tanh ? "1.11.0" : adaptive_projection == "shared-o" ? "1.10.0" : grouped_outer ? "1.9.0" : (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
 	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
@@ -1627,6 +1637,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	ofs << "potential_tag = SUS2-SH\n";
 	ofs << "sh_l_max = " << lmax << "\n";
 	ofs << "sh_k_max = " << kmax << "\n";
+	if (effect_tanh) ofs << "effect_gate_projection = tanh-gate\n";
 	ofs << "sh_body_order = " << body_order << "\n";
 	ofs << "sh_parity = even\n";
 	ofs << "sh_body_l_max = {" << body_lmax[2] << ", " << body_lmax[3]
@@ -1741,7 +1752,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		// prototype, whose reader does not know the generic rank field.
 		if (outer_k_rank != 1)
 			ofs << "outer_k_rank = " << outer_k_rank << "\n";
-		if (legacy_v18 || (grouped_outer && !radial_coefficient_gate)) {
+		if (effect_tanh || legacy_v18 || (grouped_outer && !radial_coefficient_gate)) {
 			ofs << "outer_channel_mode = "
 			    << (grouped_outer ? "grouped-cross" : (outer_same_channel_mode ? "same-channel" : "cross-channel")) << "\n";
 			if (grouped_outer) ofs << "outer_channel_block_size = " << outer_channel_block_size << "\n";
@@ -1927,10 +1938,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "}\n";
 			const int gate_weight_count =
 				radial_coefficient_gate ? 0
+                : effect_tanh ? kmax * (static_cast<int>(gate_scalar_indices.size()) + radial_func_count)
 				: (two_layer_gate_mode == "mu-scalar-full")
 					? radial_func_count * static_cast<int>(gate_scalar_indices.size())
 				: static_cast<int>(gate_scalar_indices.size());
-		if (radial_coefficient_gate)
+		if (radial_coefficient_gate || effect_tanh)
 			ofs << "two_layer_gate_scalar_count = "
 			    << gate_scalar_indices.size() << "\n";
 		ofs << "two_layer_gate_weight_count = " << gate_weight_count << "\n";
@@ -1973,10 +1985,23 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			ofs << "}\n";
 		}
 		ofs << "two_layer_gate_weights = {";
+		std::vector<double> projection_weights;
+		if (effect_tanh) {
+			// A fixed stream makes fresh `same` initialization reproducible while
+			// independent draws avoid correlated/rank-deficient hidden directions.
+			std::mt19937 projection_rng(5489u);
+			std::uniform_real_distribution<double> projection_uniform(-1.0, 1.0);
+			projection_weights.resize(gate_weight_count);
+			const int down_count = kmax * static_cast<int>(gate_scalar_indices.size());
+			for (int i = 0; i < gate_weight_count; ++i) {
+				const bool down = i < down_count;
+				const double fan = down ? static_cast<double>(gate_scalar_indices.size()) : static_cast<double>(kmax);
+				projection_weights[i] = (down ? 1.0 : 0.2) * std::sqrt(3.0 / fan) * projection_uniform(projection_rng);
+			}
+		}
 		for (int i = 0; i < gate_weight_count; ++i) {
-			if (i != 0)
-				ofs << ", ";
-			ofs << 1.0e-1;
+			if (i != 0) ofs << ", ";
+			ofs << (effect_tanh ? projection_weights[i] : 1.0e-1);
 		}
 		ofs << "}\n";
 		if (!radial_coefficient_gate

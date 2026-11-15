@@ -35,11 +35,13 @@ const Rule rules[] = {
     {"model.radial.reference_min_distance", "min-dist", "nonnegative-real"},
     {"model.radial.warp_sharing", "scaling-map", "L=L|K=K|LK=LK|pair=pair|angular=L|channel=K|channel-angular=LK"},
     {"model.coordination.enabled", "@coordination-enabled", "bool"},
+    {"model.coordination.gate_projection", "effect-gate-projection", "linear=linear|tanh-gate=tanh-gate"},
     {"model.coordination.channels", "two-layer-gate-k-rank", "positive-int"},
     {"model.coordination.body_order", "two-layer-gate-body-order", "positive-int"},
     {"model.coordination.channel_coupling", "two-layer-gate-factor-pruning", "cross=q-total|diagonal=same-k"},
     {"model.coordination.distance_warp", "two-layer-gate-decoupled-scaling", "shared=false|independent=true"},
     {"model.coordination.tensor_l_max", "tensor-message-lmax", "int"},
+    {"model.interaction.channel_block_size", "outer-channel-block-size", "positive-int"},
     {"model.interaction.channels", "outer-k-rank", "positive-int"},
     {"model.interaction.body_order", "body-order", "positive-int"},
     {"model.interaction.channel_coupling", "sh-factor-pruning", "diagonal=same-k|cross=q-total"},
@@ -496,6 +498,8 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         for (const auto& value : settings)
             if (Starts(value.first, "model.response."))
                 Fail(value.first + " is unavailable for coordination-effect; this model has no adaptive U projection");
+    if (!continuation && settings.count("model.coordination.gate_projection") && (!legacy_kind || !coordination_enabled))
+        Fail("model.coordination.gate_projection requires coordination-effect with coordination enabled");
     Values paths; std::string elements;
     for (const auto& value : settings) {
         if (!KnownKey(value.first)) Fail("unknown setting '" + value.first + "'");
@@ -538,6 +542,8 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     for (const auto& alias : Values{{"max-dist", "cutoff"}, {"bfgs-conv-tol", "optimizer-conv-tol"}, {"bfgs-trace-file", "optimizer-trace-file"}})
         if (opts.count(alias.first) && opts.count(alias.second) && !Equivalent(opts[alias.first], opts[alias.second])) Fail("conflicting --" + alias.first + " and --" + alias.second);
     ValidateLegacyOptions(opts, static_profile, legacy_profile);
+    if (!continuation && opts.count("effect-gate-projection") && (!legacy_kind || !coordination_enabled))
+        Fail("--effect-gate-projection requires coordination-effect with coordination enabled");
     if ((paths.count("@train") || paths.count("@model") || paths.count("@output")) && !args.empty())
         Fail("do not mix positional model/data/output paths with grouped data/output.model paths");
     if (continuation) {
@@ -583,8 +589,10 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
         const int n = GetInt(opts, "radial-basis-size", 10), tensor = GetInt(opts, "tensor-message-lmax", 0);
         if (coordination_enabled && legacy_kind && !opts.count("two-layer-gate-k-rank"))
             Put(opts, "two-layer-gate-k-rank", std::to_string(g));
-        if (l > 6 || !k || !o || o > k || !g || g > k || body < 2 || body > 6 || gate_body < 2 || gate_body > 6 || !n || tensor > 2 || tensor > l)
-            Fail("invalid architecture: require L=0..6, 1<=R,O<=K, body orders=2..6, tensor L<=min(2,L)");
+        const int block = GetInt(opts, "outer-channel-block-size", 0);
+        if (block && (block > o || o % block)) Fail("interaction.channel_block_size must divide interaction.channels");
+        if (l > 6 || !k || !o || (!block && o > k) || !g || g > k || body < 2 || body > 6 || gate_body < 2 || gate_body > 6 || !n || tensor > 2 || tensor > l)
+            Fail("invalid architecture: require L=0..6, 1<=R<=K, O<=K unless grouped, body orders=2..6, tensor L<=min(2,L)");
         if (opts.count("joint-readout") && opts["joint-readout"] == "true" && l < 1)
             Fail("joint readout requires l_max >= 1");
         const int d = GetInt(opts, "adaptive-radial-shared-n-rank", 1);
@@ -733,6 +741,7 @@ const char* Help() {
            "    --coord-channels R --interaction-channels O --neighbor-cutoff ANGSTROM\n"
            "    Compact aliases: --L L --K K --R R --O O (identical meanings in both families)\n"
            "    --model.kind coordination-effect (or effect): ranked environment effect, no adaptive response U\n"
+           "    --effect-gate-projection linear|tanh-gate (default linear; hidden width K)\n"
            "    --coord-coupling cross|diagonal --interaction-coupling cross|diagonal\n"
            "    --coord-enabled false: static radial weights, no coordination/response keys\n"
            "    --distance-warp-sharing L|K|LK|pair (default LK; semantic aliases remain valid)\n"
