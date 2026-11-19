@@ -29,6 +29,8 @@ struct AdaptiveRadialExecution {
     std::vector<double> joint_site_values;
     std::vector<double> values, tangents, adjoints, tangent_adjoints;
     std::vector<double> radial_values, radial_derivatives, radial_tangents;
+    bool site_local_radial = false;
+    std::vector<double> outer_type_coeffs;
     std::vector<double> site_values;
     std::vector<double> component_coefficient_adjoints;
     bool reusable_full_cache = false;

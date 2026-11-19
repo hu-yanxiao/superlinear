@@ -26,6 +26,11 @@ Build from this source checkout. A separate interface copy needs
 `-Ccmake.define.SUPERLINEAR_SOURCE_DIR=/absolute/path/to/superlinear`.
 The package is independent of `pysus2sh`.
 
+On Haswell-compatible x86-64 hosts, an AVX2/FMA build can be selected with
+`-Ccmake.define.PYSUPERLINEAR_ENABLE_AVX2=ON` when installing from source.
+Use the portable default when the wheel will run on a mix of CPU architectures.
+Both builds use float64 with the same ASE units and calculator API.
+
 ## ASE and relaxation
 
 The example below uses **carbon diamond**, not silicon. Replace `["C"]` with

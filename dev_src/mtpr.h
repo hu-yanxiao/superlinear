@@ -266,7 +266,8 @@ protected:
 	void ReportPureWExecution() const;
 	void PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
 	                           bool derivatives,
-	                           bool parameters);
+	                           bool parameters,
+	                           bool site_local_radial = false);
 	void ForwardAdaptiveRadialSite(const Neighborhood& nbh,
 	                               int atom,
 	                               const std::vector<Vector3>* direction = nullptr);

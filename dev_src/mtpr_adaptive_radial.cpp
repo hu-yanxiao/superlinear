@@ -109,7 +109,7 @@ size_t TensorGateDenseLocal(int gate_channel, int Lmsg, int m, int tensor_lmax) 
 }
 
 void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
-                                  bool derivatives, bool parameters) {
+                                  bool derivatives, bool parameters, bool site_local_radial) {
     AdaptiveRadialExecution& ex = adaptive_radial_execution_;
     const bool rd_m0=RDM0Angular::Enabled();
     if (rd_m0) ReportRDM0Angular(sh_l_max_);
@@ -215,13 +215,32 @@ void MLMTPR::PrepareAdaptiveRadial(const Neighborhoods& neighborhoods,
         ex.tangent_adjoints.resize(alpha_moments_count);
     }
     const size_t edges=two_layer_edge_offsets_cache_.back();
+    if (edges>0) {
+        // The type multipliers do not depend on the neighbor geometry. Cache
+        // type-major rows in the order used by both edge passes.
+        ex.outer_type_coeffs.resize(static_cast<size_t>(species_count)*B);
+        for (int type=0; type<species_count; ++type)
+            for (int l=0; l<=sh_l_max_; ++l)
+                for (int o=0; o<outer_k_rank_; ++o) {
+                    const int mu=o*(sh_l_max_+1)+l;
+                    ex.outer_type_coeffs[static_cast<size_t>(type)*B+l*outer_k_rank_+o]
+                        =OuterTypeCoeff(type,mu);
+                }
+    }
     if (rd_m0
         && (two_layer_edge_rd_m0_values_cache_.size()!=edges*ex.harmonics
             || (derivatives
                 && two_layer_edge_rd_m0_ders_cache_.size()!=edges*3*ex.harmonics)))
         ERROR("adaptive RD_m0 angular cache has inconsistent size");
-    ex.radial_values.resize(edges*B);
-    if (derivatives) ex.radial_derivatives.resize(edges*B);
+    ex.site_local_radial=site_local_radial;
+    size_t radial_edges=edges;
+    if (site_local_radial) {
+        radial_edges=0;
+        for (const auto& nbh : neighborhoods)
+            radial_edges=std::max(radial_edges, static_cast<size_t>(nbh.count));
+    }
+    ex.radial_values.resize(radial_edges*B);
+    if (derivatives) ex.radial_derivatives.resize(radial_edges*B);
     if (parameters) ex.radial_tangents.resize(edges*B);
     ex.coefficient_adjoints.assign(static_cast<size_t>(atoms)*D,0.0);
     ex.coefficient_tangents.clear();
@@ -315,8 +334,13 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
         && radial_der_stride==ex.radial_stride;
     std::fill(ex.values.begin(),ex.values.end(),0.0);
     if (tangent) std::fill(ex.tangents.begin(),ex.tangents.end(),0.0);
+    const size_t center_type=static_cast<size_t>(nbh.my_type)*B;
     for (int j=0; j<nbh.count; ++j) {
         const size_t edge=two_layer_edge_offsets_cache_[atom]+j;
+        const size_t radial_start=(ex.site_local_radial ? static_cast<size_t>(j) : edge)*B;
+        if (nbh.types[j]<0 || nbh.types[j]>=species_count)
+            ERROR("SUS2-SH outer neighbor type index is out of range");
+        const size_t neighbor_type=static_cast<size_t>(nbh.types[j])*B;
         const double* y=angular_values.data()+edge*H;
         const double* dy=ex.derivatives ? angular_ders.data()+edge*3*H : nullptr;
         const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
@@ -345,10 +369,11 @@ void MLMTPR::ForwardAdaptiveRadialSite(const Neighborhood& nbh, int atom,
                     if (tangent) value_t+=ct[row+n]*rb[rb_start+n];
                 }
                 if (tangent) value_t+=radial_der*wr;
-                ex.radial_values[edge*B+block]=value;
-                if (ex.derivatives) ex.radial_derivatives[edge*B+block]=radial_der;
+                ex.radial_values[radial_start+block]=value;
+                if (ex.derivatives) ex.radial_derivatives[radial_start+block]=radial_der;
                 if (tangent) ex.radial_tangents[edge*B+block]=value_t;
-                const double species=OuterTypeCoeff(nbh.my_type,mu)*OuterTypeCoeff(nbh.types[j],mu);
+                const double species=ex.outer_type_coeffs[center_type+block]
+                    *ex.outer_type_coeffs[neighbor_type+block];
                 for (int m=-l; m<=l; ++m) {
                     const int h=l*l+l+m,node=ex.outer_nodes[o*H+h];
                     double angular=y[h];
@@ -495,8 +520,11 @@ void MLMTPR::AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
     const bool tensor_enabled=TensorMessageEnabled();
     const int TC=tensor_enabled ? TensorMessageComponentCount() : 0;
     const int Lmsg=tensor_enabled ? tensor_message_lmax_ : 0;
+    const size_t center_type=static_cast<size_t>(nbh.my_type)*B;
     for (int j=0;j<nbh.count;++j) {
         const size_t edge=two_layer_edge_offsets_cache_[atom]+j;
+        const size_t radial_start=(ex.site_local_radial ? static_cast<size_t>(j) : edge)*B;
+        const size_t neighbor_type=static_cast<size_t>(nbh.types[j])*B;
         const double* y=two_layer_edge_sh_values_cache_.data()+edge*H;
         const double* dy=two_layer_edge_sh_ders_cache_.data()+edge*3*H;
         const double* rb=two_layer_edge_radial_vals_cache_.data()+edge*ex.radial_stride;
@@ -511,7 +539,8 @@ void MLMTPR::AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
         for (int l=0;l<=sh_l_max_;++l)
             for (int o=0;o<outer_k_rank_;++o) {
                 const int block=l*outer_k_rank_+o, row=block*R,mu=o*(sh_l_max_+1)+l;
-                const double species=OuterTypeCoeff(nbh.my_type,mu)*OuterTypeCoeff(nbh.types[j],mu);
+                const double species=ex.outer_type_coeffs[center_type+block]
+                    *ex.outer_type_coeffs[neighbor_type+block];
                 double radial_adjoint=0;
                 Vector3 angular_adjoint(0,0,0);
                 for (int m=-l;m<=l;++m) {
@@ -524,9 +553,10 @@ void MLMTPR::AccumulateAdaptiveRadialEdgeForces(Configuration& cfg,
                     for (int a=0;a<3;++a) angular_adjoint[a]+=adj*dy[3*h+a];
                     if (tensor_enabled && l>=1 && l<=Lmsg && ha!=nullptr)
                         ha[TensorComponentLocal(l,o,m,outer_k_rank_)]
-                            += species * adj * ex.radial_values[edge*B+block];
+                            += species * adj * ex.radial_values[radial_start+block];
                 }
-                const double r=ex.radial_values[edge*B+block], rd=ex.radial_derivatives[edge*B+block];
+                const double r=ex.radial_values[radial_start+block];
+                const double rd=ex.radial_derivatives[radial_start+block];
                 for (int a=0;a<3;++a)
                     edge_der[a]+=species*(radial_adjoint*rd*nbh.vecs[j][a]/nbh.dists[j]+r*angular_adjoint[a]);
                 const int rb_start=mu_to_radial_eval_block_[mu]*R;
@@ -663,7 +693,9 @@ void MLMTPR::FinishAdaptiveRadialGateForces(Configuration& cfg,const Neighborhoo
 void MLMTPR::CalcAdaptiveRadialEFS(Configuration& cfg,const Neighborhoods& neighborhoods,bool need_derivatives) {
     const bool cache_for_gradient=need_derivatives && two_layer_full_edge_cache_for_next_calc_;
     ResetEFS(cfg);
-    PrepareAdaptiveRadial(neighborhoods,need_derivatives,cache_for_gradient);
+    // Ordinary EFS consumes the radial contractions before advancing to the
+    // next center. The derivative and linear-component paths retain all edges.
+    PrepareAdaptiveRadial(neighborhoods,need_derivatives,cache_for_gradient,!cache_for_gradient);
     cfg.has_energy(true); cfg.has_forces(need_derivatives); cfg.has_stresses(need_derivatives); cfg.has_site_energies(true);
     cfg.cal_se.resize(cfg.size()); cfg.cal_se0.resize(cfg.size());
     cfg.type_mean.assign(cfg.unique_elems.size(),0.0);
