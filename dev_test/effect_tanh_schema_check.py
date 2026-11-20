@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native effect projection schema, backward compatibility, and fail-closed I/O."""
+"""Native Effect projection and radial-layout schema and fail-closed I/O."""
 import argparse
 import json
 import math
@@ -118,6 +118,45 @@ output:
             ):
                 path = out / (label + '-' + bad_label + '.sus2'); path.write_text(malformed)
                 run(label + '-' + bad_label, 'roundtrip-model-dev', path, out / 'invalid-out.sus2', fail=True)
+
+    for warp, projection, extra in (
+        ('K', 'linear', ['--outer-channel-block-size=2']),
+        ('LK', 'tanh-gate', ['--sh-factor-pruning=same-k']),
+    ):
+        label = f'mix-basis-{warp}-{projection}'
+        seed = out / (label + '.sus2')
+        saved = out / (label + '-saved.sus2')
+        run(label + '-init', 'init-sh', seed, '--effect-radial-layout=mix-basis',
+            f'--scaling-map={warp}', f'--effect-gate-projection={projection}',
+            '--species-count=2', '--l-max=1', '--k-max=2', '--body-order=2',
+            '--radial-basis-size=3', '--cutoff=4', '--angular-cutoff=3',
+            '--outer-k-rank=4', '--two-layer-gate-k-rank=3', *extra)
+        run(label + '-save', 'roundtrip-model-dev', seed, saved)
+        text = saved.read_text()
+        assert 'version = 1.12.0' in text
+        assert ('effect_gate_projection = tanh-gate' in text) == (projection == 'tanh-gate')
+        assert 'outer_radial_mode = effect-mix-basis' in text
+        assert 'two_layer_gate_k_rank_weights = {}' in text and 'outer_k_rank1_weights = {}' in text
+        for count_key, value_key, expected in (
+            ('effect_inner_mix_coeff_count', 'effect_inner_mix_coeffs', 2 * 3 * 2 * 3),
+            ('two_layer_gate_radial_mixing_coeff_count', 'two_layer_gate_radial_mixing_coeffs', 2 * 4 * 2 * 3),
+        ):
+            assert f'{count_key} = {expected}\n' in text
+            vals = re.search(r'^' + value_key + r' = \{([^}]+)\}', text, re.MULTILINE)[1].split(',')
+            assert sum(float(value) != 0 for value in vals) == expected // 2
+            assert len(vals) == expected
+        for defect, malformed in (
+            ('legacy-version', text.replace('version = 1.12.0', 'version = 1.11.0')),
+            ('bad-layout', text.replace('outer_radial_mode = effect-mix-basis', 'outer_radial_mode = legacy-plus-mixer')),
+            ('bad-warp', text.replace(f'scaling_map = {warp}\n', 'scaling_map = pair\n')),
+            ('bad-count', text.replace('effect_inner_mix_coeff_count = 36', 'effect_inner_mix_coeff_count = 35')),
+            ('extra-inner', text.replace('effect_inner_mix_coeffs = {', 'effect_inner_mix_coeffs = {0, ')),
+            ('extra-outer', text.replace('two_layer_gate_radial_mixing_coeffs = {',
+                                         'two_layer_gate_radial_mixing_coeffs = {0, ')),
+        ):
+            invalid = out / (label + '-' + defect + '.sus2')
+            invalid.write_text(malformed)
+            run(label + '-' + defect, 'roundtrip-model-dev', invalid, out / 'invalid-out.sus2', fail=True)
     (out / 'report.json').write_text(json.dumps({'checks': checked, 'status': 'PASS'}, indent=2) + '\n')
     print(f'PASS {len(checked)} native schema checks; artifacts: {out}')
 

@@ -543,6 +543,23 @@ protected:
 	int TwoLayerGateKRankBasicIndex(int channel, int l, int m) const;
 	int TwoLayerGateKRankRawBasicIndex(int l, int m, int k) const;
 	void ContractTwoLayerGateKRankValues(double* values) const;
+	std::vector<double> effect_inner_edge_values_;
+	std::vector<double> effect_inner_edge_ders_;
+	std::vector<double> effect_inner_edge_values_scratch_;
+	std::vector<double> effect_inner_edge_ders_scratch_;
+	void EvalEffectInnerBasis(double r, int center, int neighbor, int derivatives);
+	void ContractEffectInnerBasis(int center, int neighbor, const double* rb_vals,
+		const double* rb_ders, double* values, double* ders) const;
+	void AccumulateEffectInnerEdge(const double* sh_values, const double* sh_ders,
+		const double* radial, const double* radial_der, const Vector3* direction,
+		double radial_direction, double* values, double* tangents) const;
+	void AccumulateEffectInnerPrimitives(const Neighborhood& nbh, int cache_atom,
+		const Vector3* directions, double* values, double* tangents);
+	void CalcEffectInnerCoordinateDers(const Neighborhood& nbh, int cache_atom,
+		const double* adjoints, std::vector<Vector3>& ders);
+	void AccumulateEffectInnerParamGrad(const Neighborhood& nbh, int cache_atom,
+		const double* value_adjoints, const double* energy_adjoints,
+		const Vector3* directions, double* gradient);
 	void BackpropTwoLayerGateKRankAdjoints(std::vector<double>& adjoints) const;
 	void AccumulateTwoLayerGateKRankWeightGrad(
 		std::vector<double>& out_grad,
@@ -1032,8 +1049,13 @@ public:
 						bool OuterKRank1Enabled() const { return outer_k_rank1_enabled_; }
 						bool OuterKRankEnabled() const { return outer_k_rank_ > 0; }
 						int OuterKRank() const { return outer_k_rank_; }
+						bool EffectUsesMixBasis() const { return outer_radial_mode_ == "effect-mix-basis"; }
+						int EffectInnerMixCoeffCount() const;
+						int EffectInnerMixCoeffOffset() const { return TwoLayerGateRadialCoeffOffset(); }
+						int EffectInnerMixCoeffIndex(int l, int channel, int k, int n) const;
 						bool OuterUsesPureRadialMatrix() const {
-							return OuterKRankEnabled() && outer_radial_mode_ == "pure-matrix";
+							return OuterKRankEnabled()
+								&& (outer_radial_mode_ == "pure-matrix" || EffectUsesMixBasis());
 						}
 						bool OuterUsesAdaptiveRadialCoefficients() const {
 							return OuterKRankEnabled()

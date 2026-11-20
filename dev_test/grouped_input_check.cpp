@@ -173,6 +173,14 @@ int main() {
         Bad({"train", Fixture(static_model + training), "--adaptive-radial-projection=full", "--check-config"}, "unavailable");
         const auto static_species = Run({"train", Fixture(static_model + training), "--model.readout.element_mode=per-element", "--check-config"});
         Require(static_species.opts.at("readout-mode") == "species", "static Legacy species readout");
+        const auto mix_basis = Run({"train", Fixture(legacy_model + "  radial:\n    layout: mix-basis\n    warp_sharing: LK\n" + training),
+            "--model.coordination.channels=4", "--check-config"});
+        Require(mix_basis.opts.at("effect-radial-layout") == "mix-basis" && mix_basis.opts.at("scaling-map") == "LK",
+            "Effect mix-basis layout and warp mapping");
+        Bad({"train", Fixture(legacy_model + training), "--model.radial.layout=mix-basis",
+            "--model.radial.warp_sharing=L", "--check-config"}, "requires radial.warp_sharing K or LK");
+        Bad({"train", Fixture(model + training), "--model.radial.layout=mix-basis", "--check-config"},
+            "requires coordination-effect");
         Bad({"train", Fixture(static_model + training), "--model.readout.joint=true", "--check-config"}, "joint: false");
         Bad({"train", Fixture(static_model + training), "--interaction-coupling=diagonal", "--check-config"}, "conflicting");
         Bad({"train", Fixture(static_model + training), "--regularization.coordination_response_l2=0", "--check-config"}, "unavailable");

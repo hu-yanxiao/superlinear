@@ -44,6 +44,7 @@ bool HasSphericalHarmonicInitOptions(const map<string, string>& opts)
 		"body5-l-max",
 		"body6-l-max",
 		"sh-factor-pruning",
+		"effect-radial-layout",
 		"write-sh-scalar-info",
 		"cutoff",
 		"max-dist",

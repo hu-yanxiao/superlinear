@@ -1548,15 +1548,16 @@ void MTPR_trainer::TrainLinear(int prank,
 		const int outer_rows = pure_matrix
 			? p_mlmtpr->TwoLayerGateRadialMixingCoeffCount() / row_size
 			: p_mlmtpr->radial_func_count;
+		const int gate1_rows = p_mlmtpr->TwoLayerGateRadialCoeffCount() / row_size;
 		preserved_radial_indices.reserve(
-			(outer_rows + p_mlmtpr->radial_func_count) * row_size);
+			(static_cast<size_t>(outer_rows) + gate1_rows) * row_size);
 		for (int mu = 0; mu < outer_rows; ++mu)
 			for (int xi = 0; xi < row_size; ++xi)
 				preserved_radial_indices.push_back(
 					outer_begin + mu * outer_stride + xi);
 		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
 			const int gate1_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
-			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+			for (int mu = 0; mu < gate1_rows; ++mu)
 				for (int xi = 0; xi < row_size; ++xi)
 					preserved_radial_indices.push_back(
 						gate1_begin + mu * row_size + xi);
@@ -2852,7 +2853,9 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 
 		if (p_mlmtpr->TwoLayerGateUsesSharedRadial()) {
 			const int gate1_radial_begin = p_mlmtpr->TwoLayerGateRadialCoeffOffset();
-			for (int mu = 0; mu < p_mlmtpr->radial_func_count; ++mu)
+			const int gate1_rows = p_mlmtpr->TwoLayerGateRadialCoeffCount()
+				/ radial_weight_norm_row_size;
+			for (int mu = 0; mu < gate1_rows; ++mu)
 				add_radial_weight_norm_row(
 					gate1_radial_begin + mu * radial_weight_norm_row_size,
 					true,
@@ -2952,6 +2955,11 @@ void MTPR_trainer::Train(std::vector<Configuration>& training_set) //with Shapee
 			"gate1-body-mix",
 			p_mlmtpr->TwoLayerGateBodyMixWeightOffset(),
 			p_mlmtpr->TwoLayerGateBodyMixWeightCount());
+		if (p_mlmtpr->EffectUsesMixBasis())
+			add_coordinate_normalization_block(
+				"gate1-inner-mix-basis",
+				p_mlmtpr->EffectInnerMixCoeffOffset(),
+				p_mlmtpr->EffectInnerMixCoeffCount());
 		add_coordinate_normalization_block(
 			"gate1-radial-mixing",
 			p_mlmtpr->TwoLayerGateRadialMixingCoeffOffset(),

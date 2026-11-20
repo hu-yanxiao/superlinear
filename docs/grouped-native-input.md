@@ -46,6 +46,7 @@ CLI 也支持简写 `--L / --K / --R / --O`，含义与长名称相同。
 | `model.radial_channels` | `k-max` | K；默认 3 |
 | `model.neighbor_cutoff` | `cutoff` | 邻域截断，单位 Å；默认 7.5 |
 | `model.angular_cutoff` | `angular-cutoff` | l>0 截断；省略等于 neighbor_cutoff，须满足 0 < angular_cutoff <= neighbor_cutoff |
+| `model.radial.layout` | `effect-radial-layout` | Effect 专用，可选 `legacy`（默认）或 `mix-basis`，同时选择内层和外层的径向参数布局 |
 | `model.radial.basis` | `radial-basis-type` | `chebyshev-sss`（默认）、`laguerre-log1p` |
 | `model.radial.basis_size` | `radial-basis-size` | 径向基函数数 N；默认 10 |
 | `model.radial.basis_scale` | `scaling` | 全局径向基缩放；默认 0.01 |
@@ -219,6 +220,40 @@ output:
 shared/per-element 能量读出独立选择。原生旧 CLI 对应
 `--effect-gate-projection=tanh-gate --cutoff=6.5 --angular-cutoff=5.0 --readout-mode=species`，
 还需按原用法提供 ranked full scalar Effect 的其他初始化选项。
+
+### Mix-basis 径向层
+
+在 Effect 训练输入的 `model.radial` 中加入 `layout: mix-basis` 和
+`warp_sharing: K` 或 `LK`。下面的局部配置可合入前面的 Effect 示例。
+
+```yaml
+model:
+  kind: coordination-effect
+  radial:
+    layout: mix-basis
+    warp_sharing: LK
+```
+
+内层与外层各自训练一个完整径向权重张量。记 `B_in`、`B_out` 为按元素对和
+K/LK 规则变换的径向基，`p_in` 为内层元素乘子，`g_ij` 为包含元素乘子的
+Effect 配位调制。每条有向邻接边对球谐矩的贡献为
+
+```text
+inner[l,r,m] += Y[l,m](rhat_ij) * sum_{k,n} W_in[l,r,k,n] * B_in[l,k,n](r_ij) * p_in[ij,l,k]
+outer[l,o,m] += Y[l,m](rhat_ij) * sum_{k,n} W_out[l,o,k,n] * B_out[l,k,n](r_ij) * g_ij[l,k]
+```
+
+`W_in` 的形状为 `[L+1,R,K,N]`，`W_out` 为 `[L+1,O,K,N]`。
+外层调制对同一 `(l,k)` 的所有 n 共用。两层支持各自的 cross/diagonal 乘积图、
+共享或独立距离变换，以及单截断或双截断。Effect gate 可用 `linear` 或
+`tanh-gate`，外层能量读出可用 `shared` 或 `per-element`。C++ runtime 支持
+L=0..4，R 和 O 可大于 K。
+
+原生 CLI 使用 `--effect-radial-layout=mix-basis --scaling-map=LK`。
+`initialization.parameters: same` 从现有分解形式的 0.01 径向系数初始化，
+当 R 或 O 大于 K 时按 K 循环分配额外通道；`random` 使用带 fan-in 缩放的
+随机矩阵。模型用 `version = 1.12.0` 保存两块完整权重。续训沿用 checkpoint 中
+保存的布局。该格式支持原生 C++ 和 PT，现有 GPUMD 与嵌入式 LAMMPS 读取器尚未支持。
 
 ## 不使用配位效应层
 

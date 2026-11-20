@@ -396,7 +396,7 @@ public:
 		const bool pure_matrix = !gate1 && mtpr->OuterUsesPureRadialMatrix();
 		const int row_count = pure_matrix
 			? mtpr->TwoLayerGateRadialMixingCoeffCount() / row_size
-			: mtpr->radial_func_count;
+			: (gate1 ? mtpr->TwoLayerGateRadialCoeffCount() / row_size : mtpr->radial_func_count);
 		if (mu < 0 || mu >= row_count)
 			ERROR("--mu is outside the radial row range.");
 		if (gate1 && !mtpr->TwoLayerGateUsesSharedRadial())
@@ -2032,9 +2032,9 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 		}
 		int gate1_row_count = 0;
 		if (mtpr.TwoLayerGateUsesSharedRadial()) {
-			gate1_row_count = mtpr.radial_func_count;
+			gate1_row_count = mtpr.TwoLayerGateRadialCoeffCount() / row_size;
 			const int gate1_begin = mtpr.TwoLayerGateRadialCoeffOffset();
-			for (int mu = 0; mu < mtpr.radial_func_count; ++mu)
+			for (int mu = 0; mu < gate1_row_count; ++mu)
 				check_row(mtpr.Coeff() + gate1_begin + mu * row_size, mu, true);
 		}
 		if (mpi_rank == 0) {
@@ -2611,6 +2611,7 @@ bool DevCommands(const std::string& command, std::vector<std::string>& args, std
 				"Supported SH radial basis types: RBChebyshev_sss, RBChebyshev_sss_rational, RBLaguerre_log1p, RBJacobi_sss\n"
 				"Options: --scaling-map=K|L|LK|pair (default=LK),\n"
 				"         --effect-gate-projection=linear|tanh-gate (coordination-effect only; default=linear),\n"
+				"         --effect-radial-layout=legacy|mix-basis (coordination-effect only; default=legacy),\n"
 				"         --superlinear-mode=legacy|pure-w-channelwise|radial-coefficient-gate (default=legacy),\n"
 				"           pure-w-channelwise: complete distance matrix W_l(K x O), no P*R residual, O may exceed K;\n"
 				"           one K=1 angular graph is bound to O independent channels; requires --outer-k-rank=O;\n"

@@ -520,6 +520,7 @@ bool HasSphericalHarmonicInitOptions(const std::map<std::string, std::string>& o
 			"readout-mode",
 			"joint-readout",
 			"effect-gate-projection",
+			"effect-radial-layout",
 			"adaptive-radial-projection",
 			"adaptive-radial-amplitude-mode",
 			"adaptive-radial-shared-n-rank",
@@ -2331,7 +2332,8 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		const bool legacy_profile = opts.at("grouped-profile") == "native-effect-v1"
 			|| opts.at("grouped-profile") == "native-legacy-v1";
 		const bool legacy_model = mtpr.IsSHPotential() && mtpr.TwoLayerGateEnabled()
-			&& !adaptive_pytorch_profile && !mtpr.OuterUsesPureRadialMatrix()
+			&& !adaptive_pytorch_profile
+			&& (!mtpr.OuterUsesPureRadialMatrix() || mtpr.EffectUsesMixBasis())
 			&& !mtpr.MultiLayerGateEnabled() && !mtpr.TwoLayerResidualEnabled()
 			&& !mtpr.TensorMessageEnabled() && !mtpr.JointReadoutEnabled();
 		if (static_profile ? !static_radial_model : (legacy_profile ? !legacy_model : !adaptive_pytorch_profile))
@@ -2402,7 +2404,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (balanced_pure_w_init) {
 		if (maxits < 0)
 			ERROR("Balanced pure-W initialization requires --max-iter >= 0");
-		if (!mtpr.OuterUsesPureRadialMatrix())
+		if (!mtpr.OuterUsesPureRadialMatrix() || mtpr.EffectUsesMixBasis())
 			ERROR("--pure-w-initialization=balanced requires a pure-W channelwise model");
 		if (loaded_complete_parameters)
 			ERROR("Balanced pure-W initialization only accepts an incomplete fresh seed; "
@@ -2518,10 +2520,15 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 		ERROR("--superlinear-mode should be legacy, pure-w-channelwise, or radial-coefficient-gate");
 	if (!requested_superlinear_mode.empty()
 	    && (((requested_superlinear_mode == "pure-w-channelwise")
-	         != (mtpr.OuterUsesPureRadialMatrix() && mtpr.OuterUsesSameChannelGraph()))
+	         != (mtpr.OuterUsesPureRadialMatrix() && !mtpr.EffectUsesMixBasis()))
 	        || ((requested_superlinear_mode == "radial-coefficient-gate")
 	            != mtpr.OuterUsesAdaptiveRadialCoefficients())))
 		ERROR("--superlinear-mode must match the loaded model; changing the outer graph requires init-sh/inline initialization");
+	if (!opts["effect-radial-layout"].empty()
+	    && (mtpr.OuterUsesAdaptiveRadialCoefficients()
+	        || (mtpr.OuterUsesPureRadialMatrix() && !mtpr.EffectUsesMixBasis())
+	        || opts["effect-radial-layout"] != (mtpr.EffectUsesMixBasis() ? "mix-basis" : "legacy")))
+		ERROR("--effect-radial-layout must match the saved Effect architecture");
 	if (!opts["effect-gate-projection"].empty()
 	    && opts["effect-gate-projection"] != mtpr.EffectGateProjection())
 		ERROR("--effect-gate-projection must match the saved architecture; initialize a new model to change it");
@@ -2885,7 +2892,7 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	if (prank == 0 && direct_outer_radial_mode)
 		std::cout << (mtpr.OuterUsesAdaptiveRadialCoefficients()
 		                  ? "radial-coefficient-gate"
-		                  : "pure-w-channelwise")
+		                  : mtpr.EffectUsesMixBasis() ? "effect-mix-basis" : "pure-w-channelwise")
 		          << ": legacy outer radial norm/orthogonality penalty disabled; "
 		          << "distance-matrix smoothness regularizes physical radial response."
 		          << std::endl;
@@ -3314,8 +3321,9 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 					generator, radial_mixing_init_scale);
 			}
 			if (mtpr.OuterUsesPureRadialMatrix())
-				std::cout << "Pure-W random initialization: independent gate rows and physical W; "
-				          << "unused R unchanged, W scale="
+				std::cout << (mtpr.EffectUsesMixBasis()
+				              ? "Effect mix-basis random initialization: dense inner and outer W, W_out scale="
+				              : "Pure-W random initialization: independent gate rows and physical W; unused R unchanged, W scale=")
 				          << (custom_radial_mixing_init_scale ? radial_mixing_init_scale : 5e-3)
 				          << std::endl;
 		}
@@ -3347,10 +3355,11 @@ void Train_MTPR(std::vector<std::string>& args, std::map<std::string, std::strin
 	    && mtpr.OuterUsesPureRadialMatrix()) {
 		// Initialization-only pure-W runs export the supplied physical seed,
 		// before shift, linear warmup, rescaling or optimizer setup can change it.
-		save_model_atomically_collective(trained_fnm, "pure-W same initial model");
+		save_model_atomically_collective(trained_fnm, "distance-matrix same initial model");
 		if (prank == 0)
 			std::cout << "[" << CurrentTimestamp() << "] "
-			          << "Pure-W same initial snapshot saved to " << trained_fnm
+			          << (mtpr.EffectUsesMixBasis() ? "Effect mix-basis" : "Pure-W")
+			          << " same initial snapshot saved to " << trained_fnm
 			          << " (no parameter reset or linear solve)" << std::endl;
 		}
 		trainer.shift(do_shift);

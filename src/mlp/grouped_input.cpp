@@ -29,6 +29,7 @@ const Rule rules[] = {
     {"model.radial_channels", "k-max", "positive-int"},
     {"model.neighbor_cutoff", "cutoff", "positive-real"},
     {"model.angular_cutoff", "angular-cutoff", "positive-real"},
+    {"model.radial.layout", "effect-radial-layout", "legacy=legacy|mix-basis=mix-basis"},
     {"model.radial.basis", "radial-basis-type", "chebyshev-sss=RBChebyshev_sss|laguerre-log1p=RBLaguerre_log1p"},
     {"model.radial.basis_size", "radial-basis-size", "positive-int"},
     {"model.radial.basis_scale", "scaling", "positive-real"},
@@ -553,6 +554,19 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
     ValidateLegacyOptions(opts, static_profile, legacy_profile);
     if (!continuation && opts.count("effect-gate-projection") && (!legacy_kind || !coordination_enabled))
         Fail("--effect-gate-projection requires coordination-effect with coordination enabled");
+    if (!continuation && opts.count("effect-radial-layout")) {
+        if (!legacy_kind || !coordination_enabled)
+            Fail("model.radial.layout requires coordination-effect with coordination enabled");
+        const std::string& layout = opts.at("effect-radial-layout");
+        if (layout != "legacy" && layout != "mix-basis")
+            Fail("model.radial.layout must be legacy or mix-basis");
+        if (layout == "mix-basis") {
+            if (opts.count("scaling-map") && opts.at("scaling-map") != "K" && opts.at("scaling-map") != "LK")
+                Fail("model.radial.layout mix-basis requires radial.warp_sharing K or LK");
+            if (opts.count("inner-readout") && opts.at("inner-readout") != "false")
+                Fail("model.radial.layout mix-basis does not support an inner readout");
+        }
+    }
     if ((paths.count("@train") || paths.count("@model") || paths.count("@output")) && !args.empty())
         Fail("do not mix positional model/data/output paths with grouped data/output.model paths");
     if (continuation) {
@@ -601,8 +615,13 @@ bool Resolve(const std::string& command, std::vector<std::string>& args, Values&
             Put(opts, "two-layer-gate-k-rank", std::to_string(g));
         const int block = GetInt(opts, "outer-channel-block-size", 0);
         if (block && (block > o || o % block)) Fail("interaction.channel_block_size must divide interaction.channels");
-        if (l > 6 || !k || !o || (!block && o > k) || !g || g > k || body < 2 || body > 6 || gate_body < 2 || gate_body > 6 || !n || tensor > 2 || tensor > l)
-            Fail("invalid architecture: require L=0..6, 1<=R<=K, O<=K unless grouped, body orders=2..6, tensor L<=min(2,L)");
+        const bool effect_mix_basis = opts.count("effect-radial-layout")
+            && opts.at("effect-radial-layout") == "mix-basis";
+        if (effect_mix_basis && l > 4) Fail("Effect mix-basis runtime requires L=0..4");
+        if (l > 6 || !k || !o || !g || body < 2 || body > 6 || gate_body < 2 || gate_body > 6 || !n || tensor > 2 || tensor > l)
+            Fail("invalid architecture: require L=0..6, positive K/R/O and basis_size, body orders=2..6, tensor L<=min(2,L)");
+        if (!effect_mix_basis && (g > k || (!block && o > k)))
+            Fail("require R<=K and O<=K unless the outer graph is grouped");
         if (opts.count("joint-readout") && opts["joint-readout"] == "true" && l < 1)
             Fail("joint readout requires l_max >= 1");
         const int d = GetInt(opts, "adaptive-radial-shared-n-rank", 1);
@@ -752,6 +771,7 @@ const char* Help() {
            "    Compact aliases: --L L --K K --R R --O O (identical meanings in both families)\n"
            "    --model.kind coordination-effect (or effect): ranked environment effect, no adaptive response U\n"
            "    --effect-gate-projection linear|tanh-gate (default linear; hidden width K)\n"
+           "    --model.radial.layout legacy|mix-basis (coordination-effect; default legacy)\n"
            "    --coord-coupling cross|diagonal --interaction-coupling cross|diagonal\n"
            "    --coord-enabled false: static radial weights, no coordination/response keys\n"
            "    --distance-warp-sharing L|K|LK|pair (default LK; semantic aliases remain valid)\n"

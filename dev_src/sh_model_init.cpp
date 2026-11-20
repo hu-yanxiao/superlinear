@@ -1254,6 +1254,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (effect_gate_projection != "linear" && effect_gate_projection != "tanh-gate")
 		ERROR("--effect-gate-projection must be linear or tanh-gate.");
 	const bool effect_tanh = effect_gate_projection == "tanh-gate";
+	const std::string effect_radial_layout = StringOpt(opts, "effect-radial-layout", "legacy");
+	if (effect_radial_layout != "legacy" && effect_radial_layout != "mix-basis")
+		ERROR("--effect-radial-layout must be legacy or mix-basis.");
+	const bool effect_mix_basis = effect_radial_layout == "mix-basis";
+	if (HasOpt(opts, "effect-radial-layout") && superlinear_mode != "legacy")
+		ERROR("--effect-radial-layout requires coordination-effect.");
+	if (effect_mix_basis && scaling_map != "K" && scaling_map != "LK")
+		ERROR("--effect-radial-layout=mix-basis requires --scaling-map=K or LK.");
 	const bool pure_w_channelwise = superlinear_mode == "pure-w-channelwise";
 	const bool radial_coefficient_gate =
 		superlinear_mode == "radial-coefficient-gate";
@@ -1311,7 +1319,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const bool outer_k_rank_enabled = outer_k_rank > 0;
 	const int two_layer_gate_k_rank =
 		StrictNonnegativeIntOpt(opts, "two-layer-gate-k-rank",
-			(pure_w_channelwise || radial_coefficient_gate) ? kmax : 0);
+			(pure_w_channelwise || radial_coefficient_gate || effect_mix_basis) ? kmax : 0);
 	const bool two_layer_gate_k_rank_enabled = two_layer_gate_k_rank > 0;
 	const bool multi_layer_gate = HasOpt(opts, "multi-layer-gate");
 	const bool inner_readout = BoolOpt(opts, "inner-readout", false);
@@ -1319,7 +1327,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (inner_readout && readout_mode != "shared")
 		ERROR("--inner-readout requires --readout-mode=shared");
 	const std::string two_layer_gate_radial_mixing =
-		StringOpt(opts, "two-layer-gate-radial-mixing", pure_w_channelwise ? "full" : "none");
+		StringOpt(opts, "two-layer-gate-radial-mixing",
+			(pure_w_channelwise || effect_mix_basis) ? "full" : "none");
 	const bool two_layer_gate_radial_mixing_full =
 		two_layer_gate_radial_mixing == "full";
 	const bool two_layer_gate = HasOpt(opts, "two-layer-gate") || multi_layer_gate
@@ -1349,7 +1358,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		IntOpt(opts, "two-layer-gate-body-order", default_two_layer_gate_body_order);
 	std::string two_layer_gate_mode =
 		StringOpt(opts, "two-layer-gate-mode",
-			radial_coefficient_gate ? "mu-scalar-full" : "mu-body-linear-combo");
+			(radial_coefficient_gate || effect_mix_basis) ? "mu-scalar-full" : "mu-body-linear-combo");
 	if (two_layer_gate_mode == "mu-body-order")
 		two_layer_gate_mode = "mu-scalar-full";
 	std::string second_layer_gate_mode =
@@ -1369,6 +1378,8 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	const std::vector<int> body_lmax = ParseBodyLMax(opts, lmax, body_order);
 	const ZBLInitOptions zbl_options = ParseZBLInitOptions(opts, species_count);
 
+	if (effect_mix_basis && lmax > 4)
+		ERROR("Effect mix-basis runtime supports --l-max from 0 to 4.");
 	if (lmax < 0 || lmax > 6)
 		ERROR("init-sh currently supports --l-max from 0 to 6.");
 	if (kmax <= 0)
@@ -1389,14 +1400,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--superlinear-mode=radial-coefficient-gate supports --sh-factor-pruning=same-k or q-total.");
 	if (outer_k_rank < 0
 	    || ((!pure_w_channelwise && !radial_coefficient_gate)
-	        && !grouped_outer && outer_k_rank > kmax))
+	        && !grouped_outer && !effect_mix_basis && outer_k_rank > kmax))
 		ERROR("--outer-k-rank must be in [1, --k-max] when enabled.");
 	if (radial_coefficient_gate && outer_k_rank > kmax)
 		ERROR("--superlinear-mode=radial-coefficient-gate requires O <= raw K.");
-	if (two_layer_gate_k_rank < 0 || two_layer_gate_k_rank > kmax)
+	if (two_layer_gate_k_rank < 0 || (!effect_mix_basis && two_layer_gate_k_rank > kmax))
 		ERROR("--two-layer-gate-k-rank must be in [1, --k-max] when enabled.");
 	if (two_layer_gate_k_rank_enabled && !HasOpt(opts, "two-layer-gate")
-	    && !pure_w_channelwise && !radial_coefficient_gate)
+	    && !pure_w_channelwise && !radial_coefficient_gate && !effect_mix_basis)
 		ERROR("--two-layer-gate-k-rank requires an explicit --two-layer-gate model.");
 	if (two_layer_gate_k_rank_enabled && !outer_k_rank_enabled)
 		ERROR("--two-layer-gate-k-rank currently requires --outer-k-rank=<R>.");
@@ -1443,6 +1454,11 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	if (two_layer_gate_radial_mixing != "none"
 	    && two_layer_gate_radial_mixing != "full")
 		ERROR("--two-layer-gate-radial-mixing should be 'none' or 'full'.");
+	if (effect_mix_basis
+	    && (!two_layer_gate_radial_mixing_full || !outer_k_rank_enabled
+	        || !two_layer_gate_k_rank_enabled || two_layer_gate_mode != "mu-scalar-full"
+	        || two_layer_gate_readout || two_layer_residual || two_layer_gate_edge_l1 || multi_layer_gate))
+		ERROR("Effect mix-basis requires ranked neighbor additive-node Effect without an inner readout.");
 	if (pure_w_channelwise
 	    && (!two_layer_gate_radial_mixing_full || !two_layer_gate_k_rank_enabled))
 		ERROR("pure-w-channelwise requires full radial mixing and a positive gate rank.");
@@ -1517,7 +1533,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ERROR("--radial-cutoff-p only applies to --radial-cutoff-type=polynomial.");
 	if (rbasis == "RBJacobi_sss" && kmax > 6)
 		ERROR("init-sh with RBJacobi_sss supports --k-max up to 6 because Jacobi blocks are indexed as k=0..5.");
-	if (pure_w_channelwise || radial_coefficient_gate) {
+	if (pure_w_channelwise || radial_coefficient_gate || effect_mix_basis) {
 		if (rb_size <= 0)
 			ERROR("same-channel superlinear modes require --radial-basis-size > 0.");
 		const size_t angular_count = static_cast<size_t>(lmax + 1);
@@ -1525,7 +1541,14 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			"Raw basic count");
 		CheckedGraphCount({static_cast<size_t>(outer_k_rank), angular_count, angular_count},
 			"Outer basic count");
-		if (pure_w_channelwise)
+		if (effect_mix_basis) {
+			CheckedGraphCount({static_cast<size_t>(two_layer_gate_k_rank), angular_count, angular_count},
+				"Effect inner primitive count");
+			CheckedGraphCount({angular_count, static_cast<size_t>(two_layer_gate_k_rank),
+				static_cast<size_t>(kmax), static_cast<size_t>(rb_size)},
+				"Effect inner mix-basis coefficient count");
+		}
+		if (pure_w_channelwise || effect_mix_basis)
 			CheckedGraphCount({angular_count, static_cast<size_t>(outer_k_rank),
 				static_cast<size_t>(kmax), static_cast<size_t>(rb_size)},
 				"Full W coefficient count");
@@ -1625,7 +1648,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		    || (two_layer_gate_k_rank_enabled
 		        && two_layer_gate_factor_pruning == SHFactorPruning::SameK));
 	ofs << "version = "
-	    << (effect_tanh ? "1.11.0" : adaptive_projection == "shared-o" ? "1.10.0" : grouped_outer ? "1.9.0" : (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
+	    << (effect_mix_basis ? "1.12.0" : effect_tanh ? "1.11.0" : adaptive_projection == "shared-o" ? "1.10.0" : grouped_outer ? "1.9.0" : (legacy_v18 ? "1.8.0" : (adaptive_v17 ? "1.7.0" : (joint_readout ? "1.6.0" : (adaptive_extended ? "1.5.0" : (tensor_message_lmax > 0 ? "1.4.0" : (readout_mode == "species" ? "1.3.0"
 	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << "\n";
 	ofs << "potential_name = " << name << "\n";
 	ofs << "scaling = " << scaling << "\n";
@@ -1750,18 +1773,18 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	}
 	if (outer_k_rank_enabled) {
 		const int outer_k_weight_count =
-			(pure_w_channelwise || radial_coefficient_gate)
+			(pure_w_channelwise || radial_coefficient_gate || effect_mix_basis)
 				? 0 : outer_k_rank * kmax * (lmax + 1);
 		ofs << "outer_k_rank1_enabled = true\n";
 		// Preserve bidirectional compatibility with the original rank-1
 		// prototype, whose reader does not know the generic rank field.
 		if (outer_k_rank != 1)
 			ofs << "outer_k_rank = " << outer_k_rank << "\n";
-		if (effect_tanh || legacy_v18 || (grouped_outer && !radial_coefficient_gate)) {
+		if (effect_mix_basis || effect_tanh || legacy_v18 || (grouped_outer && !radial_coefficient_gate)) {
 			ofs << "outer_channel_mode = "
 			    << (grouped_outer ? "grouped-cross" : (outer_same_channel_mode ? "same-channel" : "cross-channel")) << "\n";
 			if (grouped_outer) ofs << "outer_channel_block_size = " << outer_channel_block_size << "\n";
-			ofs << "outer_radial_mode = legacy-plus-mixer\n";
+			ofs << "outer_radial_mode = " << (effect_mix_basis ? "effect-mix-basis" : "legacy-plus-mixer") << "\n";
 			ofs << "readout_mode = " << readout_mode << "\n";
 		}
 		if (pure_w_channelwise) {
@@ -1830,7 +1853,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 	}
 	if (two_layer_gate_k_rank_enabled) {
 		const int gate_k_weight_count =
-			two_layer_gate_k_rank * kmax * (lmax + 1);
+			effect_mix_basis ? 0 : two_layer_gate_k_rank * kmax * (lmax + 1);
 		ofs << "two_layer_gate_k_rank = " << two_layer_gate_k_rank << "\n";
 		ofs << "two_layer_gate_k_rank_basic_begin = "
 		    << gate_rank_node_offset << "\n";
@@ -1843,7 +1866,7 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 		ofs << "two_layer_gate_k_rank_weight_count = "
 		    << gate_k_weight_count << "\n";
 		ofs << "two_layer_gate_k_rank_weights = {";
-		for (int l = 0; l <= lmax; ++l) {
+		for (int l = 0; gate_k_weight_count > 0 && l <= lmax; ++l) {
 			for (int channel = 0; channel < two_layer_gate_k_rank; ++channel) {
 				for (int k = 0; k < kmax; ++k) {
 					const int index =
@@ -1897,16 +1920,25 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 			    << FactorPruningName(two_layer_gate_factor_pruning) << "\n";
 			ofs << "two_layer_gate_scale_mode = additive-node\n";
 			if (two_layer_gate_shared_radial) {
-				const int gate_radial_count = kmax * (lmax + 1) * rb_size;
+				const int gate_radial_count = kmax * (lmax + 1) * rb_size
+					* (effect_mix_basis ? two_layer_gate_k_rank : 1);
 				ofs << "two_layer_gate_radial_mode = shared-radial\n";
-				ofs << "two_layer_gate_radial_coeff_count = " << gate_radial_count << "\n";
-			ofs << "two_layer_gate_radial_coeffs = {";
-			for (int i = 0; i < gate_radial_count; ++i) {
-				if (i != 0)
-					ofs << ", ";
-				ofs << 1.0e-2;
-			}
-			ofs << "}\n";
+				ofs << (effect_mix_basis ? "effect_inner_mix_coeff_count = " : "two_layer_gate_radial_coeff_count = ")
+				    << gate_radial_count << "\n";
+				ofs << (effect_mix_basis ? "effect_inner_mix_coeffs = {" : "two_layer_gate_radial_coeffs = {");
+				for (int i = 0; i < gate_radial_count; ++i) {
+					if (i != 0)
+						ofs << ", ";
+					if (effect_mix_basis) {
+						const int row_size = kmax * rb_size;
+						const int channel = (i / row_size) % two_layer_gate_k_rank;
+						const int k = (i / rb_size) % kmax;
+						ofs << (channel % kmax == k ? 1.0e-2 : 0.0);
+					} else {
+						ofs << 1.0e-2;
+					}
+				}
+				ofs << "}\n";
 			}
 			if (two_layer_gate_decoupled_scaling) {
 				const int gate_scaling_count =
@@ -2049,6 +2081,10 @@ void WriteSphericalHarmonicModel(const std::string& filename,
 				const int b = i % rb_size;
 				const double channel_phase =
 					static_cast<double>(o + 1) * (k * rb_size + b + 1);
+				if (effect_mix_basis) {
+					ofs << (outer_k_rank == 1 || o % kmax == k ? 1.0e-2 : 0.0);
+					continue;
+				}
 				ofs << (pure_w_channelwise
 					? 1.0e-2 * (1.0 + 0.25 * std::cos(channel_phase))
 					  / std::sqrt(static_cast<double>(kmax))

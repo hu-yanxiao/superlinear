@@ -1606,8 +1606,32 @@ void MLMTPR::RequestTwoLayerFullEdgeCacheForNextCalcEFS()
 	two_layer_reuse_full_edge_cache_once_ = false;
 }
 
+int MLMTPR::EffectInnerMixCoeffCount() const
+{
+	if (!EffectUsesMixBasis() || p_RadialBasis == nullptr)
+		return 0;
+	const int rows = CheckedIntProduct(sh_l_max_ + 1, two_layer_gate_k_rank_,
+		"SUS2-SH Effect inner mix-basis row count");
+	const int row_size = CheckedIntProduct(sh_k_max_, p_RadialBasis->rb_size,
+		"SUS2-SH Effect mix-basis channel size");
+	return CheckedIntProduct(rows, row_size, "SUS2-SH Effect inner mix-basis coefficient count");
+}
+
+int MLMTPR::EffectInnerMixCoeffIndex(int l, int channel, int k, int n) const
+{
+	if (!EffectUsesMixBasis() || p_RadialBasis == nullptr
+	    || l < 0 || l > sh_l_max_ || channel < 0 || channel >= two_layer_gate_k_rank_
+	    || k < 0 || k >= sh_k_max_ || n < 0 || n >= p_RadialBasis->rb_size)
+		ERROR("SUS2-SH Effect inner mix-basis coefficient index is out of range");
+	const int local = ((l * two_layer_gate_k_rank_ + channel) * sh_k_max_ + k)
+		* p_RadialBasis->rb_size + n;
+	return EffectInnerMixCoeffOffset() + local;
+}
+
 int MLMTPR::TwoLayerGateRadialCoeffCount() const
 {
+	if (EffectUsesMixBasis())
+		return EffectInnerMixCoeffCount();
 	if (!TwoLayerGateUsesSharedRadial() || p_RadialBasis == nullptr)
 		return 0;
 	return radial_func_count * p_RadialBasis->rb_size;
@@ -1632,8 +1656,8 @@ void MLMTPR::ValidateEffectTanhGate() const
 {
 	if (!two_layer_gate_enabled_ || !TwoLayerGateUsesFullScalarWeights()
 	    || two_layer_gate_scale_mode_ != "additive-node" || !TwoLayerGateKRankEnabled()
-	    || !OuterKRankEnabled() || OuterUsesPureRadialMatrix() || OuterUsesAdaptiveRadialCoefficients()
-	    || two_layer_gate_site_mode_ != "neighbor" || multi_layer_gate_enabled_
+	    || !OuterKRankEnabled() || (OuterUsesPureRadialMatrix() && !EffectUsesMixBasis())
+	    || OuterUsesAdaptiveRadialCoefficients() || two_layer_gate_site_mode_ != "neighbor" || multi_layer_gate_enabled_
 	    || two_layer_residual_enabled_ || TwoLayerGateReadoutEnabled() || TwoLayerGateEdgeL1Enabled())
 		ERROR("tanh-gate requires ranked neighbor additive-node Effect");
 }
@@ -2214,7 +2238,7 @@ int MLMTPR::LinearCoeffOffset() const
 
 int MLMTPR::TwoLayerGateKRankWeightCount() const
 {
-	return TwoLayerGateKRankEnabled()
+	return TwoLayerGateKRankEnabled() && !EffectUsesMixBasis()
 		? two_layer_gate_k_rank_ * (sh_l_max_ + 1) * sh_k_max_
 		: 0;
 }
@@ -2226,7 +2250,7 @@ int MLMTPR::TwoLayerGateKRankWeightOffset() const
 
 int MLMTPR::TwoLayerGateKRankWeightIndex(int channel, int l, int k) const
 {
-	if (!TwoLayerGateKRankEnabled())
+	if (!TwoLayerGateKRankEnabled() || EffectUsesMixBasis())
 		ERROR("SUS2-SH gate K-rank weights are not enabled");
 	if (channel < 0 || channel >= two_layer_gate_k_rank_
 	    || l < 0 || l > sh_l_max_ || k < 0 || k >= sh_k_max_)
@@ -2252,7 +2276,7 @@ double MLMTPR::TwoLayerGateKRankWeight(int channel, int l, int k) const
 
 const double* MLMTPR::TwoLayerGateKRankWeightData() const
 {
-	if (!TwoLayerGateKRankEnabled())
+	if (!TwoLayerGateKRankEnabled() || EffectUsesMixBasis())
 		return nullptr;
 	const int offset = TwoLayerGateKRankWeightOffset();
 	if (offset >= 0
@@ -2363,12 +2387,25 @@ void MLMTPR::AbsorbOuterKRank1WeightsIntoRadialCoeffs()
 
 void MLMTPR::ValidateOuterModeConfiguration() const
 {
+	const bool mix_basis = EffectUsesMixBasis();
+	if (mix_basis) {
+		if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
+		    || !TwoLayerGateUsesSharedRadial() || !TwoLayerGateUsesFullScalarWeights()
+		    || two_layer_gate_scale_mode_ != "additive-node" || two_layer_gate_site_mode_ != "neighbor")
+			ERROR("Effect mix-basis requires ranked neighbor additive-node Effect");
+		if (scaling_map != "K" && scaling_map != "LK")
+			ERROR("Effect mix-basis requires scaling_map = K or LK");
+		if (two_layer_gate_radial_coeffs_.size() != static_cast<size_t>(EffectInnerMixCoeffCount())
+		    || EffectInnerMixCoeffCount() <= 0 || !two_layer_gate_k_rank_weights_.empty())
+			ERROR("Effect mix-basis has inconsistent inner radial coefficient metadata");
+	}
 	if (outer_channel_mode_ != "cross-channel" && outer_channel_mode_ != "same-channel" && outer_channel_mode_ != "grouped-cross")
 		ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
 	if (outer_radial_mode_ != "legacy-plus-mixer"
 	    && outer_radial_mode_ != "pure-matrix"
-	    && outer_radial_mode_ != "adaptive-coefficients")
-		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
+	    && outer_radial_mode_ != "adaptive-coefficients"
+		    && !EffectUsesMixBasis())
+		ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, adaptive-coefficients, or effect-mix-basis");
 	if (readout_mode_ != "shared" && readout_mode_ != "species")
 		ERROR("SUS2-SH readout_mode should be shared or species");
     if (outer_channel_mode_=="grouped-cross") {
@@ -2403,7 +2440,7 @@ void MLMTPR::ValidateOuterModeConfiguration() const
         }
     } else if (outer_channel_block_size_!=0) ERROR("Block metadata requires grouped-cross mode");
 
-	const bool pure = outer_radial_mode_ == "pure-matrix";
+	const bool pure = OuterUsesPureRadialMatrix();
 	const bool adaptive = outer_radial_mode_ == "adaptive-coefficients";
 	if (adaptive_radial_projection_ != "full" && adaptive_radial_projection_ != "shared-n" && adaptive_radial_projection_ != "shared-o")
 		ERROR("SUS2-SH adaptive_radial_projection must be full, shared-n, or shared-o");
@@ -2416,7 +2453,7 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 		ERROR("SUS2-SH adaptive_radial_activation must be none or tanh");
 	if (AdaptiveRadialExtendedLayout() && !adaptive)
 		ERROR("SUS2-SH adaptive radial layout options require adaptive-coefficients");
-	if (readout_mode_ == "species" && !adaptive && (!is_sh_potential_ || pure || TwoLayerResidualEnabled() || MultiLayerGateEnabled() || TwoLayerGateReadoutEnabled() || two_layer_gate_edge_l1_enabled_))
+	if (readout_mode_ == "species" && !adaptive && (!is_sh_potential_ || (pure && !mix_basis) || TwoLayerResidualEnabled() || MultiLayerGateEnabled() || TwoLayerGateReadoutEnabled() || two_layer_gate_edge_l1_enabled_))
 		ERROR("SUS2-SH Legacy species readout requires a qualified scalar SH model");
 	if (tensor_message_lmax_ < 0)
 		ERROR("SUS2-SH tensor_message_lmax should be non-negative");
@@ -2442,11 +2479,11 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 			if (!std::isfinite(scale) || scale <= 0.0)
 				ERROR("SUS2-SH tensor message optimizer-scale metadata must be positive");
 	}
-	if (pure && outer_channel_mode_ != "same-channel")
+	if (pure && !mix_basis && outer_channel_mode_ != "same-channel")
 		ERROR("SUS2-SH pure-matrix outer requires same-channel outer mode");
 	if (!pure && !adaptive && outer_channel_mode_ == "same-channel" && !OuterKRankEnabled())
 		ERROR("SUS2-SH same-channel outer mode requires pure-matrix or adaptive-coefficients radial mode");
-	if (!pure && !adaptive) {
+	if ((!pure && !adaptive) || mix_basis) {
 		if (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") {
 			std::vector<int> channels(alpha_moments_count, -1);
 			for (int g = 0; g < two_layer_gate_k_rank_; ++g)
@@ -2472,7 +2509,8 @@ void MLMTPR::ValidateOuterModeConfiguration() const
 					ERROR("Legacy diagonal gate scalar has invalid provenance");
 			}
 		}
-		return;
+		if (!mix_basis)
+			return;
 	}
 	if (!is_sh_potential_ || !OuterKRankEnabled() || !TwoLayerGateKRankEnabled()
 	    || !two_layer_gate_enabled_)
@@ -2675,7 +2713,7 @@ double MLMTPR::ScalarReadoutCoeff(int type, int scalar_index) const
 
 void MLMTPR::ConvertSharedReadoutToSpeciesReadout()
 {
-	if (OuterUsesPureRadialMatrix())
+	if (OuterUsesPureRadialMatrix() && !EffectUsesMixBasis())
 		ERROR("Species readout conversion does not support pure radial-matrix models");
 	if (!OuterUsesAdaptiveRadialCoefficients() && two_layer_gate_edge_l1_enabled_)
 		ERROR("Species readout conversion does not support Legacy edge-L1 models");
@@ -3823,6 +3861,8 @@ void MLMTPR::InitializeTwoLayerGateRadialCoeffsFromBase()
 	const int gate_radial_count = TwoLayerGateRadialCoeffCount();
 	if (gate_radial_count == 0)
 		return;
+	if (EffectUsesMixBasis())
+		ERROR("Effect mix-basis inner coefficients require explicit matrix initialization");
 	const int R = p_RadialBasis->rb_size;
 	const int base_offset = RadialCoeffOffset();
 	const int block_size = RadialCoeffBlockSize();
@@ -4270,13 +4310,17 @@ void MLMTPR::RandomizeRadialCoeffs(std::mt19937_64& generator, double radial_sca
 		// without changing that unused table or copying it into the gate.
 		const int gate_offset = TwoLayerGateRadialCoeffOffset();
 		const int gate_count = TwoLayerGateRadialCoeffCount();
-		if (!TwoLayerGateUsesSharedRadial() || gate_count != radial_func_count * rb_size
+		if (!TwoLayerGateUsesSharedRadial() || gate_count <= 0
+		    || (!EffectUsesMixBasis() && gate_count != radial_func_count * rb_size)
 		    || gate_offset + gate_count > static_cast<int>(regression_coeffs.size()))
 			ERROR("Pure-W random initialization requires an independent gate radial table");
 		two_layer_gate_radial_coeffs_.resize(gate_count);
+		const double mix_scale = radial_scale / std::sqrt(static_cast<double>(sh_k_max_) * rb_size);
+		std::normal_distribution<double> normal;
 		for (int i = 0; i < gate_count; ++i) {
-			double value = radial_scale * uniform(generator);
-			if (i % rb_size == 0)
+			double value = EffectUsesMixBasis() ? mix_scale * normal(generator)
+				: radial_scale * uniform(generator);
+			if (!EffectUsesMixBasis() && i % rb_size == 0)
 				value = PositiveRadialFirstCoeff(value, kRadialFirstCoeffPositiveFloor);
 			two_layer_gate_radial_coeffs_[i] = value;
 			regression_coeffs[gate_offset + i] = value;
@@ -4326,8 +4370,10 @@ void MLMTPR::RandomizeTwoLayerGateRadialMixingCoeffs(
 		ERROR("SUS2-SH radial mixing coefficient storage is inconsistent");
 	two_layer_gate_radial_mixing_coeffs_.resize(count);
 	std::uniform_real_distribution<double> uniform(-scale, scale);
+	std::normal_distribution<double> normal;
+	const double mix_scale = scale / std::sqrt(static_cast<double>(sh_k_max_) * p_RadialBasis->rb_size);
 	for (int i = 0; i < count; ++i) {
-		const double value = uniform(generator);
+		const double value = EffectUsesMixBasis() ? mix_scale * normal(generator) : uniform(generator);
 		two_layer_gate_radial_mixing_coeffs_[i] = value;
 		regression_coeffs[offset + i] = value;
 	}
@@ -4734,20 +4780,24 @@ void MLMTPR::Load(const string& filename)
 		ERROR("MTP file must contain a version header");
 	const std::string model_file_version = ReadAssignmentTail(tmpline);
 	const bool effect_v111 = model_file_version == "1.11.0";
+	const bool effect_mix_v112 = model_file_version == "1.12.0";
 	effect_tanh_gate_ = false;
 	effect_gate_hidden_values_cache_.clear();
 	bool effect_projection_seen = false;
 	int effect_projection_fields = 0, effect_scalar_count_fields = 0;
+	int effect_inner_count_fields = 0, effect_inner_coeff_fields = 0;
+	std::map<std::string, int> effect_outer_mix_fields;
 	const bool shared_o_v110 = model_file_version == "1.10.0";
-	const bool grouped_v19 = model_file_version == "1.9.0" || shared_o_v110 || effect_v111;
+	const bool grouped_v19 = model_file_version == "1.9.0" || shared_o_v110 || effect_v111 || effect_mix_v112;
     bool grouped_adaptive=false;
-    if (grouped_v19 && !effect_v111) {
+    if (grouped_v19 && !effect_v111 && !effect_mix_v112) {
         const std::streampos here=ifs.tellg();std::string line;
         while(std::getline(ifs,line)) if(line.find("adaptive_radial_projection")!=std::string::npos) grouped_adaptive=true;
         ifs.clear();ifs.seekg(here);
     }
 	if (shared_o_v110 && !grouped_adaptive) ERROR("Version 1.10.0 requires Adaptive shared-o metadata");
-    const bool legacy_v18 = model_file_version == "1.8.0" || effect_v111 || (grouped_v19 && !grouped_adaptive);
+    const bool legacy_v18 = model_file_version == "1.8.0" || effect_v111 || effect_mix_v112
+        || (grouped_v19 && !grouped_adaptive);
 	const bool adaptive_v17 = model_file_version == "1.7.0" || (grouped_v19 && grouped_adaptive);
 	const bool joint_v16 = model_file_version == "1.6.0" || adaptive_v17;
 	const bool adaptive_v15 = model_file_version == "1.5.0" || joint_v16;
@@ -4787,8 +4837,23 @@ void MLMTPR::Load(const string& filename)
             if(!grouped_v19 || ++grouped_block_fields!=1) ERROR("Grouped block metadata requires unique version 1.9.0 field");
         }
 		if (key == "effect_gate_projection") {
-			if (!effect_v111 || ++effect_projection_fields != 1)
-				ERROR("effect_gate_projection requires unique metadata and version 1.11.0");
+			if ((!effect_v111 && !effect_mix_v112) || ++effect_projection_fields != 1)
+				ERROR("effect_gate_projection requires unique metadata and a compatible Effect version");
+		}
+		if (key == "effect_inner_mix_coeff_count") {
+			if (!effect_mix_v112 || ++effect_inner_count_fields != 1)
+				ERROR("effect_inner_mix_coeff_count requires unique version 1.12.0 metadata");
+		}
+		if (key == "effect_inner_mix_coeffs") {
+			if (!effect_mix_v112 || ++effect_inner_coeff_fields != 1)
+				ERROR("effect_inner_mix_coeffs requires unique version 1.12.0 metadata");
+		}
+		if (effect_mix_v112) {
+			if (key == "two_layer_gate_radial_coeff_count" || key == "two_layer_gate_radial_coeffs")
+				ERROR("Effect mix-basis cannot contain a factorized inner radial block");
+			if (key.compare(0, std::string("two_layer_gate_radial_mixing").size(),
+			                "two_layer_gate_radial_mixing") == 0 && ++effect_outer_mix_fields[key] != 1)
+				ERROR("Effect mix-basis requires unique outer mixing metadata");
 		}
 		if (key == "two_layer_gate_scalar_count") ++effect_scalar_count_fields;
 		if (legacy_v18) {
@@ -4831,6 +4896,10 @@ void MLMTPR::Load(const string& filename)
 	if (model_file_version == "1.9.0" && grouped_block_fields!=1) ERROR("Version 1.9.0 requires outer_channel_block_size");
 	if (effect_v111 && (effect_projection_fields != 1 || effect_scalar_count_fields != 1))
 		ERROR("Version 1.11.0 requires explicit effect projection and gate scalar count");
+	if (effect_mix_v112 && (effect_inner_count_fields != 1 || effect_inner_coeff_fields != 1
+	    || effect_outer_mix_fields.size() != 4
+	    || (effect_projection_fields == 1 && effect_scalar_count_fields != 1)))
+		ERROR("Version 1.12.0 requires explicit, unique Effect mix-basis metadata");
 	if (legacy_v18 && (readout_fields != 1 || legacy_outer_channel_fields != 1 || legacy_outer_radial_fields != 1))
 		ERROR("Version 1.8.0 requires unique readout and outer mode fields");
 	if (model_file_version == "1.4.0"
@@ -5097,8 +5166,8 @@ void MLMTPR::Load(const string& filename)
 			ifs.ignore(2);
 			ifs >> tmpstr;
 			effect_projection_seen = true;
-			if (!effect_v111 || tmpstr != "tanh-gate")
-				ERROR("Version 1.11.0 requires effect_gate_projection = tanh-gate");
+			if ((!effect_v111 && !effect_mix_v112) || tmpstr != "tanh-gate")
+				ERROR("Explicit effect_gate_projection must be tanh-gate in a compatible Effect version");
 			effect_tanh_gate_ = true;
 			ifs >> tmpstr;
 		}
@@ -5672,8 +5741,9 @@ void MLMTPR::Load(const string& filename)
 			ERROR("SUS2-SH outer_channel_mode should be cross-channel or same-channel");
 		if (outer_radial_mode_ != "legacy-plus-mixer"
 		    && outer_radial_mode_ != "pure-matrix"
-		    && outer_radial_mode_ != "adaptive-coefficients")
-			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, or adaptive-coefficients");
+		    && outer_radial_mode_ != "adaptive-coefficients"
+		    && !EffectUsesMixBasis())
+			ERROR("SUS2-SH outer_radial_mode should be legacy-plus-mixer, pure-matrix, adaptive-coefficients, or effect-mix-basis");
 		if (readout_mode_ != "shared" && readout_mode_ != "species")
 			ERROR("SUS2-SH readout_mode should be shared or species");
 		if (outer_radial_mode_ == "pure-matrix"
@@ -5684,6 +5754,8 @@ void MLMTPR::Load(const string& filename)
 		        && !OuterUsesAdaptiveRadialCoefficients()
 		        && outer_channel_mode_!="grouped-cross" && outer_k_rank_ > sh_k_max_))
 			ERROR("SUS2-SH outer K-rank must be positive; only same-channel radial modes allow rank above sh_k_max");
+		if (EffectUsesMixBasis() != effect_mix_v112)
+			ERROR("Effect mix-basis outer mode and model version 1.12.0 must occur together");
 		if (readout_mode_ == "species" && !OuterUsesAdaptiveRadialCoefficients() && !legacy_v18)
 			ERROR("Legacy species readout requires model version 1.8.0");
 		if (outer_k_rank_ > std::numeric_limits<int>::max()
@@ -5764,8 +5836,10 @@ void MLMTPR::Load(const string& filename)
 		ifs.ignore(2);
 		ifs >> two_layer_gate_k_rank_;
 		if (two_layer_gate_k_rank_ <= 0
-		    || two_layer_gate_k_rank_ > sh_k_max_)
-			ERROR("SUS2-SH gate K-rank should be in [1, sh_k_max]");
+		    || (!EffectUsesMixBasis() && two_layer_gate_k_rank_ > sh_k_max_))
+			ERROR("SUS2-SH gate K-rank should be positive and at most sh_k_max for legacy radial layouts");
+		CheckedIntProduct(two_layer_gate_k_rank_, (sh_l_max_ + 1) * (sh_l_max_ + 1),
+			"SUS2-SH gate primitive count");
 		if (!OuterKRankEnabled())
 			ERROR("SUS2-SH gate K-rank currently requires outer K-rank metadata");
 
@@ -5805,8 +5879,12 @@ void MLMTPR::Load(const string& filename)
 		ifs >> tmpstr;
 		if (tmpstr != "two_layer_gate_k_rank_weights")
 			ERROR("SUS2-SH gate K-rank metadata is missing its weights");
-		ReadDoubleList(
-			ifs, two_layer_gate_k_rank_weights_, gate_k_weight_count);
+		ReadDoubleList(ifs, two_layer_gate_k_rank_weights_, gate_k_weight_count);
+		if (EffectUsesMixBasis()) {
+			char closing_brace = '\0';
+			if (!(ifs >> closing_brace) || closing_brace != '}')
+				ERROR("Effect mix-basis gate rank weights must be an empty list");
+		}
 		ifs.ignore(1000, '\n');
 		ifs >> tmpstr;
 
@@ -5921,8 +5999,10 @@ void MLMTPR::Load(const string& filename)
 				}
 
 				ifs >> tmpstr;
-				if (tmpstr != "two_layer_gate_radial_coeff_count")
-					ERROR("SUS2-SH two-layer shared-radial gate is missing two_layer_gate_radial_coeff_count");
+				const char* radial_count_field = EffectUsesMixBasis()
+					? "effect_inner_mix_coeff_count" : "two_layer_gate_radial_coeff_count";
+				if (tmpstr != radial_count_field)
+					ERROR(std::string("SUS2-SH two-layer shared-radial gate is missing ") + radial_count_field);
 				ifs.ignore(2);
 				int gate_radial_count = 0;
 				ifs >> gate_radial_count;
@@ -5931,9 +6011,14 @@ void MLMTPR::Load(const string& filename)
 					ERROR("SUS2-SH two-layer shared-radial gate radial coefficient count is inconsistent");
 
 				ifs >> tmpstr;
-				if (tmpstr != "two_layer_gate_radial_coeffs")
-					ERROR("SUS2-SH two-layer shared-radial gate is missing two_layer_gate_radial_coeffs");
-					ReadDoubleList(ifs, two_layer_gate_radial_coeffs_, gate_radial_count);
+				const char* radial_coeff_field = EffectUsesMixBasis()
+						? "effect_inner_mix_coeffs" : "two_layer_gate_radial_coeffs";
+					if (tmpstr != radial_coeff_field)
+						ERROR(std::string("SUS2-SH two-layer shared-radial gate is missing ") + radial_coeff_field);
+					if (EffectUsesMixBasis())
+						ReadDoubleListExact(ifs, two_layer_gate_radial_coeffs_, gate_radial_count, radial_coeff_field);
+					else
+						ReadDoubleList(ifs, two_layer_gate_radial_coeffs_, gate_radial_count);
 					ifs.ignore(1000, '\n');
 					ifs >> tmpstr;
 				}
@@ -6193,9 +6278,11 @@ void MLMTPR::Load(const string& filename)
 					ifs >> tmpstr;
 					if (tmpstr != "two_layer_gate_radial_mixing_coeffs")
 						ERROR("SUS2-SH two-layer gate radial mixing is missing coefficients");
-					ReadDoubleList(ifs,
-					               two_layer_gate_radial_mixing_coeffs_,
-					               mixing_count);
+					if (EffectUsesMixBasis())
+						ReadDoubleListExact(ifs, two_layer_gate_radial_mixing_coeffs_, mixing_count,
+							"two_layer_gate_radial_mixing_coeffs");
+					else
+						ReadDoubleList(ifs, two_layer_gate_radial_mixing_coeffs_, mixing_count);
 					ifs.ignore(1000, '\n');
 					if (!(ifs >> tmpstr))
 						tmpstr = "";
@@ -6636,7 +6723,8 @@ void MLMTPR::Load(const string& filename)
 			ValidateOuterModeConfiguration();
 			if (model_file_version == "1.3.0" && readout_mode_ != "species")
 				ERROR("SUS2-SH model version 1.3.0 requires readout_mode = species");
-			if (legacy_v18 && (OuterUsesAdaptiveRadialCoefficients() || OuterUsesPureRadialMatrix() || !readout_mode_seen))
+			if (legacy_v18 && (OuterUsesAdaptiveRadialCoefficients()
+			    || (OuterUsesPureRadialMatrix() && !EffectUsesMixBasis()) || !readout_mode_seen))
 				ERROR("Version 1.8.0 requires explicit Legacy readout metadata");
 			if (readout_mode_ == "species"
 			    && model_file_version != "1.3.0"
@@ -6735,6 +6823,8 @@ void MLMTPR::Load(const string& filename)
     }
 	if (UsesPrecomputedLmpTable(rbasis_type))
 	{
+		if (EffectUsesMixBasis())
+			ERROR("Effect mix-basis requires an analytic radial basis");
 		radial_list.resize(species_count * species_count, 200002, radial_func_count);
 		radial_der_list.resize(species_count * species_count, 200002, radial_func_count);
 		radial_list.set(0);
@@ -6829,11 +6919,13 @@ void MLMTPR::Load(const string& filename)
 			    || tensor_scales_seen != (tensor_scale_fields == 1))
 				ERROR("SUS2-SH version 1.5.0 has misplaced optimizer-scale metadata");
 		}
-		if (effect_v111) {
-			if (!is_sh_potential_ || !effect_projection_seen)
-				ERROR("Version 1.11.0 requires ordered tanh-gate metadata");
+		if (effect_v111 && (!is_sh_potential_ || !effect_projection_seen))
+			ERROR("Version 1.11.0 requires ordered tanh-gate metadata");
+		if (effect_mix_v112 && (!is_sh_potential_ || !EffectUsesMixBasis()
+		    || effect_projection_seen != (effect_projection_fields == 1)))
+			ERROR("Version 1.12.0 requires ordered Effect mix-basis metadata");
+		if (EffectGateTanhProjection())
 			ValidateEffectTanhGate();
-		}
 		MemAlloc();
 		if (adaptive_v17 && (!latent_rank_seen || !activation_seen || !joint_enabled_seen))
 			ERROR("SUS2-SH version 1.7.0 rank/activation/joint metadata is misplaced");
@@ -7202,7 +7294,7 @@ void MLMTPR::Save(const string& filename)
 		&& (OuterKRankEnabled() || TwoLayerGateKRankEnabled()
 		    || TwoLayerGateReadoutEnabled());
 	ofs << "version = "
-	    << (EffectGateTanhProjection() ? "1.11.0" : AdaptiveRadialSharedO() ? "1.10.0" : outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
+	    << (EffectUsesMixBasis() ? "1.12.0" : EffectGateTanhProjection() ? "1.11.0" : AdaptiveRadialSharedO() ? "1.10.0" : outer_channel_mode_ == "grouped-cross" ? "1.9.0" : ((!OuterUsesAdaptiveRadialCoefficients() && !OuterUsesPureRadialMatrix()
 	         && (UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k"))) ? "1.8.0" :
 	        (AdaptiveRadialV17() ? "1.7.0" : (JointReadoutEnabled() ? "1.6.0" : (AdaptiveRadialExtendedLayout() ? "1.5.0" : (TensorMessageEnabled() ? "1.4.0" : (UsesSpeciesReadout() ? "1.3.0"
 	        : (uses_extended_sh_format ? "1.2.0" : "1.1.0")))))))) << '\n';
@@ -7378,7 +7470,7 @@ void MLMTPR::Save(const string& filename)
 			ofs << "outer_channel_mode = " << outer_channel_mode_ << '\n';
             if (outer_channel_mode_=="grouped-cross") ofs << "outer_channel_block_size = " << outer_channel_block_size_ << '\n';
 				ofs << "outer_radial_mode = " << outer_radial_mode_ << '\n';
-				if (EffectGateTanhProjection() || UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
+				if (EffectUsesMixBasis() || EffectGateTanhProjection() || UsesSpeciesReadout() || outer_channel_mode_=="grouped-cross" || OuterUsesSameChannelGraph() || (TwoLayerGateKRankEnabled() && two_layer_gate_factor_pruning_ == "same-k") || TensorMessageEnabled() || AdaptiveRadialExtendedLayout() || JointReadoutEnabled())
 					ofs << "readout_mode = " << readout_mode_ << '\n';
 				if (AdaptiveRadialExtendedLayout() || JointReadoutEnabled()) {
 					ofs << "adaptive_radial_projection = " << adaptive_radial_projection_ << '\n';
@@ -7432,7 +7524,7 @@ void MLMTPR::Save(const string& filename)
 	if (is_sh_potential_ && TwoLayerGateKRankEnabled()) {
 		if (!OuterKRankEnabled())
 			ERROR("SUS2-SH gate K-rank currently requires outer K-rank");
-		if (two_layer_gate_k_rank_ > sh_k_max_)
+		if (two_layer_gate_k_rank_ > sh_k_max_ && !EffectUsesMixBasis())
 			ERROR("SUS2-SH gate K-rank exceeds sh_k_max");
 		if (two_layer_gate_k_rank_basic_count_
 		    != two_layer_gate_k_rank_ * (sh_l_max_ + 1) * (sh_l_max_ + 1))
@@ -7449,7 +7541,7 @@ void MLMTPR::Save(const string& filename)
 		ofs << "two_layer_gate_k_rank_weight_count = "
 		    << TwoLayerGateKRankWeightCount() << '\n';
 		ofs << "two_layer_gate_k_rank_weights = {";
-		for (int l = 0; l <= sh_l_max_; ++l) {
+		for (int l = 0; !EffectUsesMixBasis() && l <= sh_l_max_; ++l) {
 			for (int channel = 0; channel < two_layer_gate_k_rank_; ++channel) {
 				for (int k = 0; k < sh_k_max_; ++k) {
 					if (l != 0 || channel != 0 || k != 0)
@@ -7487,15 +7579,17 @@ void MLMTPR::Save(const string& filename)
 			if (gate_radial_count <= 0)
 				ERROR("SUS2-SH two-layer shared-radial gate has no radial coefficients");
 			ofs << "two_layer_gate_radial_mode = shared-radial\n";
-			ofs << "two_layer_gate_radial_coeff_count = " << gate_radial_count << '\n';
-			ofs << "two_layer_gate_radial_coeffs = {";
+			ofs << (EffectUsesMixBasis() ? "effect_inner_mix_coeff_count = " : "two_layer_gate_radial_coeff_count = ")
+			    << gate_radial_count << '\n';
+			ofs << (EffectUsesMixBasis() ? "effect_inner_mix_coeffs = {" : "two_layer_gate_radial_coeffs = {");
 			const int R = p_RadialBasis->rb_size;
 			for (int i = 0; i < gate_radial_count; ++i) {
 				if (i > 0)
 					ofs << ", ";
 				const int mu = i / R;
 				const int xi = i % R;
-				ofs << TwoLayerGateRadialCoeff(mu, xi);
+				ofs << (EffectUsesMixBasis() ? regression_coeffs[EffectInnerMixCoeffOffset() + i]
+				                            : TwoLayerGateRadialCoeff(mu, xi));
 			}
 			ofs << "}\n";
 		}
@@ -12907,7 +13001,7 @@ void MLMTPR::BuildGateLayerProductProgram(
 		required_moments[product.left] = 1;
 		required_moments[product.right] = 1;
 	}
-	if (TwoLayerGateKRankEnabled()) {
+	if (TwoLayerGateKRankEnabled() && !EffectUsesMixBasis()) {
 		for (int channel = 0; channel < two_layer_gate_k_rank_; ++channel) {
 			for (int l = sh_l_max_; l >= 0; --l) {
 				for (int m = -l; m <= l; ++m) {
@@ -14038,66 +14132,60 @@ void MLMTPR::AddRadialSmoothnessPenalty(const double coeff,
 	if (!(cutoff > 0.0))
 		ERROR("Radial smoothness penalty requires a positive cutoff");
 	if (OuterUsesPureRadialMatrix()) {
-		// This model regularizes the actual distance matrix, not the retired
-		// outer R table and not weight-normalization chart coordinates:
-		// lambda / ((L+1)*O*K*C*C) * sum(l,o,k,p,q) int_0^cutoff |W'_lok|^2 dr.
-		// The grid is the same midpoint quadrature as in the legacy objective.
-		// Averaging over O keeps the penalty strength independent of width.
-		// Type/gate multipliers already belong to x and are not part of W.
-		// No gate-radial penalty is added: legacy gate scalar/full L2 stays
-		// in AddScalarWeightL2Penalty, exactly as before.
-		const int matrix_rows = TwoLayerGateRadialMixingCoeffCount() / R;
-		if (matrix_rows <= 0)
-			ERROR("Pure distance-matrix smoothness requires nonempty W rows");
-		const double matrix_weight = coeff * cutoff
-			/ (static_cast<double>(grid_size) * matrix_rows
-			   * static_cast<double>(C) * C);
-		for (int type_central = 0; type_central < C; ++type_central) {
-			for (int type_outer = 0; type_outer < C; ++type_outer) {
-				for (int q = 0; q < grid_size; ++q) {
-					const double r = cutoff * (static_cast<double>(q) + 0.5)
-						/ static_cast<double>(grid_size);
-					for (int l = 0; l <= sh_l_max_; ++l) {
-                        const double r = RadialCutoffForMu(l)*(q+0.5)/grid_size;
-                        const double local_matrix_weight = l>0 && AngularCutoffActive()>0 ? matrix_weight*RadialCutoffForMu(l)/cutoff : matrix_weight;
-						for (int k = 0; k < sh_k_max_; ++k) {
-							const int mu = k * (sh_l_max_ + 1) + l;
-							const int scaling_block = mu_to_K[mu];
-							const int slope_offset = ScalingSlopeOffset(
-								scaling_block, type_central, type_outer);
-							const int shift_offset = ScalingShiftOffset(
-								scaling_block, type_central, type_outer);
-							p_RadialBasis->RB_CalcForCutoff(r,
-								regression_coeffs[slope_offset],
-								regression_coeffs[shift_offset], RadialBasisKForMu(mu), RadialCutoffForMu(mu), 2);
-							// All O entries share the basis/scaling of this input
-							// (k,l). Evaluate it once, accumulate every output's
-							// chain-rule contribution to the shared scal/s slots.
-							for (int o = 0; o < outer_k_rank_; ++o) {
-								const int row_begin =
-									TwoLayerGateRadialMixingCoeffIndex(l, o, k, 0);
-								double w_der = 0.0;
-								double w_der_slope = 0.0;
-								double w_der_shift = 0.0;
-								for (int b = 0; b < R; ++b) {
-									const double c = regression_coeffs[row_begin + b] * scaling;
-									w_der += c * p_RadialBasis->rb_ders[b];
-									if (out_penalty_grad_accumulator != nullptr) {
-										w_der_slope += c * p_RadialBasis->rb_ders[2 * R + b];
-										w_der_shift += c * p_RadialBasis->rb_ders[4 * R + b];
+		// Integrate each matrix's physical squared radial derivative. Average
+		// over its rows and ordered element pairs, keeping the weights
+		// independent of inner/outer width. Prefactors stay outside W.
+		const int matrix_count = EffectUsesMixBasis() ? 2 : 1;
+		for (int matrix = 0; matrix < matrix_count; ++matrix) {
+			const bool inner = matrix == 1;
+			const int rows = (inner ? EffectInnerMixCoeffCount()
+				: TwoLayerGateRadialMixingCoeffCount()) / R;
+			const int channels = inner ? two_layer_gate_k_rank_ : outer_k_rank_;
+			if (rows <= 0)
+				ERROR("Distance-matrix smoothness requires nonempty W rows");
+			const double norm = coeff / (static_cast<double>(grid_size) * rows * C * C);
+			for (int center = 0; center < C; ++center) {
+				for (int neighbor = 0; neighbor < C; ++neighbor) {
+					for (int q = 0; q < grid_size; ++q) {
+						for (int ell = 0; ell <= sh_l_max_; ++ell) {
+							const double local_cutoff = RadialCutoffForMu(ell);
+							const double r = local_cutoff * (q + 0.5) / grid_size;
+							const double local_weight = norm * local_cutoff;
+							for (int k = 0; k < sh_k_max_; ++k) {
+								const int mu = k * (sh_l_max_ + 1) + ell;
+								const int warp = mu_to_K[mu];
+								const int slope = inner
+									? TwoLayerGateScalingSlopeOffset(warp, center, neighbor)
+									: ScalingSlopeOffset(warp, center, neighbor);
+								const int shift = inner
+									? TwoLayerGateScalingShiftOffset(warp, center, neighbor)
+									: ScalingShiftOffset(warp, center, neighbor);
+								p_RadialBasis->RB_CalcForCutoff(r,
+									regression_coeffs[slope], regression_coeffs[shift],
+									RadialBasisKForMu(mu), local_cutoff, 2);
+								for (int channel = 0; channel < channels; ++channel) {
+									const int row = inner
+										? EffectInnerMixCoeffIndex(ell, channel, k, 0)
+										: TwoLayerGateRadialMixingCoeffIndex(ell, channel, k, 0);
+									double der = 0.0, der_slope = 0.0, der_shift = 0.0;
+									for (int n = 0; n < R; ++n) {
+										const double w = regression_coeffs[row + n] * scaling;
+										der += w * p_RadialBasis->rb_ders[n];
+										if (out_penalty_grad_accumulator != nullptr) {
+											der_slope += w * p_RadialBasis->rb_ders[2*R + n];
+											der_shift += w * p_RadialBasis->rb_ders[4*R + n];
+										}
 									}
+									out_penalty_accumulator += local_weight * der * der;
+									if (out_penalty_grad_accumulator == nullptr)
+										continue;
+									const double seed = 2.0 * local_weight * der;
+									for (int n = 0; n < R; ++n)
+										(*out_penalty_grad_accumulator)[row + n] +=
+											seed * p_RadialBasis->rb_ders[n] * scaling;
+									(*out_penalty_grad_accumulator)[slope] += seed * der_slope;
+									(*out_penalty_grad_accumulator)[shift] += seed * der_shift;
 								}
-								out_penalty_accumulator += local_matrix_weight * w_der * w_der;
-								if (out_penalty_grad_accumulator == nullptr)
-									continue;
-								const double common_grad = 2.0 * local_matrix_weight * w_der;
-								for (int b = 0; b < R; ++b)
-									(*out_penalty_grad_accumulator)[row_begin + b] +=
-										common_grad * p_RadialBasis->rb_ders[b] * scaling;
-								(*out_penalty_grad_accumulator)[slope_offset] +=
-									common_grad * w_der_slope;
-								(*out_penalty_grad_accumulator)[shift_offset] +=
-									common_grad * w_der_shift;
 							}
 						}
 					}
