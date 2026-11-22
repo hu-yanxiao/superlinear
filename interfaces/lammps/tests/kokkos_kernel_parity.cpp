@@ -7,15 +7,25 @@
 using namespace LAMMPS_NS::SUS2SL;
 using KK=KokkosKernel<Kokkos::DefaultExecutionSpace>;
 void configure_counting(KK&k){k.configure_radial_counting(std::getenv("SUS2_TEST_NO_RADIAL_COUNTS")==nullptr);}
-double dense_compare(const Model&m,bool table){
+double dense_compare(const Model&m,bool table,std::size_t budget=std::numeric_limits<std::size_t>::max()){
   const int n=33;std::vector<std::array<double,3>>x(n);std::vector<int>types(n);std::vector<Edge>edges;std::vector<int>offset(1,0),neighbors;
   for(int i=0;i<n;++i){types[i]=i%m.species_count;x[i]={{1.4*(i%3)+.037*std::sin(i),1.4*((i/3)%3)+.021*std::cos(1.7*i),1.4*(i/9)+.031*std::sin(2.1*i)}};}
   int maximum=0;for(int i=0;i<n;++i){for(int j=0;j<n;++j)if(i!=j){std::array<double,3>d;double r2=0.;for(int q=0;q<3;++q){d[q]=x[j][q]-x[i][q];r2+=d[q]*d[q];}if(r2<m.cutoff()*m.cutoff()){edges.push_back({i,j,d});neighbors.push_back(j);}}maximum=std::max(maximum,static_cast<int>(neighbors.size())-offset.back());offset.push_back(neighbors.size());}
   if(maximum<=16)throw std::runtime_error("dense fixture did not cross a shared-neighbor tile");
-  Kernel reference(m);reference.configure_radial(table?RadialTableMode::Table:RadialTableMode::Direct,.001);KK device(m);std::vector<int>species;for(int t=0;t<m.species_count;++t)species.push_back(t);device.configure_radial(table?RadialTableMode::Table:RadialTableMode::Direct,.001,std::numeric_limits<std::size_t>::max(),species);device.prepare(n,n,neighbors.size());configure_counting(device);
+  Kernel reference(m);reference.configure_radial(table&&budget?RadialTableMode::Table:RadialTableMode::Direct,.001);KK device(m);std::vector<int>species;for(int t=0;t<m.species_count;++t)species.push_back(t);device.configure_radial(table?RadialTableMode::Table:RadialTableMode::Direct,.001,budget,species);device.prepare(n,n,neighbors.size());configure_counting(device);
   auto xx=Kokkos::create_mirror_view(device.positions);auto tt=Kokkos::create_mirror_view(device.types);auto oo=Kokkos::create_mirror_view(device.offsets);auto nn=Kokkos::create_mirror_view(device.neighbors);for(int i=0;i<n;++i){tt(i)=types[i];for(int q=0;q<3;++q)xx(i,q)=x[i][q];}for(int i=0;i<=n;++i)oo(i)=offset[i];for(std::size_t e=0;e<neighbors.size();++e)nn(e)=neighbors[e];Kokkos::deep_copy(device.positions,xx);Kokkos::deep_copy(device.types,tt);Kokkos::deep_copy(device.offsets,oo);Kokkos::deep_copy(device.neighbors,nn);
   double error=0.;auto compare=[&](double a,double b){if(!std::isfinite(a)||!std::isfinite(b))throw std::runtime_error("nonfinite dense E/F/virial");error=std::max(error,std::abs(a-b)/(1.+std::abs(b)));};
   for(int step=0;step<2;++step){reference.begin(n,n,types,edges);reference.outer();const auto&r=reference.finish();device.begin();device.outer();device.finish();if(device.error_code())throw std::runtime_error("dense device error");auto e=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.site_energy);auto f=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.force);auto v=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),device.virial);for(int i=0;i<n;++i){compare(e(i),r.site_energy[i]);for(int q=0;q<3;++q)compare(f(i,q),r.force[i][q]);}for(int q=0;q<6;++q){double z=0.;for(int i=0;i<n;++i)z+=v(i,q);compare(z,r.virial[q]);}}
+  const auto stats=device.radial_stats();
+  if(table && m.text("outer_radial_mode")=="effect-mix-basis" && !std::getenv("SUS2_TEST_NO_RADIAL_COUNTS")){
+    if(budget==0 && (stats.bytes||stats.tables||stats.hits||!stats.memory_fallbacks))
+      throw std::runtime_error("mix-basis zero-budget table did not use exact direct fallback");
+    if(budget && std::getenv("SUS2_TEST_REQUIRE_MIX_TABLE_HITS") &&
+       (!stats.bytes||!stats.tables||!stats.hits||stats.bytes>budget))
+      throw std::runtime_error("mix-basis resident table did not register hits within its budget");
+    std::cout<<"mix-basis bytes "<<stats.bytes<<" tables "<<stats.tables<<" hits "<<stats.hits
+             <<" capacity "<<stats.memory_fallbacks<<" domain "<<stats.domain_fallbacks<<'\n';
+  }
   std::cout<<"dense atoms "<<n<<" maximum_neighbors "<<maximum<<" relative_max "<<error<<'\n';return error;
 }
 int main(int argc,char**argv){if(argc<2){std::cerr<<"Usage: kokkos-kernel-parity MODEL [direct|table] [zbl|gate-readout|duplicate-gate]\n";return 1;}Kokkos::initialize(argc,argv);int code=0;try{
@@ -61,6 +71,8 @@ int main(int argc,char**argv){if(argc<2){std::cerr<<"Usage: kokkos-kernel-parity
   // species/head arrays, even when there is no edge to discover the bad type.
   KK invalid(m);invalid.prepare(1,1,0);auto it=Kokkos::create_mirror_view(invalid.types);it(0)=m.species_count;Kokkos::deep_copy(invalid.types,it);Kokkos::deep_copy(invalid.offsets,0);Kokkos::deep_copy(invalid.positions,0.);invalid.begin();if(invalid.error_code()!=3)throw std::runtime_error("isolated type was not validated during begin");invalid.outer();invalid.finish();if(invalid.error_code()!=3)throw std::runtime_error("invalid type status lost");
   error=std::max(error,dense_compare(m,table));
+  if(table&&m.text("outer_radial_mode")=="effect-mix-basis")
+    error=std::max(error,dense_compare(m,true,0));
   const auto stats=gpu.radial_stats();if(std::getenv("SUS2_TEST_NO_RADIAL_COUNTS")&&(stats.hits||stats.direct_fallbacks))throw std::runtime_error("disabled radial counters changed");
   std::cout<<"KOKKOS_EXECUTION_JSON {\"execution_space\":\""<<Kokkos::DefaultExecutionSpace::name()<<"\",\"device_cuda_arch\":"<<device_arch<<",\"requested_context\":"<<gpu.uses_table_context()<<",\"active_context\":"<<gpu.table_context_active()<<",\"requested_packed\":"<<gpu.uses_table_packed()<<",\"active_packed\":"<<gpu.table_packed_active()<<",\"role\":"<<gpu.uses_forward_role_specialize()<<",\"tile\":"<<gpu.uses_forward_radial_tile()<<",\"seed_rows\":"<<gpu.uses_effect_seed_rows()<<",\"seed_row_count\":"<<gpu.effect_seed_row_count()<<"}\n";
   std::cout<<"KOKKOS_PARITY_JSON {\"model\":\""<<argv[1]<<"\",\"radial\":\""<<(table?"table":"direct")<<"\",\"generic_reference\":"<<(gpu.uses_generic_reference()?"true":"false")<<",\"normalized_error\":"<<error<<",\"comparisons\":6,\"status\":\""<<(error>2e-10?"FAIL":"PASS")<<"\"}\n";

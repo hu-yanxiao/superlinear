@@ -64,7 +64,8 @@ for source in "${sources[@]}"; do
   done
 done
 copy_if_changed "$pkg_root/ML-SUS2/sus2_sl_zbl.h" "$lammps_root/src/sus2_sl_zbl.h"
-installed+=(src/sus2_sl_zbl.h)
+copy_if_changed "$pkg_root/ML-SUS2/sus2_sl_mix_radial.h" "$lammps_root/src/sus2_sl_mix_radial.h"
+installed+=(src/sus2_sl_zbl.h src/sus2_sl_mix_radial.h)
 for suffix in cpp h; do
   copy_if_changed "$pkg_root/ML-SUS2-KK/pair_sus2_embedded_kokkos.$suffix" "$lammps_root/src/KOKKOS/pair_sus2_embedded_kokkos.$suffix"
   installed+=("src/KOKKOS/pair_sus2_embedded_kokkos.$suffix")

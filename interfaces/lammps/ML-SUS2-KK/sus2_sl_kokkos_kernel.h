@@ -96,10 +96,10 @@ template<class DeviceType> class KokkosKernel {
     int owned=0,all=0,edges=0,C=0,L=0,H=0,K=0,F=0,B=0,G=0,O=0,Q=0,W=0;
     int mode=0,tensor_lmax=0,tensor_components=0,latent=1,P=0,Drows=0,scaling_map=3;
     bool gated=false,mixing=false,species_readout=false,species_amplitude=false;
-    bool shared_n=false,activation_tanh=false,gate_readout=false,zbl=false;
-    double cutoff=0,zbl_inner=.7,zbl_outer=1.4,zbl_factor=0;
+    bool mix_basis=false,mix_tanh=false,shared_n=false,activation_tanh=false,gate_readout=false,zbl=false;
+    double cutoff=0,angular_cutoff=0,zbl_inner=.7,zbl_outer=1.4,zbl_factor=0;
     PublicMatrix x,s,sa,f,v;
-    I type,off,nbr,error,inner_basic,outer_basic,outer_rank,gate_feature,gate_scalar;
+    I type,off,nbr,error,inner_rank,inner_basic,outer_basic,outer_rank,gate_feature,gate_scalar;
     I outer_scalar,joint_basic_source,joint_basic_l,joint_basic_m,joint_gate_source,joint_outer_source;
     I atomic_number;
     D norm,gate_species,outer_species,additive,gate_weights,gate_head,head,species,bias;
@@ -195,7 +195,7 @@ template<class DeviceType> class KokkosKernel {
   }
   void rank_plan(Stage&s,bool gate) {
     const int rank=gate?d_.G:d_.O,begin=model_.integer(gate?"two_layer_gate_k_rank_basic_begin":"outer_k_rank1_basic_begin");
-    if(!rank||(!gate&&(d_.mode==2||d_.mode==3)))return;
+    if(d_.mix_basis||!rank||(!gate&&(d_.mode==2||d_.mode==3)))return;
     const auto w=model_.numbers(gate?"two_layer_gate_k_rank_weights":"outer_k_rank1_weights");
     std::map<int,HostRow>forward,reverse;
     for(int a=0;a<rank;++a)for(std::size_t b=0;b<model_.basic.size();++b){const auto&t=model_.basic[b];
@@ -558,6 +558,66 @@ template<class DeviceType> class KokkosKernel {
       }
     });
   }
+  template<bool Gate,bool Reverse> void mix_edges() {
+    if(!owned_)return;
+    const auto d=d_;
+    const auto ranks=Gate?d.inner_rank:d.outer_rank;
+    const auto moments=Gate?(Reverse?d.ga:d.gv):(Reverse?d.oa:d.ov);
+    const int rank=Gate?d.G:d.O;
+    Kokkos::parallel_for("sus2_mix_edges",TeamPolicy(owned_,Kokkos::AUTO,1),
+        KOKKOS_LAMBDA(const TeamMember& team){
+      const int i=team.league_rank(),ti=d.type(i);
+      int lo,hi;
+      if(!d.edge_range(i,lo,hi))return;
+      Kokkos::parallel_for(Kokkos::TeamThreadRange(team,lo,hi),[&](const int e){
+        const int j=d.nbr(e);
+        double delta[3],r;
+        if(!d.geometry(i,j,delta,r)||r>=d.cutoff)return;
+        const int tj=d.type(j),levels=r<d.angular_cutoff?d.L:1;
+        double y[25],dy[75],gradient[3]={};
+        kokkos_detail::harmonics<Reverse>(delta[0],delta[1],delta[2],levels-1,d.norm,y,dy);
+        constexpr int tile=4;
+        const auto scalar=d.radial.template mix_context<Reverse>(r,ti,tj,Gate,0);
+        const auto angular=levels>1?d.radial.template mix_context<Reverse>(r,ti,tj,Gate,1):
+            typename DeviceRadial<DeviceType>::MixContext{};
+        for(int l=0;l<levels;++l)for(int a=0;a<rank;a+=tile) {
+          const int lanes=rank-a<tile?rank-a:tile;
+          double v[tile]={},dv[tile]={},angular_seed[tile]={};
+          if(Reverse)for(int lane=0;lane<lanes;++lane)for(int c=0;c<2*l+1;++c)
+            angular_seed[lane]+=moments(i,ranks((l*rank+a+lane)*9+c))*y[l*l+c];
+          for(int k=0;k<(Gate?1:d.K);++k) {
+            double curve[tile],dcurve[tile];
+            d.radial.template mix_rows<Gate,Reverse>(r,ti,tj,k,l,a,lanes,l?angular:scalar,curve,dcurve);
+            double signal=1.;
+            if(!Gate) {
+              const int mu=k*d.L+l;
+              const double central=d.outer_species(ti*d.F+mu),alpha=d.additive(tj*d.F+mu);
+              signal=central*(d.outer_species(tj*d.F+mu)+alpha*d.s(j,mu));
+              if(Reverse){
+                double adjoint=0.;
+                for(int lane=0;lane<lanes;++lane)adjoint+=angular_seed[lane]*curve[lane];
+                Kokkos::atomic_add(&d.sa(j,mu),central*alpha*adjoint);
+              }
+            }
+            for(int lane=0;lane<lanes;++lane){
+              v[lane]+=signal*curve[lane];if(Reverse)dv[lane]+=signal*dcurve[lane];
+            }
+          }
+          for(int lane=0;lane<lanes;++lane){
+            const int row=(l*rank+a+lane)*9;
+            if(Reverse) {
+              for(int q=0;q<3;++q)gradient[q]+=angular_seed[lane]*dv[lane]*delta[q]/r;
+              for(int c=0;c<2*l+1;++c)for(int q=0;q<3;++q)
+                gradient[q]+=moments(i,ranks(row+c))*v[lane]*dy[3*(l*l+c)+q];
+            } else for(int c=0;c<2*l+1;++c)
+              Kokkos::atomic_add(&moments(i,ranks(row+c)),v[lane]*y[l*l+c]);
+          }
+        }
+        if(Reverse)d.add_edge(i,j,delta,gradient);
+      });
+    });
+  }
+
   void adaptive_prepare() {
     const auto d=d_;
     Kokkos::parallel_for("sus2_adaptive_source_U",Range(0,static_cast<std::size_t>(all_)*d.P),KOKKOS_LAMBDA(std::size_t idx){
@@ -678,7 +738,10 @@ template<class DeviceType> class KokkosKernel {
  public:
   explicit KokkosKernel(const Model&m):d_(m),model_(m) {
     m.validate();
-    if (m.lmax > 0 && m.angular_max_dist != m.max_dist)
+    d_.mix_basis=m.text("outer_radial_mode")=="effect-mix-basis";
+    d_.mix_tanh=d_.mix_basis&&m.has("effect_gate_projection");
+    d_.angular_cutoff=m.angular_max_dist;
+    if (!d_.mix_basis && m.lmax > 0 && m.angular_max_dist != m.max_dist)
       throw std::runtime_error("Dual-cutoff models require the CPU sus2/embedded pair style");
     d_.C=m.species_count;d_.L=m.lmax+1;d_.H=d_.L*d_.L;d_.K=m.kmax;d_.F=m.radial_funcs;d_.B=m.radial_size;
     generic_reference_=environment_switch("SUS2_SL_KOKKOS_GENERIC");
@@ -692,12 +755,12 @@ template<class DeviceType> class KokkosKernel {
     table_packed_=environment_switch("SUS2_SL_KOKKOS_TABLE_PACKED");
     d_.radial.configure_lookup(table_context_,table_packed_);
     d_.G=m.integer("two_layer_gate_k_rank");d_.O=m.boolean("outer_k_rank1_enabled")?m.integer("outer_k_rank",1):0;
-    d_.gated=m.boolean("two_layer_gate_enabled");const auto mode=m.text("outer_radial_mode","legacy-plus-mixer");d_.mode=mode=="adaptive-coefficients"?3:mode=="pure-matrix"?2:d_.gated?1:0;
+    d_.gated=m.boolean("two_layer_gate_enabled");const auto mode=m.text("outer_radial_mode","legacy-plus-mixer");d_.mode=mode=="adaptive-coefficients"?3:(mode=="pure-matrix"||d_.mix_basis)?2:d_.gated?1:0;
     d_.mixing=m.text("two_layer_gate_radial_mixing")=="full";d_.cutoff=m.max_dist;d_.species_readout=m.text("readout_mode")=="species";
     d_.Q=m.integer("two_layer_gate_scalar_count");d_.tensor_lmax=m.integer("tensor_message_lmax");d_.tensor_components=(d_.tensor_lmax+1)*(d_.tensor_lmax+1)-1;
     d_.shared_n=m.text("adaptive_radial_projection","full")=="shared-n";d_.latent=d_.shared_n?m.integer("adaptive_radial_shared_n_rank",1):1;
     d_.species_amplitude=m.text("adaptive_radial_amplitude_mode","shared")=="species";d_.activation_tanh=m.text("adaptive_radial_activation","none")=="tanh";
-    d_.Drows=d_.mode==3?d_.L*d_.O*d_.B:0;d_.P=d_.mode==3?(d_.shared_n?d_.L*d_.O*d_.latent:d_.Drows):0;
+    d_.Drows=d_.mode==3?d_.L*d_.O*d_.B:0;d_.P=d_.mode==3?(d_.shared_n?d_.L*d_.O*d_.latent:d_.Drows):d_.mix_tanh?d_.K:0;
     d_.W=d_.gated?(d_.mode==3?d_.Q+d_.G*d_.tensor_components:d_.F):0;
     const auto sm=m.text("scaling_map","LK");d_.scaling_map=sm=="pair"?0:sm=="L"?1:sm=="K"?2:3;
     d_.gate_readout=m.boolean("two_layer_gate_readout_enabled");d_.zbl=m.boolean("zbl_enabled");
@@ -707,7 +770,7 @@ template<class DeviceType> class KokkosKernel {
     std::vector<int>gscalar=m.integers("two_layer_gate_scalar_moment_indices");if(gscalar.empty())for(int q:m.integers("two_layer_gate_scalar_indices"))gscalar.push_back(m.scalar_mapping.at(q));
     std::vector<int>gfeatures=gscalar;
     const int gb=m.integer("two_layer_gate_k_rank_basic_begin"),ob=m.integer("outer_k_rank1_basic_begin");
-    if(d_.gated){for(std::size_t b=0;b<m.basic.size();++b)use(gate_,static_cast<int>(b));for(int q:gscalar)use(gate_,q);for(int a=0;a<d_.G;++a)for(int l=0;l<d_.L;++l)for(int mm=-l;mm<=l;++mm)use(gate_,gb+kokkos_detail::ranked(d_.G,d_.H,l,a,mm));}
+    if(d_.gated){if(!d_.mix_basis)for(std::size_t b=0;b<m.basic.size();++b)use(gate_,static_cast<int>(b));for(int q:gscalar)use(gate_,q);for(int a=0;a<d_.G;++a)for(int l=0;l<d_.L;++l)for(int mm=-l;mm<=l;++mm)use(gate_,gb+kokkos_detail::ranked(d_.G,d_.H,l,a,mm));}
     if(d_.mode==3)for(int l=1;l<=d_.tensor_lmax;++l)for(int g=0;g<d_.G;++g)for(int mm=-l;mm<=l;++mm)gfeatures.push_back(gb+kokkos_detail::ranked(d_.G,d_.H,l,g,mm));
     if(d_.mode<2)for(std::size_t b=0;b<m.basic.size();++b)use(outer_,static_cast<int>(b));
     for(int q:m.scalar_mapping)use(outer_,q);for(int o=0;o<d_.O;++o)for(int l=0;l<d_.L;++l)for(int mm=-l;mm<=l;++mm)use(outer_,ob+kokkos_detail::ranked(d_.O,d_.H,l,o,mm));
@@ -716,8 +779,14 @@ template<class DeviceType> class KokkosKernel {
       graph_plan(gate_,m.products,begin,(!d_.O&&!d_.G)?static_cast<int>(m.products.size()):end,"sus2_gate");rank_plan(gate_,true);}
     graph_plan(outer_,m.products,outer_begin,static_cast<int>(m.products.size()),"sus2_outer");rank_plan(outer_,false);
     std::vector<int>ib(d_.F*9,-1),obasic(d_.F*9,-1),rankmap(d_.L*d_.O*9,-1),features,gs;
-    for(std::size_t b=0;b<m.basic.size();++b){const auto&t=m.basic[b];const int pos=(t[0]*d_.L+t[1])*9+t[2]+t[1];if(d_.gated)ib[pos]=gate_.map[b];if(d_.mode<2)obasic[pos]=outer_.map[b];}
+    for(std::size_t b=0;b<m.basic.size();++b){const auto&t=m.basic[b];const int pos=(t[0]*d_.L+t[1])*9+t[2]+t[1];if(d_.gated&&!d_.mix_basis)ib[pos]=gate_.map[b];if(d_.mode<2)obasic[pos]=outer_.map[b];}
     for(int l=0;l<d_.L;++l)for(int o=0;o<d_.O;++o)for(int mm=-l;mm<=l;++mm)rankmap[(l*d_.O+o)*9+mm+l]=outer_.map[ob+kokkos_detail::ranked(d_.O,d_.H,l,o,mm)];
+    if(d_.mix_basis){
+      std::vector<int> inner(d_.L*d_.G*9,-1);
+      for(int l=0;l<d_.L;++l)for(int a=0;a<d_.G;++a)for(int mm=-l;mm<=l;++mm)
+        inner[(l*d_.G+a)*9+mm+l]=gate_.map[gb+kokkos_detail::ranked(d_.G,d_.H,l,a,mm)];
+      d_.inner_rank=parameter("sus2_inner_mix_rank",inner);
+    }
     for(int q:gfeatures)features.push_back(d_.gated?gate_.map[q]:-1);for(int q:gscalar)gs.push_back(d_.gated?gate_.map[q]:-1);
     effect_seed_rows_=environment_switch("SUS2_SL_KOKKOS_EFFECT_SEED_ROWS") && !generic_reference_ && d_.mode==1 && !d_.gate_readout;
     if(effect_seed_rows_){
@@ -735,9 +804,12 @@ template<class DeviceType> class KokkosKernel {
     for(int t=0;t<d_.C;++t)for(int mu=0;mu<d_.F;++mu){const double tau=at(m.radial_coeffs,mu*(d_.B+d_.C)+d_.B+t);outer_species[t*d_.F+mu]=tau;gate_species[t*d_.F+mu]=gt.empty()?tau:at(gt,t*d_.F+mu,at(gt,t,1.));additive[t*d_.F+mu]=at(add,t*d_.F+mu,at(add,t,1.));}
     d_.gate_species=parameter("sus2_gate_species",gate_species);d_.outer_species=parameter("sus2_outer_species",outer_species);d_.additive=parameter("sus2_additive",additive);
     const auto w=m.numbers("two_layer_gate_weights"),body=m.numbers("two_layer_gate_body_mix_weights");const auto order=m.integers("two_layer_gate_scalar_body_orders");const int count=static_cast<int>(gscalar.size()),nb=m.integer("two_layer_gate_body_order_max")-1;
-    std::vector<double>gw(d_.mode==3?0:static_cast<std::size_t>(d_.F)*count);for(int mu=0;mu<d_.F&&d_.mode!=3;++mu)for(int q=0;q<count;++q)gw[mu*count+q]=m.text("two_layer_gate_mode")=="mu-body-linear-combo"?w.at(q)*body.at(mu*nb+order.at(q)-2):at(w,mu*count+q);
+    std::vector<double>gw(d_.mix_tanh?w:std::vector<double>(d_.mode==3?0:static_cast<std::size_t>(d_.F)*count));for(int mu=0;mu<d_.F&&d_.mode!=3&&!d_.mix_tanh;++mu)for(int q=0;q<count;++q)gw[mu*count+q]=m.text("two_layer_gate_mode")=="mu-body-linear-combo"?w.at(q)*body.at(mu*nb+order.at(q)-2):at(w,mu*count+q);
     d_.gate_weights=parameter("sus2_gate_projection",gw);d_.head=parameter("sus2_readout",m.numbers("moment_coeffs"));d_.species=parameter("sus2_species",m.numbers("species_coeffs"));d_.bias=parameter("sus2_bias",m.numbers("shift_coeffs"));d_.gate_head=parameter("sus2_gate_head",m.numbers("two_layer_gate_readout_coeffs"));
-    d_.mixer=parameter("sus2_direct_k_mixer",m.numbers("two_layer_gate_radial_mixing_coeffs"));d_.scale=parameter("sus2_scaling",m.numbers("scal_coeffs"));
+    if(!d_.mix_basis){
+      d_.mixer=parameter("sus2_direct_k_mixer",m.numbers("two_layer_gate_radial_mixing_coeffs"));
+      d_.scale=parameter("sus2_scaling",m.numbers("scal_coeffs"));
+    }
     std::vector<double>base(d_.Drows);for(int l=0;l<d_.L&&d_.mode==3;++l)for(int o=0;o<d_.O;++o)for(int n=0;n<d_.B;++n)base[(l*d_.O+o)*d_.B+n]=m.radial_coeffs.at((o*d_.L+l)*(d_.B+d_.C)+n);
     d_.base=parameter("sus2_adaptive_base",base);d_.amplitude=parameter("sus2_adaptive_amplitude",m.numbers("adaptive_radial_amplitudes"));d_.U=parameter("sus2_adaptive_U",m.numbers("adaptive_radial_weights"));d_.tensor=parameter("sus2_tensor_B",m.numbers("tensor_message_coeffs"));
     if(m.boolean("joint_readout_enabled")){
@@ -761,7 +833,7 @@ template<class DeviceType> class KokkosKernel {
   bool uses_reverse_center_reduce()const{return reverse_center_reduce_;}
   bool uses_forward_role_specialize()const{return forward_role_specialize_;}
   void configure_radial_counting(bool enabled){d_.radial.set_counting(enabled);}
-  void configure_radial(RadialTableMode mode,double spacing,std::size_t budget,const std::vector<int>&species){d_.radial.configure(mode,spacing,budget,species);}
+  void configure_radial(RadialTableMode mode,double spacing,std::size_t budget,const std::vector<int>&species){d_.radial.configure(mode,spacing,budget,species);if(d_.mix_basis)d_.radial.configure_mix_tables(model_,spacing,budget,species);}
   auto radial_stats()const -> decltype(d_.radial.stats()){return d_.radial.stats();}
   int error_code()const{auto h=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),error_flag);return h(0);}
   void prepare(int nowned,int nall,int nedges) {
@@ -783,15 +855,21 @@ template<class DeviceType> class KokkosKernel {
     Kokkos::deep_copy(d_.ov,0.);Kokkos::deep_copy(d_.oa,0.);Kokkos::deep_copy(d_.gv,0.);Kokkos::deep_copy(d_.ga,0.);Kokkos::deep_copy(d_.jv,0.);Kokkos::deep_copy(d_.ja,0.);Kokkos::deep_copy(d_.coeff_adj,0.);Kokkos::deep_copy(d_.tensor_adj,0.);
     const auto layout=d_;
     Kokkos::parallel_for("sus2_validate_atom_types",Range(0,all_),KOKKOS_LAMBDA(std::size_t i){layout.valid_type(static_cast<int>(i));});
-    if(!d_.gated||!owned_)return;raw_forward(true);execute(gate_.contract,d_.gv,d_.ga,false,true);execute(gate_.forward,d_.gv,d_.ga,false,false);const auto d=d_;const int qcount=static_cast<int>(d.gate_scalar.size());
-    Kokkos::parallel_for("sus2_inner_signal",Range(0,static_cast<std::size_t>(owned_)*d.W),KOKKOS_LAMBDA(std::size_t idx){const int i=static_cast<int>(idx%d.owned),q=static_cast<int>(idx/d.owned);double z=0.;if(d.mode==3)z=d.gv(i,d.gate_feature(q));else for(int s=0;s<qcount;++s)z+=d.gate_weights(q*qcount+s)*d.gv(i,d.gate_scalar(s));d.s(i,q)=z;});
+    if(!d_.gated||!owned_)return;if(d_.mix_basis)mix_edges<true,false>();else raw_forward(true);execute(gate_.contract,d_.gv,d_.ga,false,true);execute(gate_.forward,d_.gv,d_.ga,false,false);const auto d=d_;const int qcount=static_cast<int>(d.gate_scalar.size());
+    if(d.mix_tanh)Kokkos::parallel_for("sus2_mix_hidden",Range(0,static_cast<std::size_t>(owned_)*d.K),KOKKOS_LAMBDA(std::size_t idx){
+      const int i=static_cast<int>(idx%d.owned),k=static_cast<int>(idx/d.owned);
+      double z=0.;
+      for(int q=0;q<qcount;++q)z+=d.gate_weights(k*qcount+q)*d.gv(i,d.gate_scalar(q));
+      d.projection(i,k)=tanh(z);
+    });
+    Kokkos::parallel_for("sus2_inner_signal",Range(0,static_cast<std::size_t>(owned_)*d.W),KOKKOS_LAMBDA(std::size_t idx){const int i=static_cast<int>(idx%d.owned),q=static_cast<int>(idx/d.owned);double z=0.;if(d.mode==3)z=d.gv(i,d.gate_feature(q));else if(d.mix_tanh){for(int k=0;k<d.K;++k)z+=d.gate_weights((qcount+q)*d.K+k)*d.projection(i,k);}else for(int s=0;s<qcount;++s)z+=d.gate_weights(q*qcount+s)*d.gv(i,d.gate_scalar(s));d.s(i,q)=z;});
   }
   void outer() {
-    if(d_.mode==3)adaptive_prepare();if(d_.mode<2){raw_forward(false);execute(outer_.contract,d_.ov,d_.oa,false,true);}if(d_.mixing||d_.mode==3)message_forward();execute(outer_.forward,d_.ov,d_.oa,false,false);
+    if(d_.mode==3)adaptive_prepare();if(d_.mode<2){raw_forward(false);execute(outer_.contract,d_.ov,d_.oa,false,true);}if(d_.mix_basis)mix_edges<false,false>();else if(d_.mixing||d_.mode==3)message_forward();execute(outer_.forward,d_.ov,d_.oa,false,false);
     const auto d=d_;const int scalars=static_cast<int>(d.outer_scalar.size());
     Kokkos::parallel_for("sus2_outer_readout",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii),type=d.type(i);if(!d.valid_type(i))return;double energy=d.species(type)+d.bias(type),center=d.species_readout?1.:d.species(type);for(int q=0;q<scalars;++q){const double c=center*d.head((d.species_readout?type*scalars:0)+q);energy+=c*d.ov(i,d.outer_scalar(q));d.oa(i,d.outer_scalar(q))+=c;}d.energy(i)=energy;});
     joint_forward_reverse();execute(outer_.reverse,d_.ov,d_.oa,true,false);execute(outer_.transpose,d_.ov,d_.oa,true,true);
-    if(d_.mode<2)raw_reverse(false);if(d_.mixing||d_.mode==3)message_reverse();
+    if(d_.mode<2)raw_reverse(false);if(d_.mix_basis)mix_edges<false,true>();else if(d_.mixing||d_.mode==3)message_reverse();
   }
   void finish() {
     const auto d=d_;const int qcount=static_cast<int>(d.gate_scalar.size());
@@ -800,11 +878,19 @@ template<class DeviceType> class KokkosKernel {
       // signal communication. Joint local primitive seeds already live in ga.
       if(effect_seed_rows_)effect_seed_rows<typename DeviceType::execution_space>(owned_,d.F,qcount,d.ga,d.sa,d.gate_weights,seedDestination_,seedOffsets_,seedQ_,d.type,d.error,d.C);
       else {
-      Kokkos::parallel_for("sus2_inner_adjoint_seeds",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii);if(!d.valid_type(i))return;if(d.mode==3){for(int q=0;q<d.W;++q)d.ga(i,d.gate_feature(q))+=d.sa(i,q);}else for(int q=0;q<qcount;++q){double z=0.;for(int mu=0;mu<d.F;++mu)z+=d.sa(i,mu)*d.gate_weights(mu*qcount+q);d.ga(i,d.gate_scalar(q))+=z;}
+      Kokkos::parallel_for("sus2_inner_adjoint_seeds",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii);if(!d.valid_type(i))return;if(d.mode==3){for(int q=0;q<d.W;++q)d.ga(i,d.gate_feature(q))+=d.sa(i,q);}else if(d.mix_tanh){
+          for(int k=0;k<d.K;++k) {
+            double z=0.;
+            for(int mu=0;mu<d.F;++mu)z+=d.sa(i,mu)*d.gate_weights((qcount+mu)*d.K+k);
+            const double h=d.projection(i,k);
+            z*=1-h*h;
+            for(int q=0;q<qcount;++q)d.ga(i,d.gate_scalar(q))+=z*d.gate_weights(k*qcount+q);
+          }
+        }else for(int q=0;q<qcount;++q){double z=0.;for(int mu=0;mu<d.F;++mu)z+=d.sa(i,mu)*d.gate_weights(mu*qcount+q);d.ga(i,d.gate_scalar(q))+=z;}
         if(d.gate_readout){const double center=d.species_readout?1.:d.species(d.type(i));double energy=0.;for(int q=0;q<qcount;++q){const double c=center*d.gate_head(q);d.ga(i,d.gate_scalar(q))+=c;energy+=c*d.gv(i,d.gate_scalar(q));}d.energy(i)+=energy;}
       });
       }
-      execute(gate_.reverse,d_.gv,d_.ga,true,false);execute(gate_.transpose,d_.gv,d_.ga,true,true);raw_reverse(true);
+      execute(gate_.reverse,d_.gv,d_.ga,true,false);execute(gate_.transpose,d_.gv,d_.ga,true,true);if(d_.mix_basis)mix_edges<true,true>();else raw_reverse(true);
     }
     if(d_.zbl)Kokkos::parallel_for("sus2_ZBL",Range(0,owned_),KOKKOS_LAMBDA(std::size_t ii){const int i=static_cast<int>(ii);int lo,hi;if(!d.edge_range(i,lo,hi))return;double energy=0.;for(int e=lo;e<hi;++e){const int j=d.nbr(e);double delta[3],r;if(!d.geometry(i,j,delta,r))continue;const auto p=sus2_sl_zbl::ComputePairKokkos<double>(d.atomic_number(d.type(i)),d.atomic_number(d.type(j)),r,d.zbl_inner,d.zbl_outer,d.zbl_factor);energy+=.5*p.energy;double g[3];for(int q=0;q<3;++q)g[q]=.5*p.dEdr*delta[q]/r;d.add_edge(i,j,delta,g);}d.energy(i)+=energy;});
   }

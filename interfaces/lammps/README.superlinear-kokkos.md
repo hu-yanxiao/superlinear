@@ -14,8 +14,10 @@ none/tanh activation, shared/species amplitudes and the supported tensor
 signal channels. It rejects unsupported historical multi-layer/residual/
 edge-L1 gate extensions at setup. Global virial and per-atom energy are
 implemented; per-atom/centroid virial is unavailable.
-This GPU backend supports single-cutoff models. Unequal radial/angular
-cutoffs are rejected; use the CPU `sus2/embedded` interface for dual cutoffs.
+Effect mix-basis (`version = 1.12.0`) supports linear and tanh gate
+projections, K and LK warp sharing, and an independent angular cutoff for
+`RBChebyshev_sss` and `RBLaguerre_log1p`. Other Kokkos model families use a
+single cutoff. Use the CPU `sus2/embedded` interface for their dual-cutoff models.
 
 ## Build and run target
 
@@ -178,6 +180,14 @@ knots. Both use the derivative of the same interpolant. The 36 native basis
 families retain their current warp, cutoff and historical derivative semantics;
 `min_dist` defines the table domain, not a universal hard lower cutoff.
 
+Effect mix-basis builds contracted tables by ordered species pair and shell.
+The scalar and angular shells use their own cutoffs. The inner table includes
+the fixed species factors and sums over input k. The outer table keeps k
+separate so the device can apply the current source gate after lookup.
+The host uploads each admitted shell directly into the final allocation.
+For mix-basis, the hit and fallback counters count tiles of up to four
+contraction rows.
+
 Fixed Static/Effect and inner-gate contractions receive small scalar tables
 first. Pure-W distance mixing and Adaptive outer coefficients use basis tables;
 geometry-dependent Adaptive coefficients are never frozen. Legacy models with
@@ -202,6 +212,32 @@ only the first force call after cache setup is counted, so contended global
 counter updates do not distort ordinary timed steps. `profile_every N` enables
 additional sampling. `counted_force_calls` and `counting=sampled` state this
 scope; the counts are not totals over the whole trajectory or GPU qualification.
+
+## Effect mix-basis parity check
+
+Build the existing [kernel parity driver](tests/kokkos_kernel_parity.cpp)
+against Kokkos 4.7.1. For a local Serial installation:
+
+```bash
+cd interfaces/lammps
+c++ -std=c++17 -O2 -I"$KOKKOS_PREFIX/include" -IML-SUS2 -IML-SUS2-KK \
+  tests/kokkos_kernel_parity.cpp ML-SUS2/sus2_sl_*.cpp \
+  -L"$KOKKOS_PREFIX/lib" -lkokkoscore -lkokkoscontainers -o kokkos-kernel-parity
+./kokkos-kernel-parity /path/to/small-mix-basis.sus2 direct
+SUS2_TEST_REQUIRE_MIX_TABLE_HITS=1 \
+  ./kokkos-kernel-parity /path/to/small-mix-basis.sus2 table
+```
+
+Run with small linear and tanh fixtures for both K and LK. Include a
+dual-cutoff fixture to exercise edges inside each shell. The driver checks
+energy, forces and global virial against the embedded CPU evaluator on dense
+and simulated multi-owner cases. The table run also checks zero-budget
+fallback against CPU Direct. The optional environment variable requires
+resident hits on a fixture whose spacing and radial domain admit tables.
+The driver deliberately prebuilds tables for all serialized species, so use
+the actual LAMMPS pair for large models to exercise its active-species cache
+and byte cap. The execution marker reports the tested backend. A Serial
+result establishes host parity.
 
 ## Ownership and communication
 

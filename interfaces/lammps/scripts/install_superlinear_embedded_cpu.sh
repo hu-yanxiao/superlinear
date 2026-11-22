@@ -32,8 +32,8 @@ for source in "${sources[@]}"; do
   cp "$pkg_root/ML-SUS2/$source.cpp" "$pkg_root/ML-SUS2/$source.h" "$lammps_root/src/ML-SUS2/"
   cp "$pkg_root/ML-SUS2/$source.cpp" "$pkg_root/ML-SUS2/$source.h" "$lammps_root/src/"
 done
-cp "$pkg_root/ML-SUS2/sus2_sl_zbl.h" "$lammps_root/src/ML-SUS2/"
-cp "$pkg_root/ML-SUS2/sus2_sl_zbl.h" "$lammps_root/src/"
+cp "$pkg_root/ML-SUS2/sus2_sl_mix_radial.h" "$pkg_root/ML-SUS2/sus2_sl_zbl.h" "$lammps_root/src/ML-SUS2/"
+cp "$pkg_root/ML-SUS2/sus2_sl_mix_radial.h" "$pkg_root/ML-SUS2/sus2_sl_zbl.h" "$lammps_root/src/"
 cp "$pkg_root/MAKE/OPTIONS/Makefile.ml_sus2_embedded_base_avx2" \
    "$pkg_root/MAKE/OPTIONS/Makefile.ml_sus2_embedded_avx2" "$lammps_root/src/MAKE/OPTIONS/"
 echo "Installed self-contained sus2/embedded sources in $lammps_root"

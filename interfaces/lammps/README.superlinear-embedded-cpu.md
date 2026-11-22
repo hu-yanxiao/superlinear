@@ -209,8 +209,7 @@ moments use `max_dist` for `l=0` and `angular_max_dist` for `l>=1`. The
 two shells share the underlying radial basis and apply their respective smooth
 envelopes. Both direct and tabulated evaluation use these cutoffs for energy,
 force and virial. Omitting `angular_max_dist` selects the single-cutoff model.
-Use the CPU `sus2/embedded` pair style for models with distinct cutoffs and
-nonzero angular order.
+Effect mix-basis also supports distinct cutoffs in the Kokkos pair style.
 
 `radial_mode` accepts `direct`, `table`, or `auto`; the default is `direct`.
 For an explicit analytical reference use:
@@ -219,6 +218,19 @@ For an explicit analytical reference use:
 pair_style sus2/embedded model.sus2 radial_mode direct
 pair_coeff * *
 ```
+
+For an Effect `effect-mix-basis` checkpoint (native version 1.12.0), both
+linear and tanh gates use the model's K or LK warps. For each ordered element
+pair and angular shell, the inner table stores the sum over radial basis and
+input channels, including the fixed element coefficients. The outer table
+stores one contracted curve per input channel and outer rank. Each MD step
+multiplies these curves by the current source atom's gate after ghost exchange.
+The position derivative and the derivative through the source gate both
+contribute to the forces and virial. Below `min_dist`, the engine evaluates
+the analytical curves. The table budget applies to all inner and outer shells.
+The bundled two-species fixtures cover a K/tanh model and a decoupled LK/linear
+model. Run `tests/mix_basis_check.py --native /path/to/mlp-sus2 --embedded /path/to/embedded_efs`
+to check their energy, forces and virial with one and two simulated domains.
 
 Tables use cubic Hermite values and the derivative of the **same interpolant**.
 Fixed inner/outer radial coefficient contractions are tabulated together with

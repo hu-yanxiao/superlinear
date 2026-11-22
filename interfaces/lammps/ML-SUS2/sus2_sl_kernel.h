@@ -2,6 +2,7 @@
 #define LMP_SUS2_SL_KERNEL_H
 #include "sus2_sl_model.h"
 #include "sus2_sl_radial.h"
+#include "sus2_sl_mix_radial.h"
 #include "sus2_sl_joint.h"
 #include "sus2_sl_adaptive.h"
 #include "sus2_sl_zbl.h"
@@ -25,7 +26,7 @@ class Kernel {
   const Model& model() const { return model_; }
   int communication_width() const;
   double cutoff() const { return model_.cutoff(); }
-  RadialTableStats radial_stats() const { return radial_.stats(); }
+  RadialTableStats radial_stats() const { return mix_ ? mix_->stats() : radial_.stats(); }
   double memory_usage() const;
   void configure_profile(bool enabled) { profile_enabled_=enabled; outer_profile_.fill(0); }
   // Per-call seconds: forward+contract, mixer/Adaptive forward, readout+graph
@@ -46,6 +47,11 @@ class Kernel {
   std::vector<double> weights_,linear_,mult_,gate_type_,gate_add_,gate_radial_;
   std::vector<double> scal_,gate_scal_,gate_rank_weights_,outer_rank_weights_,species_,bias_,body_mix_;
   std::vector<double> mixer_;
+  std::unique_ptr<MixRadial> mix_;
+  bool mix_tanh_=false;
+  std::vector<double> mix_hidden_,mix_values_,mix_derivatives_;
+  template<bool Gate,bool Reverse> void mix_edges();
+  template<bool Reverse> void project_mix_tanh(int i,double *moments);
   std::vector<double> gate_readout_;
   bool zbl_=false;
   std::vector<SUS2SLZBLPairConstants> zbl_constants_;

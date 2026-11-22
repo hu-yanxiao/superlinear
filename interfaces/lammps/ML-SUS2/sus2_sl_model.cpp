@@ -44,6 +44,8 @@ void validate_index_capacity(const Model &m) {
   const int body_max=m.integer("two_layer_gate_body_order_max");
   require(body_max>=0 && body_max<=6 && (!gated || body_max>=2),"invalid gate body order");
   const auto outer=m.text("outer_radial_mode","legacy-plus-mixer");
+  if(outer=="effect-mix-basis")
+    index_product("Effect inner mix matrix",{L,G,m.kmax,R});
   if(outer=="adaptive-coefficients") {
     const bool shared=m.text("adaptive_radial_projection","full")=="shared-n";
     const int latent=shared?m.integer("adaptive_radial_shared_n_rank",1):1;
@@ -83,12 +85,13 @@ void validate_index_capacity(const Model &m) {
     if(outer!="adaptive-coefficients") {
       if(m.text("two_layer_gate_mode")=="mu-body-linear-combo")
         index_product("gate body mix weights",{F,body_max-1});
-      else index_product("gate scalar weights",{F,Q});
+      else if(outer!="effect-mix-basis" || !m.has("effect_gate_projection"))
+        index_product("gate scalar weights",{F,Q});
     }
   }
   if(m.text("two_layer_gate_radial_mixing","none")=="full") {
     index_product("radial mixer coefficients",{L,O,m.kmax,R});
-    index_product("radial mixer signal Jacobian",{O,H,F});
+    if(outer!="effect-mix-basis") index_product("radial mixer signal Jacobian",{O,H,F});
   }
   if(m.boolean("joint_readout_enabled"))
     index_product("joint scalar readout",{heads,m.integer("joint_readout_scalar_count")});
@@ -233,11 +236,29 @@ void Model::load(const std::string &path) {
   if(boolean("two_layer_gate_enabled") && !has("two_layer_gate_scalar_count"))
     fields["two_layer_gate_scalar_count"]=std::to_string(numbers("two_layer_gate_scalar_indices").size());
   validate();
+  if(text("outer_radial_mode")=="effect-mix-basis") {
+    if(!has("two_layer_gate_additive_coeffs")) {
+      const auto n=static_cast<size_t>(species_count)*radial_funcs;
+      fields["two_layer_gate_additive_coeffs"]=list_string(std::vector<double>(n,1.0/12.0));
+      fields["two_layer_gate_additive_coeff_count"]=std::to_string(n);
+    }
+    // The native loader broadcasts historical one-value-per-element gate rows.
+    for(const char* base:{"two_layer_gate_type","two_layer_gate_additive"}) {
+      const std::string key=std::string(base)+"_coeffs";
+      const auto values=numbers(key);
+      if(radial_funcs==1 || values.size()!=static_cast<size_t>(species_count)) continue;
+      std::vector<double> expanded;
+      expanded.reserve(static_cast<size_t>(species_count)*radial_funcs);
+      for(double value:values) expanded.insert(expanded.end(),radial_funcs,value);
+      fields[key]=list_string(expanded);
+      fields[std::string(base)+"_coeff_count"]=std::to_string(expanded.size());
+    }
+  }
 }
 void Model::validate() const {
   validate_index_capacity(*this);
   const auto ver=text("version");
-  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0","unsupported version "+ver);
+  require(ver=="1.1.0" || ver=="1.2.0" || ver=="1.3.0" || ver=="1.4.0" || ver=="1.5.0" || ver=="1.6.0" || ver=="1.7.0" || ver=="1.8.0" || ver=="1.12.0","unsupported version "+ver);
   const std::set<std::string> adaptive_keys={"adaptive_radial_projection","adaptive_radial_amplitude_mode","adaptive_radial_shared_n_rank","adaptive_radial_activation","adaptive_radial_amplitude_count","adaptive_radial_amplitudes","adaptive_radial_weight_count","adaptive_radial_weights","adaptive_radial_amplitude_optimizer_scales","adaptive_radial_weight_optimizer_scales"};
   const std::set<std::string> tensor_keys={"tensor_message_lmax","tensor_message_coeff_count","tensor_message_coeffs","tensor_message_optimizer_scales"};
   const std::set<std::string> joint_keys={"joint_readout_enabled","joint_readout_l_max","joint_readout_body_order","joint_readout_body_l_max","joint_readout_alpha_moments_count","joint_readout_alpha_index_basic_count","joint_readout_alpha_index_basic","joint_readout_sh_product_count","joint_readout_sh_products","joint_readout_scalar_count","joint_readout_scalar_mapping","joint_readout_scalar_info_count","joint_readout_scalar_info","joint_readout_coeff_count","joint_readout_coeffs","joint_readout_optimizer_scales"};
@@ -272,16 +293,63 @@ void Model::validate() const {
   for(int i:integers("sh_body_l_max")) require(i>=0 && i<=lmax,"body angular limit out of range");
   require(!boolean("two_layer_residual_enabled") && integer("multi_layer_gate_layers",1)<=1 && !boolean("multi_layer_gate_enabled"),"old residual/multilayer models are unsupported");
   const auto outer=text("outer_radial_mode","legacy-plus-mixer");
-  require(outer=="legacy-plus-mixer" || outer=="pure-matrix" || outer=="adaptive-coefficients","unsupported outer_radial_mode");
+  const bool mix=outer=="effect-mix-basis";
+  require(mix==(ver=="1.12.0"),"effect-mix-basis requires version 1.12.0 and vice versa");
+  require(mix || outer=="legacy-plus-mixer" || outer=="pure-matrix" || outer=="adaptive-coefficients","unsupported outer_radial_mode");
+  require(!has("effect_gate_projection") || (mix && text("effect_gate_projection")=="tanh-gate"),
+          "unsupported Effect gate projection");
+  require(mix || (!has("effect_inner_mix_coeffs") && !has("effect_inner_mix_coeff_count")),
+          "unexpected Effect inner mix coefficients");
   const auto radial_mode=text("two_layer_gate_radial_mode","base-radial");
   require(radial_mode=="shared-radial" || radial_mode=="base-radial" || radial_mode=="legacy","unknown two_layer_gate_radial_mode");
   // Native files omit the mixer section when inactive; an explicit section
   // only admits the current full/direct-k layout.
+  if(mix) {
+    const int G=integer("two_layer_gate_k_rank"), O=integer("outer_k_rank");
+    const int Q=integer("two_layer_gate_scalar_count");
+    require(sm=="K" || sm=="LK","Effect mix-basis requires K or LK scaling");
+    const std::string basis=text("radial_basis_type");
+    if(basis=="RBShapeev") require(radial_size<=12,"RBShapeev supports at most 12 basis functions");
+    if(basis=="RBChebyshev_ssss") require(radial_size>=4,"RBChebyshev_ssss requires two blocks of at least two functions");
+    if(basis=="RBChebyshev_sssss") require(radial_size>=6,"RBChebyshev_sssss requires three blocks of at least two functions");
+    if(basis=="RBChebyshev_sssw" || basis.find("RBJacobi_sss")==0)
+      require(kmax<=6,"radial basis supports at most six indexed channels");
+    const auto scale_mode=text("two_layer_gate_scaling_mode","shared-scaling");
+    if(scale_mode!="decoupled") require(numbers("two_layer_gate_scaling_coeffs").empty(),"independent gate warps require decoupled scaling");
+    for(const char* key:{"two_layer_gate_type_coeffs","two_layer_gate_additive_coeffs"}) {
+      const auto n=numbers(key).size();
+      require(!has(key) || n==static_cast<size_t>(species_count) ||
+              n==static_cast<size_t>(species_count)*radial_funcs,
+              std::string("expected element or element/channel coefficients in ")+key);
+    }
+    require(boolean("two_layer_gate_enabled") && boolean("outer_k_rank1_enabled") && G>0 && O>0 && Q>0,
+            "Effect mix-basis requires ranked gate and outer primitives");
+    require(text("two_layer_gate_mode")=="mu-scalar-full" && text("two_layer_gate_scale_mode")=="additive-node" &&
+            radial_mode=="shared-radial" && text("two_layer_gate_site_mode","neighbor")=="neighbor" &&
+            !boolean("two_layer_gate_edge_l1_enabled") && !boolean("two_layer_gate_readout_enabled"),
+            "incompatible Effect mix-basis gate");
+    require(!has("two_layer_gate_radial_coeffs") && !has("two_layer_gate_radial_coeff_count") &&
+            numbers("outer_k_rank1_weights").empty() && numbers("two_layer_gate_k_rank_weights").empty(),
+            "factorized radial weights in Effect mix-basis model");
+    require(text("two_layer_gate_radial_mixing")=="full","missing Effect outer mix matrix");
+    const int inner=index_product("Effect inner mix matrix",{lmax+1,G,kmax,radial_size});
+    require(integer("effect_inner_mix_coeff_count",-1)==inner,"wrong Effect inner mix coefficient count");
+    count("effect_inner_mix_coeffs",inner);
+    count("two_layer_gate_radial_mixing_coeffs",index_product("Effect outer mix matrix",{lmax+1,O,kmax,radial_size}));
+    const int weights=has("effect_gate_projection")
+        ? index_product("Effect tanh projection",{kmax,static_cast<long long>(Q)+radial_funcs})
+        : index_product("Effect linear projection",{Q,radial_funcs});
+    count("two_layer_gate_weights",weights);
+  }
   if(has("two_layer_gate_radial_mixing")) {
     require(text("two_layer_gate_radial_mixing")=="full","unknown two_layer_gate_radial_mixing");
     require(text("two_layer_gate_radial_mixing_layout")=="direct-k","unsupported two_layer_gate_radial_mixing_layout");
   }
-  const auto channel=text("outer_channel_mode","cross-channel"); require(channel=="cross-channel" || channel=="same-channel","invalid outer_channel_mode");
+  const auto channel=text("outer_channel_mode","cross-channel"); require(channel=="cross-channel" || channel=="same-channel" || (mix && channel=="grouped-cross"),"invalid outer_channel_mode");
+  if(channel=="grouped-cross"){
+    const int group=integer("outer_channel_block_size");
+    require(group>0 && integer("outer_k_rank")%group==0,"invalid outer channel block size");
+  }
   const auto readout=text("readout_mode","shared"); require(readout=="shared" || readout=="species","invalid readout_mode");
   count("moment_coeffs",static_cast<size_t>(scalar_count)*(readout=="species" ? species_count : 1));
   if(has("sh_scalar_info")) {
@@ -296,10 +364,24 @@ void Model::validate() const {
     const size_t nw=numbers("outer_k_rank1_weights").size();
     require(nw==0 || nw==static_cast<size_t>(lmax+1)*ro*kmax,"invalid outer contraction weights");
   } else require(outer=="legacy-plus-mixer","outer radial mode requires ranked graph");
+  if(channel=="grouped-cross") {
+    const int rank=integer("outer_k_rank",1), width=integer("outer_channel_block_size"), H=(lmax+1)*(lmax+1);
+    const int begin=integer("outer_k_rank1_basic_begin"), first=integer("outer_k_rank1_product_begin"), end=begin+rank*H;
+    std::vector<int> group(moments,-1);
+    for(int l=0;l<=lmax;++l) for(int o=0;o<rank;++o) for(int m=-l;m<=l;++m)
+      group[begin+rank*(H-(l+1)*(l+1))+(rank-1-o)*(2*l+1)+m+l]=o/width;
+    for(std::size_t q=first;q<products.size();++q) {
+      const auto& p=products[q];
+      require(p.out>=end && group[p.a]>=0 && group[p.a]==group[p.b],"grouped outer product has undefined or cross-block inputs");
+      require(group[p.out]<0 || group[p.out]==group[p.a],"grouped outer output mixes different blocks");
+      group[p.out]=group[p.a];
+    }
+    for(int node:scalar_mapping) require(group[node]>=0,"grouped outer scalar is outside the outer graph");
+  }
   if(integer("two_layer_gate_k_rank")>0) {
     const int rg=integer("two_layer_gate_k_rank"), begin=integer("two_layer_gate_k_rank_basic_begin"), n=integer("two_layer_gate_k_rank_basic_count"), p=integer("two_layer_gate_k_rank_product_begin"), end=integer("two_layer_gate_k_rank_product_end");
-    require(rg<=kmax && n==static_cast<long long>(rg)*(lmax+1)*(lmax+1) && begin>=static_cast<int>(basic.size()) && static_cast<long long>(begin)+n<=moments && p>=0 && end>=p && end<=static_cast<int>(products.size()),"invalid gate rank graph segment");
-    count("two_layer_gate_k_rank_weights",static_cast<size_t>(lmax+1)*rg*kmax);
+    require((mix || rg<=kmax) && n==static_cast<long long>(rg)*(lmax+1)*(lmax+1) && begin>=static_cast<int>(basic.size()) && static_cast<long long>(begin)+n<=moments && p>=0 && end>=p && end<=static_cast<int>(products.size()),"invalid gate rank graph segment");
+    count("two_layer_gate_k_rank_weights",mix ? 0 : static_cast<size_t>(lmax+1)*rg*kmax);
   }
   // Validate every persisted count/list pair, including optional inference blocks.
   const char *pairs[][2]={{"outer_k_rank1_weight_count","outer_k_rank1_weights"},{"two_layer_gate_k_rank_weight_count","two_layer_gate_k_rank_weights"},{"two_layer_gate_radial_coeff_count","two_layer_gate_radial_coeffs"},{"two_layer_gate_type_coeff_count","two_layer_gate_type_coeffs"},{"two_layer_gate_weight_count","two_layer_gate_weights"},{"two_layer_gate_additive_coeff_count","two_layer_gate_additive_coeffs"},{"two_layer_gate_body_mix_weight_count","two_layer_gate_body_mix_weights"},{"two_layer_gate_scaling_coeff_count","two_layer_gate_scaling_coeffs"},{"two_layer_gate_radial_mixing_coeff_count","two_layer_gate_radial_mixing_coeffs"},{"two_layer_gate_readout_coeff_count","two_layer_gate_readout_coeffs"},{"adaptive_radial_amplitude_count","adaptive_radial_amplitudes"},{"adaptive_radial_weight_count","adaptive_radial_weights"},{"tensor_message_coeff_count","tensor_message_coeffs"},{"joint_readout_coeff_count","joint_readout_coeffs"}};
@@ -314,7 +396,7 @@ void Model::validate() const {
     require(site=="neighbor" && (prune=="q-total" || prune=="same-k"),"unsupported gate site/pruning mode");
     const auto gs=text("two_layer_gate_scaling_mode","shared-scaling"); require(gs=="shared-scaling" || gs=="legacy" || gs=="decoupled","invalid gate scaling mode");
     if(gs=="decoupled") count("two_layer_gate_scaling_coeffs",numbers("scal_coeffs").size());
-    if(radial_mode=="shared-radial") count("two_layer_gate_radial_coeffs",static_cast<size_t>(radial_funcs)*radial_size);
+    if(radial_mode=="shared-radial" && !mix) count("two_layer_gate_radial_coeffs",static_cast<size_t>(radial_funcs)*radial_size);
     else if(has("two_layer_gate_radial_mode")) count("two_layer_gate_radial_coeffs",0);
   }
   if(outer=="adaptive-coefficients") {
@@ -348,8 +430,23 @@ void Model::validate() const {
     for(int n:z) require(n>0 && n<=94,"invalid ZBL atomic number");
     require(real("zbl_inner")>=0 && real("zbl_outer")>real("zbl_inner") && real("zbl_typewise_cutoff_factor",.7)>0,"invalid ZBL cutoff");
   }
+  // The initialization provenance is a list of chemical symbols, not coefficients.
+  if(has("scaling_elements")) {
+    const auto list=text("scaling_elements");
+    require(list.size()>2 && list.front()=='{' && list.back()=='}',"invalid scaling_elements list");
+    std::istringstream stream(list.substr(1,list.size()-2));
+    std::set<std::string> seen;
+    std::string token;
+    while(std::getline(stream,token,',')) {
+      token=trim(token);
+      require(!token.empty() && token.size()<=2 && token[0]>='A' && token[0]<='Z' &&
+              (token.size()==1 || (token[1]>='a' && token[1]<='z')) && seen.insert(token).second,
+              "invalid or duplicate scaling element");
+    }
+    require(seen.size()==static_cast<size_t>(species_count),"scaling_elements size differs from species_count");
+  }
   // Parse all numeric lists once for finite-value and syntax validation.
-  for(const auto &f:fields) if(!f.second.empty() && f.second[0]=='{') {
+  for(const auto &f:fields) if(f.first!="scaling_elements" && !f.second.empty() && f.second[0]=='{') {
     const auto v=numbers(f.first);
     if(f.first.find("optimizer_scales")!=std::string::npos) for(double x:v) require(x>0,"nonpositive optimizer scale "+f.first);
   }

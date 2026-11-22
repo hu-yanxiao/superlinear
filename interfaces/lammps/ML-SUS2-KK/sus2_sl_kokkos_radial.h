@@ -4,7 +4,7 @@
 #define SUS2_SL_KOKKOS_RADIAL_H
 #include <Kokkos_Core.hpp>
 #include "sus2_sl_model.h"
-#include "sus2_sl_radial.h"
+#include "sus2_sl_mix_radial.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -48,6 +48,17 @@ template<class DeviceType> class DeviceRadial {
   void configure(RadialTableMode mode,double spacing,std::size_t max_bytes,
                  const std::vector<int>& active_species);
   // Set before configure(), which constructs the requested immutable layout.
+  void configure_mix_tables(const Model&,double,std::size_t,const std::vector<int>&);
+  struct MixContext {
+    std::size_t knot=0;
+    int width=0,reason=2;
+    double value[4]={},derivative[3]={};
+  };
+  template<bool Derivative>
+  KOKKOS_INLINE_FUNCTION MixContext mix_context(double r,int ti,int tj,bool gate,int shell) const;
+  template<bool Gate,bool Derivative,int Rows>
+  KOKKOS_INLINE_FUNCTION void mix_rows(double r,int ti,int tj,int k,int l,int first,int lanes,
+      const MixContext& context,double (&v)[Rows],double (&d)[Rows]) const;
   void configure_lookup(bool context,bool packed) {context_enabled_=context;packed_enabled_=packed;}
   bool uses_context() const {return context_enabled_&&table_mode_&&frozen_intervals_!=0;}
   bool uses_packed() const {return packed_active_;}
@@ -68,15 +79,15 @@ template<class DeviceType> class DeviceRadial {
   KOKKOS_INLINE_FUNCTION void direct_basis(double r,double slope,double shift,
                                           int k,int n,double& v,double& d) const;
  private:
-  int kind_=ChebSSS,B_=0,C_=0,F_=0,L_=0,K_=0,O_=0,sm_=3,p_=5,basis_channels_=0;
+  int kind_=ChebSSS,B_=0,C_=0,F_=0,L_=0,K_=0,O_=0,G_=0,sm_=3,p_=5,basis_channels_=0;
   bool polynomial_=false,frozen_outer_=true,needs_basis_=false,count_enabled_=true;
   bool context_enabled_=false,packed_enabled_=false,packed_active_=false;
   std::uint64_t generation_=0;
   std::size_t frozen_intervals_=0;
   double frozen_step_=0;
-  double lo_=0,hi_=0,scaling_=1,lower_=0;
+  double lo_=0,hi_=0,angular_=0,scaling_=1,lower_=0;
   int table_mode_=0,active_count_=0;
-  RealView scale_,gate_scale_,coeff_,gate_coeff_,shape_,knots_;
+  RealView scale_,gate_scale_,coeff_,gate_coeff_,shape_,knots_,inner_mix_,outer_mix_,mix_species_;
   IntView species_slots_,frozen_handles_;
   TableView basis_tables_,frozen_tables_;
   CountView counters_;
@@ -98,14 +109,15 @@ template<class DeviceType> class DeviceRadial {
   KOKKOS_INLINE_FUNCTION static double softplus(double x) {
     return x>40?x:(x < -40?::exp(x) : ::log1p(::exp(x)));
   }
-  KOKKOS_INLINE_FUNCTION void cutoff(double r,double& f,double& d) const {
-    const double delta=r-hi_;f=delta*delta;d=2*delta;
+  KOKKOS_INLINE_FUNCTION void cutoff(double r,double& f,double& d,double upper=0) const {
+    const double hi=upper>0?upper:hi_;
+    const double delta=r-hi;f=delta*delta;d=2*delta;
     if(!polynomial_)return;
-    if(r>=hi_){f=d=0;return;}
-    const double x=r/hi_,a=1-x;double poly=0;
+    if(r>=hi){f=d=0;return;}
+    const double x=r/hi,a=1-x;double poly=0;
     for(int k=p_-1;k>=0;--k)poly=poly*x+0.5*double((k+1)*(k+2));
     f=a*a*a*poly;const double p=double(p_);
-    d=-0.5*p*(p+1)*(p+2)*(p_==1?1.0 : ::pow(x,p_-1))*a*a/hi_;
+    d=-0.5*p*(p+1)*(p+2)*(p_==1?1.0 : ::pow(x,p_-1))*a*a/hi;
   }
   KOKKOS_INLINE_FUNCTION void count(bool hit,int reason,bool enabled=true) const {
     if(!count_enabled_||!enabled||!table_mode_||!counters_.extent(0))return;
@@ -128,15 +140,28 @@ template<class DeviceType> class DeviceRadial {
     return true;
   }
   KOKKOS_INLINE_FUNCTION void direct_sum(double r,double slope,double shift,int k,
-      const RealView& co,std::size_t base,double& value,double& deriv) const {
-    value=deriv=0;
+      const RealView& co,std::size_t base,double& value,double& deriv,double upper=0) const {
+    double values[1],derivatives[1];
+    direct_rows<true>(r,slope,shift,k,co,base,0,1,values,derivatives,upper);
+    value=values[0];deriv=derivatives[0];
+  }
+  template<bool Derivative,int Rows>
+  KOKKOS_INLINE_FUNCTION void direct_rows(double r,double slope,double shift,int k,
+      const RealView& co,std::size_t base,std::size_t stride,int lanes,
+      double (&value)[Rows],double (&deriv)[Rows],double upper) const {
+    for(int a=0;a<Rows;++a)value[a]=deriv[a]=0.;
     const bool cheb=kind_==ChebSSS||kind_==ChebSSS_LMP||kind_==ChebRational||kind_==ChebRational_LMP;
     const bool lag=kind_==Laguerre||kind_==Laguerre_LMP||kind_==LaguerrePos||kind_==LaguerrePos_LMP||kind_==LaguerreNoenv||kind_==LaguerreNoenv_LMP;
     if(!cheb&&!lag){for(int n=0;n<B_;++n){double v,d;direct_basis(r,slope,shift,k,n,v,d);
-      const double c=base+n<co.extent(0)?co(base+n):0;value+=c*v;deriv+=c*d;}return;}
+      for(int a=0;a<lanes;++a){
+        const auto off=base+a*stride+n;
+        const double c=off<co.extent(0)?co(off):0;
+        value[a]+=c*v;if(Derivative)deriv[a]+=c*d;
+      }
+    }return;}
     // Common production families contract a single streaming recurrence. No
     // B-sized thread-local scratch and no repeated O(B^2) polynomial work.
-    double f,df;cutoff(r,f,df);double q=0,dq=0,u=0,du=0,v,d;
+    double f,df;cutoff(r,f,df,upper);double q=0,dq=0,u=0,du=0,v,d;
     if(cheb){const double x=slope*(r-shift)/2;
       if(kind_==ChebRational||kind_==ChebRational_LMP){const double inv=1/::sqrt(1+x*x);q=x*inv;dq=inv*inv*inv*slope/2;}
       else{q=::tanh(x);dq=(1-q*q)*slope/2;}
@@ -148,7 +173,12 @@ template<class DeviceType> class DeviceRadial {
       const double e=env?::exp(-0.5*u):1;v=scaling_*f*e;d=scaling_*df*e;if(env)d-=0.5*du*v;
     }
     double pv=0,pd=0;
-    for(int n=0;n<B_;++n){const double c=base+n<co.extent(0)?co(base+n):0;value+=c*v;deriv+=c*d;
+    for(int n=0;n<B_;++n){
+      for(int a=0;a<lanes;++a){
+        const auto off=base+a*stride+n;
+        const double c=off<co.extent(0)?co(off):0;
+        value[a]+=c*v;if(Derivative)deriv[a]+=c*d;
+      }
       if(n+1==B_)break;double nv,nd;
       if(cheb){if(n==0){nv=scaling_*(q*f);nd=scaling_*(dq*f+q*df);}
         else{nv=2*q*v-pv;nd=2*(dq*v+q*d)-pd;}}
@@ -293,6 +323,17 @@ template<class D> DeviceRadial<D>::DeviceRadial(const Model& m) {
   gate_scale_=upload("SUS2 gate radial warp",m.numbers("two_layer_gate_scaling_coeffs"));
   coeff_=upload("SUS2 radial coefficients",m.radial_coeffs);
   gate_coeff_=upload("SUS2 gate radial coefficients",m.numbers("two_layer_gate_radial_coeffs"));
+  if(m.text("outer_radial_mode")=="effect-mix-basis"){
+    angular_=m.angular_max_dist;G_=m.integer("two_layer_gate_k_rank");
+    inner_mix_=upload("SUS2 inner mix",m.numbers("effect_inner_mix_coeffs"));
+    outer_mix_=upload("SUS2 outer mix",m.numbers("two_layer_gate_radial_mixing_coeffs"));
+    const auto gt=m.numbers("two_layer_gate_type_coeffs");
+    std::vector<double> type(static_cast<std::size_t>(C_)*F_);
+    for(int t=0;t<C_;++t)for(int mu=0;mu<F_;++mu)
+      type[t*F_+mu]=gt.empty()?m.radial_coeffs[mu*(B_+C_)+B_+t]:
+        gt.size()==type.size()?gt[t*F_+mu]:gt.at(t);
+    mix_species_=upload("SUS2 inner mix species",type);
+  }
   if(kind_==Shapeev)shape_=upload("SUS2 Shapeev coefficients",shape_coefficients(lo_,hi_));
   counters_=CountView("SUS2 radial counters",5);Kokkos::deep_copy(counters_,std::uint64_t(0));
 }
@@ -399,7 +440,7 @@ template<class D> void DeviceRadial<D>::configure(RadialTableMode mode,double sp
   frozen_intervals_=0;frozen_step_=0;packed_active_=false;
   table_mode_=mode==RadialTableMode::Direct?0:1;active_count_=0;
   if(counters_.extent(0))Kokkos::deep_copy(counters_,std::uint64_t(0));
-  if(!table_mode_)return;
+  if(!table_mode_||G_)return;
   std::vector<int> used=active_species;
   for(int t:used)if(t<0||t>=C_)throw std::out_of_range("Device radial active species index");
   std::sort(used.begin(),used.end());used.erase(std::unique(used.begin(),used.end()),used.end());
@@ -539,13 +580,122 @@ template<class D> void DeviceRadial<D>::configure(RadialTableMode mode,double sp
   knots_=upload("SUS2 immutable radial knots",storage);
 }
 
+template<class D> void DeviceRadial<D>::configure_mix_tables(const Model& model,double spacing,
+    std::size_t budget,const std::vector<int>& active_species) {
+  if(!G_||!table_mode_)return;
+  std::vector<int> used=active_species;
+  std::sort(used.begin(),used.end());
+  used.erase(std::unique(used.begin(),used.end()),used.end());
+  active_count_=static_cast<int>(used.size());
+  std::vector<int> slots(C_,-1);
+  for(int i=0;i<active_count_;++i) {
+    if(used[i]<0 || used[i]>=C_)throw std::out_of_range("Device radial active species index");
+    slots[used[i]]=i;
+  }
+  MixRadial reference(model);
+  reference.configure(RadialTableMode::Table,spacing,budget);
+  std::vector<MixRadial::Table> sources;
+  std::vector<Table> tables;
+  std::size_t knot_count=0;
+  for(int ti:used)for(int tj:used)for(int gate=0;gate<2;++gate)for(int shell=0;shell<2;++shell) {
+    auto source=reference.build_table(ti,tj,gate,shell);
+    Table t;
+    t.status=source.state==2?3:source.state==3?2:source.state;
+    t.offset=knot_count;t.intervals=source.intervals;t.step=source.step;
+    t.width=reference.rows(gate,shell);
+    if(t.status==1) {
+      knot_count+=source.knots.size();
+      sources.push_back(std::move(source));
+      ++table_count_;
+    }
+    tables.push_back(t);
+  }
+  table_bytes_=knot_count*sizeof(double);
+  species_slots_=upload("SUS2 mix radial species",slots);
+  frozen_tables_=upload("SUS2 mix radial descriptors",tables);
+  knots_=RealView(Kokkos::view_alloc(Kokkos::WithoutInitializing,"SUS2 mix radial knots"),knot_count);
+  // Copy each admitted shell directly into the device allocation. This avoids
+  // a second full host knot buffer and geometric vector-capacity growth.
+  using HostKnots=Kokkos::View<const double*,Kokkos::HostSpace,Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+  std::size_t offset=0;
+  for(auto& source:sources) {
+    const std::size_t count=source.knots.size();
+    auto destination=Kokkos::subview(knots_,std::make_pair(offset,offset+count));
+    Kokkos::deep_copy(destination,HostKnots(source.knots.data(),count));
+    offset+=count;
+    std::vector<double>().swap(source.knots);
+  }
+}
+
+template<class D> template<bool Derivative>
+KOKKOS_INLINE_FUNCTION typename DeviceRadial<D>::MixContext
+DeviceRadial<D>::mix_context(double r,int ti,int tj,bool gate,int shell) const {
+  MixContext context;
+  if(!table_mode_||r<lo_||!species_slots_.extent(0))return context;
+  const int a=species_slots_(ti),b=species_slots_(tj);
+  if(a<0||b<0)return context;
+  const auto t=frozen_tables_(4*(static_cast<std::size_t>(a)*active_count_+b)+2*gate+shell);
+  if(t.status!=1){
+    context.reason=t.status==3?3:4;
+    return context;
+  }
+  const double x=(r-lo_)/t.step;
+  std::size_t cell=static_cast<std::size_t>(x);
+  if(cell>=t.intervals)cell=t.intervals-1;
+  const double u=x-cell,w=1-u;
+  context.width=t.width;context.knot=t.offset+2*cell*t.width;
+  context.value[0]=(1+2*u)*w*w;context.value[1]=t.step*u*w*w;
+  context.value[2]=u*u*(3-2*u);context.value[3]=-t.step*u*u*w;
+  if(Derivative){
+    context.derivative[0]=6*u*w/t.step;
+    context.derivative[1]=w*(1-3*u);
+    context.derivative[2]=u*(3*u-2);
+  }
+  return context;
+}
+
+template<class D> template<bool Gate,bool Derivative,int Rows>
+KOKKOS_INLINE_FUNCTION void DeviceRadial<D>::mix_rows(
+    double r,int ti,int tj,int k,int l,int first,int lanes,
+    const MixContext& context,double (&v)[Rows],double (&d)[Rows]) const {
+  const int shell=l>0,rank=Gate?G_:O_;
+  if(context.width) {
+    const int row=((l-shell)*(Gate?1:K_)+k)*rank+first;
+    for(int a=0;a<lanes;++a){
+      const auto left=context.knot+row+a,right=left+2*context.width;
+      v[a]=context.value[0]*knots_(left)+context.value[1]*knots_(left+context.width)
+          +context.value[2]*knots_(right)+context.value[3]*knots_(right+context.width);
+      if(Derivative)d[a]=context.derivative[0]*(knots_(right)-knots_(left))
+          +context.derivative[1]*knots_(left+context.width)+context.derivative[2]*knots_(right+context.width);
+    }
+    count(true,0);return;
+  }
+  count(false,context.reason);
+  for(int a=0;a<Rows;++a)v[a]=d[a]=0.;
+  const auto& scales=Gate&&gate_scale_.extent(0)?gate_scale_:scale_;
+  const auto& weights=Gate?inner_mix_:outer_mix_;
+  const std::size_t pairs=static_cast<std::size_t>(C_)*C_,stride=static_cast<std::size_t>(K_)*B_;
+  const int start=Gate?0:k,end=Gate?K_:k+1;
+  for(int h=start;h<end;++h) {
+    const int mu=h*L_+l;
+    const auto warp=2*static_cast<std::size_t>(sm_==2?h:mu)*pairs+ti*C_+tj;
+    const auto base=(l*rank+first)*stride+h*B_;
+    double x[Rows],dx[Rows];
+    direct_rows<Derivative>(r,scales(warp),scales(warp+pairs),h,weights,base,stride,lanes,x,dx,shell?angular_:hi_);
+    const double species=Gate?mix_species_(ti*F_+mu)*mix_species_(tj*F_+mu):1.;
+    for(int a=0;a<lanes;++a){
+      v[a]+=species*x[a];if(Derivative)d[a]+=species*dx[a];
+    }
+  }
+}
+
 template<class D> RadialTableStats DeviceRadial<D>::stats() const {
   RadialTableStats s;s.tables=table_count_;s.bytes=table_bytes_;
   if(counters_.extent(0)){auto h=Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(),counters_);
     s.hits=h(0);s.direct_fallbacks=h(1);s.domain_fallbacks=h(2);s.memory_fallbacks=h(3);s.invalid_fallbacks=h(4);}return s;
 }
 template<class D> std::size_t DeviceRadial<D>::memory_usage() const {
-  return sizeof(double)*(scale_.extent(0)+gate_scale_.extent(0)+coeff_.extent(0)+gate_coeff_.extent(0)+shape_.extent(0)+knots_.extent(0))
+  return sizeof(double)*(scale_.extent(0)+gate_scale_.extent(0)+coeff_.extent(0)+gate_coeff_.extent(0)+shape_.extent(0)+knots_.extent(0)+inner_mix_.extent(0)+outer_mix_.extent(0)+mix_species_.extent(0))
     +sizeof(int)*(species_slots_.extent(0)+frozen_handles_.extent(0))
     +sizeof(Table)*(basis_tables_.extent(0)+frozen_tables_.extent(0))+sizeof(std::uint64_t)*counters_.extent(0);
 }

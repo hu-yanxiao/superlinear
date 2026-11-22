@@ -50,9 +50,12 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  weights_=m.numbers("two_layer_gate_weights"); gate_nodes_=m.integers("two_layer_gate_scalar_moment_indices"); body_=m.integers("two_layer_gate_scalar_body_orders");
  if(gate_nodes_.empty()) for(int q:m.integers("two_layer_gate_scalar_indices")) gate_nodes_.push_back(m.scalar_mapping.at(q));
  linear_=m.numbers("moment_coeffs"); gate_type_=m.numbers("two_layer_gate_type_coeffs"); gate_add_=m.numbers("two_layer_gate_additive_coeffs"); gate_radial_=m.numbers("two_layer_gate_radial_coeffs");
- scal_=m.numbers("scal_coeffs");gate_scal_=m.numbers("two_layer_gate_scaling_coeffs");gate_rank_weights_=m.numbers("two_layer_gate_k_rank_weights");outer_rank_weights_=m.numbers("outer_k_rank1_weights");species_=m.numbers("species_coeffs");bias_=m.numbers("shift_coeffs");body_mix_=m.numbers("two_layer_gate_body_mix_weights");
+ if(m.text("outer_radial_mode")=="effect-mix-basis") mix_.reset(new MixRadial(model_));
+ else {scal_=m.numbers("scal_coeffs"); gate_scal_=m.numbers("two_layer_gate_scaling_coeffs");}
+ gate_rank_weights_=m.numbers("two_layer_gate_k_rank_weights");outer_rank_weights_=m.numbers("outer_k_rank1_weights");species_=m.numbers("species_coeffs");bias_=m.numbers("shift_coeffs");body_mix_=m.numbers("two_layer_gate_body_mix_weights");
  if(gate_type_.empty()){gate_type_.resize(m.species_count*m.radial_funcs);for(int t=0;t<m.species_count;++t)for(int mu=0;mu<m.radial_funcs;++mu)gate_type_[t*m.radial_funcs+mu]=at(m.radial_coeffs,mu*(m.radial_size+m.species_count)+m.radial_size+t);}
- pure_=m.text("outer_radial_mode")=="pure-matrix";mixing_=m.text("two_layer_gate_radial_mixing","none")=="full";
+ mix_tanh_=mix_ && m.has("effect_gate_projection");
+ pure_=mix_ || m.text("outer_radial_mode")=="pure-matrix";mixing_=m.text("two_layer_gate_radial_mixing","none")=="full";
  adaptive_mode_=m.text("outer_radial_mode")=="adaptive-coefficients";feature_width_=gated_?m.radial_funcs:0;
  const auto effect_option=[](const char* name){
   const char* value=std::getenv(name);
@@ -60,7 +63,7 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
    throw std::runtime_error(std::string(name)+" must be 0 or 1");
   return !value || std::string(value)=="1";
  };
- const bool effect=gated_ && !adaptive_mode_ && !pure_;
+ const bool effect=gated_ && !adaptive_mode_ && (!pure_ || mix_);
  effect_source_cache_=effect_option("SUS2_SL_EFFECT_SOURCE_CACHE") && effect;
  effect_forward_stream_=effect_option("SUS2_SL_EFFECT_FORWARD_STREAM") && effect;
  if(effect_source_cache_){
@@ -83,7 +86,7 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  // Nonlinear/shared-n/tensor projections retain raw-signal communication.
  adaptive_projected_comm_=(!projected_comm || std::string(projected_comm)=="1") && adaptive_ && !mixing_ && adaptive_->projection_width()>0;
 
- mixer_=m.numbers("two_layer_gate_radial_mixing_coeffs");
+ if(!mix_)mixer_=m.numbers("two_layer_gate_radial_mixing_coeffs");
  std::string sm=m.text("scaling_map","LK");scaling_mode_=sm=="pair"?0:(sm=="L"?1:(sm=="K"?2:3));
  species_readout_=m.text("readout_mode")=="species";body_combo_=m.text("two_layer_gate_mode")=="mu-body-linear-combo";
  gate_readout_=m.numbers("two_layer_gate_readout_coeffs");
@@ -97,6 +100,7 @@ Kernel::Kernel(const Model& m):model_(m),radial_(m.text("radial_basis_type"),m.m
  if(gated_&&m.text("two_layer_gate_site_mode","neighbor")!="neighbor") throw std::runtime_error("SUS2 embedded: center-gate mode is not implemented yet");
  if(linear_.size()!=std::size_t(m.scalar_count)*(m.text("readout_mode")=="species"?m.species_count:1)) throw std::runtime_error("SUS2 embedded: invalid readout coefficient count");
  for(const auto&b:m.basic){basic_all_.push_back(int(basic_mu_.size()));if(b[1]==0)basic_l0_.push_back(int(basic_mu_.size()));basic_mu_.push_back(b[0]*(m.lmax+1)+b[1]);basic_sh_.push_back(h(b[1],b[2]));}
+ if(mix_)return; // Both primitive stages are populated directly by the radial matrices.
  for(int gate=0;gate<2;++gate){const int rank=gate?gate_rank_:outer_rank_,begin=gate?gate_begin_:outer_begin_,H=(m.lmax+1)*(m.lmax+1);const auto&w=gate?gate_rank_weights_:outer_rank_weights_;auto&out=gate?gate_contraction_:outer_contraction_;
   for(int a=0;a<rank;++a)for(std::size_t b=0;b<m.basic.size();++b){int k=m.basic[b][0],l=m.basic[b][1],mm=m.basic[b][2];out.push_back({int(b),begin+rank*(H-(l+1)*(l+1))+(rank-1-a)*(2*l+1)+mm+l,at(w,(l*rank+a)*m.kmax+k,1)});}}
 }
@@ -125,6 +129,7 @@ void Kernel::configure_radial(RadialTableMode m,double s,std::size_t n){
  std::vector<EdgeMetadata>().swap(edge_metadata_);
  radial_mode_=m;edge_metadata_requested_=enabled;
  radial_.configure(m,s,n);
+ if(mix_){mix_->configure(m,s,n);step_radial_cache_enabled_=false;frozen_enabled_=false;return;}
  if(m!=RadialTableMode::Direct){
   if(species_configured_)radial_.freeze(model_,active_species_);
   else radial_.freeze(model_);
@@ -144,6 +149,7 @@ void Kernel::configure_species(std::vector<int> species){
  if(species_configured_&&species==active_species_)return;
  active_species_=std::move(species);species_configured_=true;
  std::vector<EdgeMetadata>().swap(edge_metadata_);
+ if(mix_)return; // Contracted tables are populated lazily only for encountered pairs.
  if(radial_mode_!=RadialTableMode::Direct)radial_.freeze(model_,active_species_);
  frozen_enabled_=radial_.frozen_available();
  if(step_radial_cache_auto_)step_radial_cache_enabled_=gated_ || !frozen_enabled_;
@@ -229,6 +235,74 @@ void Kernel::edge_mixer(const Edge&e,std::vector<double>&v,std::vector<double>&d
   for(int o=0;o<O;++o){double w=0,dw=0;int base=((l*O+o)*m.kmax+k)*R;for(int b=0;b<R;++b){double q=mixer_.at(base+b);w+=q*rb[b];if(Derivatives)dw+=q*dr[b];}
    for(int mm=-l;mm<=l;++mm){int sh=h(l,mm),dst=O*(H-(l+1)*(l+1))+(O-1-o)*(2*l+1)+mm+l;v[dst]+=signal*w*y[sh];if(Derivatives){s[dst*F+mu]+=c*a*w*y[sh];for(int q=0;q<3;++q)d[dst*3+q]+=signal*(dw*e.d[q]/r*y[sh]+w*dy[3*sh+q]);}}
   }
+ }
+}
+template<bool Reverse>
+void Kernel::project_mix_tanh(int atom,double* moments){
+ const int K=model_.kmax,F=model_.radial_funcs,Q=static_cast<int>(gate_nodes_.size());
+ const double *up=weights_.data()+static_cast<std::size_t>(K)*Q;
+ double *hidden=mix_hidden_.data()+static_cast<std::size_t>(atom)*K;
+ for(int k=0;k<K;++k){
+  const double* down=weights_.data()+static_cast<std::size_t>(k)*Q;
+  double a=0;
+  if(Reverse){
+   for(int mu=0;mu<F;++mu)a+=up[mu*K+k]*gate_adj_[atom*F+mu];
+   a*=1-hidden[k]*hidden[k];
+   for(int q=0;q<Q;++q)moments[gate_nodes_[q]]+=a*down[q];
+  }else{
+   for(int q=0;q<Q;++q)a+=down[q]*moments[gate_nodes_[q]];
+   hidden[k]=std::tanh(a);
+   for(int mu=0;mu<F;++mu)gate_[atom*F+mu]+=up[mu*K+k]*hidden[k];
+  }
+ }
+}
+
+template<bool Gate,bool Reverse>
+void Kernel::mix_edges(){
+ const auto&m=model_;
+ const int L=m.lmax+1,H=L*L,K=m.kmax,F=m.radial_funcs,M=m.moments;
+ const int rank=Gate?gate_rank_:outer_rank_,begin=Gate?gate_begin_:outer_begin_;
+ const int stride=Gate?1:K;
+ auto& array=Gate?(Reverse?gate_moment_adj_:gate_moments_):(Reverse?outer_adj_:outer_moments_);
+ for(const auto&e:edges_){
+  const double r=std::sqrt(e.d[0]*e.d[0]+e.d[1]*e.d[1]+e.d[2]*e.d[2]);
+  if(r>=m.max_dist)continue;
+  const int active=r<m.angular_max_dist?L:1;
+  harmonics<Reverse>(e.d,active-1,y_scratch_,dy_scratch_);
+  if(!Gate)prepare_edge_coefficients<false>(e);
+  auto* row=array.data()+e.i*M+begin;
+  std::array<double,3> gradient{{0,0,0}};
+  for(int shell=0;shell<(active==1?1:2);++shell){
+   const int width=mix_->rows(Gate,shell);
+   mix_values_.resize(width);if(Reverse)mix_derivatives_.resize(width);
+   mix_->evaluate(r,types_[e.i],types_[e.j],Gate,shell,Reverse,mix_values_.data(),mix_derivatives_.data());
+   const int first=shell?1:0,last=shell?active:1;
+   for(int l=first;l<last;++l) for(int a=0;a<rank;++a){
+    double v=0,d=0;
+    const int offset=rank*(H-(l+1)*(l+1))+(rank-1-a)*(2*l+1);
+    double angular_seed=0;
+    if(Reverse)for(int j=0;j<2*l+1;++j)angular_seed+=row[offset+j]*y_scratch_[l*l+j];
+    for(int k=0;k<stride;++k){
+     const int idx=((l-first)*stride+k)*rank+a;
+     const double curve=mix_values_[idx];
+     double signal=1;
+     if(!Gate){
+      const int mu=k*L+l;
+      const auto& c=edge_coeff_scratch_[mu];
+      signal=c[0]*c[3];
+      if(Reverse)gate_adj_[e.j*F+mu]+=angular_seed*c[0]*c[2]*curve;
+     }
+     v+=signal*curve;
+     if(Reverse)d+=signal*mix_derivatives_[idx];
+    }
+    if(Reverse){
+     for(int q=0;q<3;++q)gradient[q]+=angular_seed*d*e.d[q]/r;
+     for(int j=0;j<2*l+1;++j)for(int q=0;q<3;++q)
+      gradient[q]+=row[offset+j]*v*dy_scratch_[3*(l*l+j)+q];
+    }else for(int j=0;j<2*l+1;++j)row[offset+j]+=v*y_scratch_[l*l+j];
+   }
+  }
+  if(Reverse)add_force(partial_,e,gradient);
  }
 }
 void Kernel::graph(double* v,bool gate,bool reverse,const double* values)const {
@@ -371,10 +445,13 @@ void Kernel::begin_impl(int n,int all,const std::vector<int>& t,const std::vecto
  // finish() assigns every owned site energy before gate-readout/ZBL additions.
  partial_.energy=0;partial_.virial.fill(0);partial_.force.assign(all,std::array<double,3>{{0,0,0}});partial_.site_energy.resize(n);
  if(!gated_)return;gate_moments_.assign(n*M,0);
- if(effect_forward_stream_)forward_moments<Frozen,true,true>(gate_moments_);
+ if(mix_tanh_)mix_hidden_.resize(static_cast<std::size_t>(n)*m.kmax);
+ if(mix_)mix_edges<true,false>();
+ else if(effect_forward_stream_)forward_moments<Frozen,true,true>(gate_moments_);
  else forward_moments<Frozen,true,false>(gate_moments_);
  for(int i=0;i<n;++i){double*a=gate_moments_.data()+i*M;contract(a,true);graph(a,true);
   if(adaptive_mode_)for(int q=0;q<W;++q)gate_[i*W+q]=a[feature_nodes_[q]];
+  else if(mix_tanh_)project_mix_tanh<false>(i,a);
   else for(int mu=0;mu<F;++mu)for(std::size_t q=0;q<gate_nodes_.size();++q)gate_[i*F+mu]+=gate_weight(mu,q)*a[gate_nodes_[q]];}
  if(adaptive_projected_comm_){
   const std::size_t width=adaptive_->projection_width();
@@ -442,7 +519,8 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  const auto&species=species_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i)contract(outer_moments_.data()+i*M,false);
  stage(0);
- if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,false>(e,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
+ if(mix_)mix_edges<false,false>();
+ else if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,false>(e,v,d,s);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
  if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,false,nullptr,nullptr,PW?projected.data()+e.j*PW:nullptr,nullptr,
       std::size_t(&e-edges_.data())<step_fixed_ready_.size()/2?step_adaptive_radial_.data()+std::size_t(&e-edges_.data())*step_adaptive_width_:nullptr,false);for(std::size_t b=0;b<v.size();++b)outer_moments_[e.i*M+outer_begin_+b]+=v[b];}
  stage(1);
@@ -452,7 +530,8 @@ void Kernel::outer_impl(){const Model&m=model_;int M=m.moments,F=m.radial_funcs;
  // Outer coordinate and gate adjoints; coordinates are accumulated in finish.
  if(!pure_&&!adaptive_mode_){if(reverse_stream_)coordinate_reverse<Frozen,true,false>(outer_adj_,partial_);else coordinate_reverse<Frozen,false,false>(outer_adj_,partial_);}
  stage(3);
- if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,true>(e,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];if(gated_)for(int mu=0;mu<F;++mu)gate_adj_[e.j*F+mu]+=adj*s[b*F+mu];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
+ if(mix_)mix_edges<false,true>();
+ else if(mixing_)for(const auto&e:edges_){edge_mixer<Frozen,true>(e,v,d,s);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];if(gated_)for(int mu=0;mu<F;++mu)gate_adj_[e.j*F+mu]+=adj*s[b*F+mu];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
  if(adaptive_)for(const auto&e:edges_){adaptive_->edge(radial_,e.d,types_[e.i],types_[e.j],gate_.data()+e.j*feature_width_,v,d,s,true,outer_adj_.data()+e.i*M+outer_begin_,gate_adj_.data()+e.j*feature_width_,PW?projected.data()+e.j*PW:nullptr,PW?projected_adj.data()+e.j*PW:nullptr,
       std::size_t(&e-edges_.data())<step_fixed_ready_.size()/2?step_adaptive_radial_.data()+std::size_t(&e-edges_.data())*step_adaptive_width_:nullptr,true);std::array<double,3>g{{0,0,0}};for(std::size_t b=0;b<v.size();++b){double adj=outer_adj_[e.i*M+outer_begin_+b];for(int q=0;q<3;++q)g[q]+=adj*d[3*b+q];}add_force(partial_,e,g);}
  // Reduce to the original q-width signal before the existing reverse MPI exchange.
@@ -476,14 +555,15 @@ const Result& Kernel::finish_impl(){const Model&m=model_;int M=m.moments,F=m.rad
  const auto&species=species_;const auto&bias=bias_;bool sp=species_readout_;
  for(int i=0;i<owned_;++i){double E=at(species,types_[i])+at(bias,types_[i])+extra_energy_[i];for(int q=0;q<m.scalar_count;++q)E+=(sp?1:at(species,types_[i]))*linear_[(sp?types_[i]*m.scalar_count:0)+q]*outer_moments_[i*M+m.scalar_mapping[q]];out.site_energy[i]=E;out.energy+=E;}
  const auto&gate_readout=gate_readout_;if(gate_readout_enabled_)for(int i=0;i<owned_;++i){double E=0;for(std::size_t q=0;q<gate_nodes_.size();++q)E+=(sp?1:at(species,types_[i]))*gate_readout.at(q)*gate_moments_[i*M+gate_nodes_[q]];out.site_energy[i]+=E;out.energy+=E;}
- if(gated_){gate_moment_adj_.assign(owned_*M,0);auto&adj=gate_moment_adj_;for(int i=0;i<owned_;++i){double*a=adj.data()+i*M;if(joint_)std::copy(local_gate_adj_.begin()+i*M,local_gate_adj_.begin()+(i+1)*M,a);if(adaptive_mode_)for(int q=0;q<feature_width_;++q)a[feature_nodes_[q]]+=gate_adj_[i*feature_width_+q];else for(int mu=0;mu<F;++mu)for(std::size_t q=0;q<gate_nodes_.size();++q)a[gate_nodes_[q]]+=gate_adj_[i*F+mu]*gate_weight(mu,q);if(gate_readout_enabled_)for(std::size_t q=0;q<gate_nodes_.size();++q)a[gate_nodes_[q]]+=(sp?1:at(species,types_[i]))*gate_readout.at(q);graph(a,true,true,gate_moments_.data()+i*M);contract(a,true,true);}
-  if(reverse_stream_&&!pure_&&!adaptive_mode_)coordinate_reverse<Frozen,true,true>(adj,out);else coordinate_reverse<Frozen,false,true>(adj,out);}
+ if(gated_){gate_moment_adj_.assign(owned_*M,0);auto&adj=gate_moment_adj_;for(int i=0;i<owned_;++i){double*a=adj.data()+i*M;if(joint_)std::copy(local_gate_adj_.begin()+i*M,local_gate_adj_.begin()+(i+1)*M,a);if(adaptive_mode_)for(int q=0;q<feature_width_;++q)a[feature_nodes_[q]]+=gate_adj_[i*feature_width_+q];else if(mix_tanh_)project_mix_tanh<true>(i,a);else for(int mu=0;mu<F;++mu)for(std::size_t q=0;q<gate_nodes_.size();++q)a[gate_nodes_[q]]+=gate_adj_[i*F+mu]*gate_weight(mu,q);if(gate_readout_enabled_)for(std::size_t q=0;q<gate_nodes_.size();++q)a[gate_nodes_[q]]+=(sp?1:at(species,types_[i]))*gate_readout.at(q);graph(a,true,true,gate_moments_.data()+i*M);contract(a,true,true);}
+  if(mix_)mix_edges<true,true>();else if(reverse_stream_&&!pure_&&!adaptive_mode_)coordinate_reverse<Frozen,true,true>(adj,out);else coordinate_reverse<Frozen,false,true>(adj,out);}
  if(zbl_)for(const auto&e:edges_){double r2=0;for(double x:e.d)r2+=x*x;double r=std::sqrt(r2);int pair=types_[e.i]*m.species_count+types_[e.j];auto p=sus2_sl_zbl::ComputePairHostCached(zbl_constants_[pair],r,zbl_inner_[pair],zbl_outer_[pair]);double E=.5*p.energy;out.site_energy[e.i]+=E;out.energy+=E;std::array<double,3>g;for(int q=0;q<3;++q)g[q]=.5*p.dEdr*e.d[q]/r;add_force(out,e,g);}
  return out;
 }
 double Kernel::memory_usage() const {
  const std::vector<double>* arrays[]={&gate_moments_,&gate_,&gate_adj_,&outer_moments_,&outer_adj_,&local_gate_adj_,&extra_energy_,&weights_,&linear_,&mult_,&gate_type_,&gate_add_,&gate_radial_,&scal_,&gate_scal_,&gate_rank_weights_,&outer_rank_weights_,&species_,&bias_,&body_mix_,&mixer_,&y_scratch_,&dy_scratch_,&rb_scratch_,&dr_scratch_,&rv_scratch_,&rd_scratch_,&v_scratch_,&d_scratch_,&s_scratch_,&gate_moment_adj_,&adaptive_projected_,&adaptive_projected_adj_,&partial_.site_energy};
- std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity()+basic_all_.capacity()+basic_l0_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_.stats().bytes;
+ std::size_t bytes=sizeof(*this)+sizeof(Edge)*edges_.capacity()+sizeof(int)*(types_.capacity()+gate_nodes_.capacity()+body_.capacity()+feature_nodes_.capacity()+basic_mu_.capacity()+basic_sh_.capacity()+basic_all_.capacity()+basic_l0_.capacity())+sizeof(Contraction)*(gate_contraction_.capacity()+outer_contraction_.capacity())+sizeof(std::array<double,3>)*partial_.force.capacity()+radial_stats().bytes;
+ bytes+=sizeof(double)*(mix_values_.capacity()+mix_derivatives_.capacity()+mix_hidden_.capacity());
  if(joint_)bytes+=joint_->memory_usage();
  bytes+=sizeof(EdgeMetadata)*edge_metadata_.capacity();
  bytes+=sizeof(double)*(step_fixed_radial_.capacity()+step_adaptive_radial_.capacity());
